@@ -1,0 +1,579 @@
+{
+  "document360::d360_ceiling": {
+    "config": {
+      "d360_hashes": {
+        "100:de": "13121da6ac17f9c306a441aa6c183fb6",
+        "100:fr": "13121da6ac17f9c306a441aa6c183fb6"
+      }
+    },
+    "msg": "Created 2, updated 0 article version(s) across 2 langCode(s) from 2 article(s). \u26a0 Hit the per-run write ceiling (2 article write(s)) \u2014 stopped early; remaining item(s) will be picked up on the next run.",
+    "ok": true,
+    "result": {
+      "articles": 2,
+      "ceiling_hit": true,
+      "created": 2,
+      "empty_skipped": 0,
+      "failures": [],
+      "locales": [
+        "de",
+        "fr"
+      ],
+      "rejected": [],
+      "skipped": 0,
+      "updated": 0,
+      "write_ceiling": 2
+    },
+    "synclog": [
+      {
+        "actor": "auto",
+        "count": 2,
+        "direction": "translate",
+        "message": "Created 2, updated 0 article version(s) across 2 langCode(s) from 2 article(s). \u26a0 Hit the per-run write ceiling (2 article write(s)) \u2014 stopped early; remaining item(s) will be picked up on the next run.",
+        "ok": true
+      }
+    ]
+  },
+  "document360::d360_create_publish": {
+    "config": {
+      "d360_hashes": {
+        "100:de": "13121da6ac17f9c306a441aa6c183fb6",
+        "100:fr": "13121da6ac17f9c306a441aa6c183fb6",
+        "101:de": "a6eba96126b47977ab6a8036f076d007",
+        "101:fr": "a6eba96126b47977ab6a8036f076d007"
+      }
+    },
+    "msg": "Created 4, updated 0 article version(s) across 2 langCode(s) from 2 article(s).",
+    "ok": true,
+    "result": {
+      "articles": 2,
+      "ceiling_hit": false,
+      "created": 4,
+      "empty_skipped": 0,
+      "failures": [],
+      "locales": [
+        "de",
+        "fr"
+      ],
+      "rejected": [],
+      "skipped": 0,
+      "updated": 0,
+      "write_ceiling": 500
+    },
+    "synclog": [
+      {
+        "actor": "auto",
+        "count": 4,
+        "direction": "translate",
+        "message": "Created 4, updated 0 article version(s) across 2 langCode(s) from 2 article(s).",
+        "ok": true
+      }
+    ]
+  },
+  "document360::d360_empty_stale_suppress": {
+    "config": {
+      "d360_hashes": {
+        "100:de": "13121da6ac17f9c306a441aa6c183fb6",
+        "100:fr": "13121da6ac17f9c306a441aa6c183fb6"
+      }
+    },
+    "msg": "Created 0, updated 1 article version(s) across 2 langCode(s) from 2 article(s). Skipped 1 unchanged (version-hash) langCode(s). Skipped 1 empty-body article(s) (no translatable content).",
+    "ok": true,
+    "result": {
+      "articles": 2,
+      "ceiling_hit": false,
+      "created": 0,
+      "empty_skipped": 1,
+      "failures": [],
+      "locales": [
+        "de",
+        "fr"
+      ],
+      "rejected": [],
+      "skipped": 1,
+      "updated": 1,
+      "write_ceiling": 500
+    },
+    "synclog": [
+      {
+        "actor": "auto",
+        "count": 2,
+        "direction": "translate",
+        "message": "Created 2, updated 0 article version(s) across 2 langCode(s) from 2 article(s). Skipped 1 empty-body article(s) (no translatable content).",
+        "ok": true
+      },
+      {
+        "actor": "auto",
+        "count": 1,
+        "direction": "translate",
+        "message": "Created 0, updated 1 article version(s) across 2 langCode(s) from 2 article(s). Skipped 1 unchanged (version-hash) langCode(s). Skipped 1 empty-body article(s) (no translatable content).",
+        "ok": true
+      }
+    ]
+  },
+  "freshdesk::fd_ceiling": {
+    "config": {
+      "fd_hashes": {
+        "100:de": "b95316eb7d05d758ce180d9edc9b6b43",
+        "100:fr": "b95316eb7d05d758ce180d9edc9b6b43"
+      }
+    },
+    "msg": "Created 2, updated 0 article version(s) across 2 language(s) from 2 article(s) (primary/source: en). \u26a0 Hit the per-run write ceiling (2 article write(s)) \u2014 stopped early; remaining item(s) will be picked up on the next run.",
+    "ok": true,
+    "result": {
+      "articles": 2,
+      "ceiling_hit": true,
+      "created": 2,
+      "empty_skipped": 0,
+      "failures": [],
+      "locales": [
+        "fr",
+        "de"
+      ],
+      "primary": "en",
+      "rejected": [],
+      "skipped": 0,
+      "unpublished_skipped": 0,
+      "updated": 0,
+      "write_ceiling": 2
+    },
+    "synclog": [
+      {
+        "actor": "auto",
+        "count": 2,
+        "direction": "translate",
+        "message": "Created 2, updated 0 article version(s) across 2 language(s) from 2 article(s) (primary/source: en). \u26a0 Hit the per-run write ceiling (2 article write(s)) \u2014 stopped early; remaining item(s) will be picked up on the next run.",
+        "ok": true
+      }
+    ]
+  },
+  "freshdesk::fd_plan_gate": {
+    "config": {},
+    "msg": "Created 0, updated 0 article version(s) across 2 language(s) from 1 article(s) (primary/source: en). Errors: 100/fr: 403: vendor text: \"access_denied: multilingual requires a higher plan\"; 100/de: 403: vendor text: \"access_denied: multilingual requires a higher plan\"",
+    "ok": false,
+    "result": {
+      "articles": 1,
+      "ceiling_hit": false,
+      "created": 0,
+      "empty_skipped": 0,
+      "failures": [
+        {
+          "article_id": "100",
+          "error": "403: vendor text: \"access_denied: multilingual requires a higher plan\"",
+          "locale": "fr"
+        },
+        {
+          "article_id": "100",
+          "error": "403: vendor text: \"access_denied: multilingual requires a higher plan\"",
+          "locale": "de"
+        }
+      ],
+      "locales": [
+        "fr",
+        "de"
+      ],
+      "primary": "en",
+      "rejected": [],
+      "skipped": 0,
+      "unpublished_skipped": 0,
+      "updated": 0,
+      "write_ceiling": 500
+    },
+    "synclog": [
+      {
+        "actor": "webhook (via webhook)",
+        "count": 0,
+        "direction": "translate",
+        "message": "Created 0, updated 0 article version(s) across 2 language(s) from 1 article(s) (primary/source: en). Errors: 100/fr: 403: vendor text: \"access_denied: multilingual requires a higher plan\"; 100/de: 403: vendor text: \"access_denied: multilingual requires a higher plan\"",
+        "ok": false
+      }
+    ]
+  },
+  "freshdesk::fd_primary_unpub_empty": {
+    "config": {
+      "fd_hashes": {
+        "100:fr": "b95316eb7d05d758ce180d9edc9b6b43"
+      }
+    },
+    "msg": "Created 1, updated 0 article version(s) across 1 language(s) from 3 article(s) (primary/source: en). Skipped 1 unpublished master article(s) (publish the master first). Skipped 1 empty article(s) (no translatable content). Rejected 1 language(s) not supported / equal to the primary: en. Errors: 101: master not published (status != 2) \u2014 publish the master article before translating.",
+    "ok": false,
+    "result": {
+      "articles": 3,
+      "ceiling_hit": false,
+      "created": 1,
+      "empty_skipped": 1,
+      "failures": [],
+      "locales": [
+        "fr"
+      ],
+      "primary": "en",
+      "rejected": [
+        "en"
+      ],
+      "skipped": 0,
+      "unpublished_skipped": 1,
+      "updated": 0,
+      "write_ceiling": 500
+    },
+    "synclog": [
+      {
+        "actor": "auto",
+        "count": 1,
+        "direction": "translate",
+        "message": "Created 1, updated 0 article version(s) across 1 language(s) from 3 article(s) (primary/source: en). Skipped 1 unpublished master article(s) (publish the master first). Skipped 1 empty article(s) (no translatable content). Rejected 1 language(s) not supported / equal to the primary: en. Errors: 101: master not published (status != 2) \u2014 publish the master article before translating.",
+        "ok": false
+      }
+    ]
+  },
+  "freshdesk::fd_suppress": {
+    "config": {
+      "fd_hashes": {
+        "100:de": "b95316eb7d05d758ce180d9edc9b6b43",
+        "100:fr": "b95316eb7d05d758ce180d9edc9b6b43"
+      }
+    },
+    "msg": "Created 0, updated 0 article version(s) across 2 language(s) from 1 article(s) (primary/source: en). Skipped 2 unchanged (content-hash) language(s).",
+    "ok": true,
+    "result": {
+      "articles": 1,
+      "ceiling_hit": false,
+      "created": 0,
+      "empty_skipped": 0,
+      "failures": [],
+      "locales": [
+        "fr",
+        "de"
+      ],
+      "primary": "en",
+      "rejected": [],
+      "skipped": 2,
+      "unpublished_skipped": 0,
+      "updated": 0,
+      "write_ceiling": 500
+    },
+    "synclog": [
+      {
+        "actor": "auto",
+        "count": 2,
+        "direction": "translate",
+        "message": "Created 2, updated 0 article version(s) across 2 language(s) from 1 article(s) (primary/source: en).",
+        "ok": true
+      },
+      {
+        "actor": "auto",
+        "count": 0,
+        "direction": "translate",
+        "message": "Created 0, updated 0 article version(s) across 2 language(s) from 1 article(s) (primary/source: en). Skipped 2 unchanged (content-hash) language(s).",
+        "ok": true
+      }
+    ]
+  },
+  "zendesk::zd_ceiling_clamp": {
+    "config": {
+      "zendesk_hashes": {
+        "10:de": "1fbe7896107d6e6040086f0ba1995b9c",
+        "10:fr": "1fbe7896107d6e6040086f0ba1995b9c",
+        "11:de": "1fbe7896107d6e6040086f0ba1995b9c"
+      },
+      "zendesk_watermark": 1782864000
+    },
+    "msg": "Created 3, updated 0 translation(s) across 2 locale(s) from 3 article(s). \u26a0 Hit the per-run write ceiling (3 article write(s)) \u2014 stopped early; remaining item(s) will be picked up on the next run.",
+    "ok": true,
+    "result": {
+      "articles": 3,
+      "ceiling_hit": true,
+      "created": 3,
+      "failures": [],
+      "locales": [
+        "de",
+        "fr"
+      ],
+      "rejected": [],
+      "skipped": 0,
+      "updated": 0,
+      "watermark": 1782864000,
+      "write_ceiling": 3
+    },
+    "synclog": [
+      {
+        "actor": "scheduler (via scheduled)",
+        "count": 3,
+        "direction": "translate",
+        "message": "Created 3, updated 0 translation(s) across 2 locale(s) from 3 article(s). \u26a0 Hit the per-run write ceiling (3 article write(s)) \u2014 stopped early; remaining item(s) will be picked up on the next run.",
+        "ok": true
+      }
+    ]
+  },
+  "zendesk::zd_create_labels": {
+    "config": {
+      "zendesk_hashes": {
+        "100:de": "1fbe7896107d6e6040086f0ba1995b9c",
+        "100:fr": "1fbe7896107d6e6040086f0ba1995b9c"
+      },
+      "zendesk_watermark": 1783245600
+    },
+    "msg": "Created 2, updated 0 translation(s) across 2 locale(s) from 1 article(s).",
+    "ok": true,
+    "result": {
+      "articles": 1,
+      "ceiling_hit": false,
+      "created": 2,
+      "failures": [],
+      "locales": [
+        "de",
+        "fr"
+      ],
+      "rejected": [],
+      "skipped": 0,
+      "updated": 0,
+      "watermark": 1783245600,
+      "write_ceiling": 500
+    },
+    "synclog": [
+      {
+        "actor": "auto",
+        "count": 2,
+        "direction": "translate",
+        "message": "Created 2, updated 0 translation(s) across 2 locale(s) from 1 article(s).",
+        "ok": true
+      }
+    ]
+  },
+  "zendesk::zd_incremental_union": {
+    "config": {
+      "zendesk_hashes": {
+        "300:de": "1fbe7896107d6e6040086f0ba1995b9c",
+        "300:fr": "1fbe7896107d6e6040086f0ba1995b9c",
+        "301:de": "c4a799922b360e045e8fad56ac7b2ead",
+        "301:fr": "c4a799922b360e045e8fad56ac7b2ead"
+      },
+      "zendesk_watermark": 1783209600
+    },
+    "msg": "Created 2, updated 0 translation(s) across 2 locale(s) from 1 article(s).",
+    "ok": true,
+    "result": {
+      "articles": 1,
+      "ceiling_hit": false,
+      "created": 2,
+      "failures": [],
+      "locales": [
+        "de",
+        "fr"
+      ],
+      "rejected": [],
+      "skipped": 0,
+      "updated": 0,
+      "watermark": 1783209600,
+      "write_ceiling": 500
+    },
+    "synclog": [
+      {
+        "actor": "auto",
+        "count": 2,
+        "direction": "translate",
+        "message": "Created 2, updated 0 translation(s) across 2 locale(s) from 1 article(s).",
+        "ok": true
+      },
+      {
+        "actor": "auto",
+        "count": 2,
+        "direction": "translate",
+        "message": "Created 2, updated 0 translation(s) across 2 locale(s) from 1 article(s).",
+        "ok": true
+      }
+    ]
+  },
+  "zendesk::zd_reject_then_suppress": {
+    "config": {
+      "zendesk_hashes": {
+        "100:de": "1fbe7896107d6e6040086f0ba1995b9c"
+      },
+      "zendesk_watermark": 1783245600
+    },
+    "msg": "Created 0, updated 0 translation(s) across 1 locale(s) from 1 article(s). Skipped 1 unchanged (content-hash) locale(s). Rejected 2 locale(s) not enabled in Guide: fr, ja.",
+    "ok": true,
+    "result": {
+      "articles": 1,
+      "ceiling_hit": false,
+      "created": 0,
+      "failures": [],
+      "locales": [
+        "de"
+      ],
+      "rejected": [
+        "fr",
+        "ja"
+      ],
+      "skipped": 1,
+      "updated": 0,
+      "watermark": 1783245600,
+      "write_ceiling": 500
+    },
+    "synclog": [
+      {
+        "actor": "auto",
+        "count": 1,
+        "direction": "translate",
+        "message": "Created 1, updated 0 translation(s) across 1 locale(s) from 1 article(s). Rejected 2 locale(s) not enabled in Guide: fr, ja.",
+        "ok": true
+      },
+      {
+        "actor": "auto",
+        "count": 0,
+        "direction": "translate",
+        "message": "Created 0, updated 0 translation(s) across 1 locale(s) from 1 article(s). Skipped 1 unchanged (content-hash) locale(s). Rejected 2 locale(s) not enabled in Guide: fr, ja.",
+        "ok": true
+      }
+    ]
+  },
+  "zendesk::zd_write_failure": {
+    "config": {
+      "zendesk_hashes": {
+        "20:de": "1fbe7896107d6e6040086f0ba1995b9c"
+      },
+      "zendesk_watermark": 0
+    },
+    "msg": "Created 1, updated 0 translation(s) across 2 locale(s) from 1 article(s). Errors: 20/fr: 400: vendor text: \"write rejected\"",
+    "ok": true,
+    "result": {
+      "articles": 1,
+      "ceiling_hit": false,
+      "created": 1,
+      "failures": [
+        {
+          "article_id": "20",
+          "error": "400: vendor text: \"write rejected\"",
+          "locale": "fr"
+        }
+      ],
+      "locales": [
+        "de",
+        "fr"
+      ],
+      "rejected": [],
+      "skipped": 0,
+      "updated": 0,
+      "watermark": 0,
+      "write_ceiling": 500
+    },
+    "synclog": [
+      {
+        "actor": "auto",
+        "count": 1,
+        "direction": "translate",
+        "message": "Created 1, updated 0 translation(s) across 2 locale(s) from 1 article(s). Errors: 20/fr: 400: vendor text: \"write rejected\"",
+        "ok": true
+      }
+    ]
+  },
+  "zoho::zo_ceiling": {
+    "config": {
+      "zoho_hashes": {
+        "100:de": "3bc712527004b9d435345adc322963fe",
+        "100:fr": "3bc712527004b9d435345adc322963fe"
+      }
+    },
+    "msg": "Created 2, updated 0 translation(s) across 2 locale(s) from 2 article(s). \u26a0 Hit the per-run write ceiling (2 article write(s)) \u2014 stopped early; remaining item(s) will be picked up on the next run.",
+    "ok": true,
+    "result": {
+      "articles": 2,
+      "ceiling_hit": true,
+      "created": 2,
+      "empty_skipped": 0,
+      "failures": [],
+      "locales": [
+        "de",
+        "fr"
+      ],
+      "rejected": [],
+      "skipped": 0,
+      "updated": 0,
+      "write_ceiling": 2
+    },
+    "synclog": [
+      {
+        "actor": "auto",
+        "count": 2,
+        "direction": "translate",
+        "message": "Created 2, updated 0 translation(s) across 2 locale(s) from 2 article(s). \u26a0 Hit the per-run write ceiling (2 article write(s)) \u2014 stopped early; remaining item(s) will be picked up on the next run.",
+        "ok": true
+      }
+    ]
+  },
+  "zoho::zo_create_bodykey": {
+    "config": {
+      "zoho_hashes": {
+        "100:de": "3bc712527004b9d435345adc322963fe",
+        "100:fr": "3bc712527004b9d435345adc322963fe",
+        "101:de": "39049e456c5f986e17e044322cd6aa60",
+        "101:fr": "39049e456c5f986e17e044322cd6aa60"
+      }
+    },
+    "msg": "Created 4, updated 0 translation(s) across 2 locale(s) from 2 article(s).",
+    "ok": true,
+    "result": {
+      "articles": 2,
+      "ceiling_hit": false,
+      "created": 4,
+      "empty_skipped": 0,
+      "failures": [],
+      "locales": [
+        "de",
+        "fr"
+      ],
+      "rejected": [],
+      "skipped": 0,
+      "updated": 0,
+      "write_ceiling": 500
+    },
+    "synclog": [
+      {
+        "actor": "auto",
+        "count": 4,
+        "direction": "translate",
+        "message": "Created 4, updated 0 translation(s) across 2 locale(s) from 2 article(s).",
+        "ok": true
+      }
+    ]
+  },
+  "zoho::zo_empty_stale_suppress": {
+    "config": {
+      "zoho_hashes": {
+        "100:de": "3bc712527004b9d435345adc322963fe",
+        "100:fr": "3bc712527004b9d435345adc322963fe"
+      }
+    },
+    "msg": "Created 0, updated 1 translation(s) across 2 locale(s) from 2 article(s). Skipped 1 unchanged (content-hash/translationState) locale(s). Skipped 1 empty-body article(s) (no translatable content).",
+    "ok": true,
+    "result": {
+      "articles": 2,
+      "ceiling_hit": false,
+      "created": 0,
+      "empty_skipped": 1,
+      "failures": [],
+      "locales": [
+        "de",
+        "fr"
+      ],
+      "rejected": [],
+      "skipped": 1,
+      "updated": 1,
+      "write_ceiling": 500
+    },
+    "synclog": [
+      {
+        "actor": "auto",
+        "count": 2,
+        "direction": "translate",
+        "message": "Created 2, updated 0 translation(s) across 2 locale(s) from 2 article(s). Skipped 1 empty-body article(s) (no translatable content).",
+        "ok": true
+      },
+      {
+        "actor": "auto",
+        "count": 1,
+        "direction": "translate",
+        "message": "Created 0, updated 1 translation(s) across 2 locale(s) from 2 article(s). Skipped 1 unchanged (content-hash/translationState) locale(s). Skipped 1 empty-body article(s) (no translatable content).",
+        "ok": true
+      }
+    ]
+  }
+}

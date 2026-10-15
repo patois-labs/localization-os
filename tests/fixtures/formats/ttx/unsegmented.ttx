@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='utf-8'?><TRADOStag Version="2.0"><FrontMatter>
+<ToolSettings CreationDate="20071015T101500Z" CreationTool="TRADOS TagEditor" CreationToolVersion="7.0.0.615"></ToolSettings>
+<UserSettings DataType="HTML" O-Encoding="UTF-8" SettingsName="HTML" SettingsPath="" SourceLanguage="EN-US" TargetLanguage="DE-DE" SourceDocumentPath="guide.htm" SettingsRelativePath="" PlugInInfo=""></UserSettings>
+</FrontMatter><Body><Raw>
+<ut Type="start" Style="external" RightEdge="angle" DisplayText="p">&lt;p&gt;</ut>Nothing here is segmented yet.<ut Type="end" Style="external" LeftEdge="angle" DisplayText="p">&lt;/p&gt;</ut>
+</Raw></Body></TRADOStag>

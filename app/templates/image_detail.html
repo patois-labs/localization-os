@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{# Work surface: full width, not the centered list column (Console). #}
+{% set wide_page = true %}
+{% import "_macros.html" as m %}
+{% block title %}{{ doc.filename }} - Images{% endblock %}
+{% block content %}
+<div class="documents-page">
+
+<section class="document-heading">
+  {% set page_title %}{{ doc.filename }}{% endset %}
+  {{ m.page_header(page_title) }}
+  <p class="muted">
+    <a href="/images">Images</a> ·
+    project <a href="/projects/{{ project.id }}">{{ project.name }}</a> ·
+    {{ kind }} · {{ rows | length }} region(s)
+    {% if locale %} · reviewing <strong>{{ locale }}</strong>{% endif %}
+  </p>
+</section>
+
+{# a11y T7: a ?err= error renders once, as a sentence, in the summary at the top of
+   main (base.html + _form_errors.html), never as a raw code here. #}
+{% if saved %}<p class="ok">Region saved - preview re-rendered.</p>{% endif %}
+{% if translated %}<p class="ok">Translated. Review the regions below.</p>{% endif %}
+
+{% if locales | length > 1 %}
+<form method="get" action="/images/{{ doc.id }}" class="form-inline">
+  <label>Locale
+    <select name="locale">
+      {% for l in locales %}<option value="{{ l }}" {% if l == locale %}selected{% endif %}>{{ l }}</option>{% endfor %}
+    </select>
+  </label>
+  <button type="submit">Go</button>
+</form>
+{% endif %}
+
+{% if not locale %}
+{% call m.card() %}
+  {% set empty_message %}No target locales on this project yet - add one on the
+  project page, then re-upload or translate.{% endset %}
+{{ m.empty_state(empty_message) }}
+{% endcall %}
+{% else %}
+
+{% if vlm_blocked_detail %}
+<p class="help"><span class="badge warn">Vision engine blocked</span>
+  The vision engine target was refused by egress policy, so low-confidence regions were not
+  re-read. Ask an administrator to allow the vision engine's address in the egress policy,
+  then translate the image again.
+  <span class="muted small">Details: {{ vlm_blocked_detail }}</span>
+</p>
+{% endif %}
+
+{% if n_overflow or n_lowconf %}
+<p class="help"><span class="badge warn">Check before export</span>
+  {% if n_overflow %}{{ n_overflow }} region(s) hit the minimum font size (OVERFLOW - text kept, never cut).{% endif %}
+  {% if n_lowconf %}{{ n_lowconf }} region(s) have low OCR confidence.{% endif %}
+</p>
+{% endif %}
+
+<div class="grid2">
+  {% call m.card() %}
+    <h2>Original</h2>
+    <img src="/images/{{ doc.id }}/original" alt="original {{ doc.filename }}"
+         style="max-width:100%;height:auto;border:1px solid var(--border);border-radius:6px">
+  {% endcall %}
+  {% call m.card() %}
+    <h2>Localized ({{ locale }})</h2>
+    {% if any_translated %}
+    <img src="/images/{{ doc.id }}/localized?locale={{ locale }}&v={{ range(1, 1000000) | random }}"
+         alt="localized {{ doc.filename }} ({{ locale }})"
+         style="max-width:100%;height:auto;border:1px solid var(--border);border-radius:6px">
+    {% else %}
+    {% set empty_message %}Not translated into {{ locale }} yet.{% endset %}
+{{ m.empty_state(empty_message) }}
+    {% endif %}
+    <div style="margin-top:var(--space-3);display:flex;gap:var(--space-2);align-items:center">
+      <form method="post" action="/images/{{ doc.id }}/translate" class="form-inline">
+        {% include "_csrf.html" %}
+        <input type="hidden" name="locale" value="{{ locale }}">
+        <button type="submit" class="btn" data-busy-label="{{ t(request, 'busy.translating') }}">{{ 'Re-translate' if any_translated else 'Translate' }} {{ locale }}</button>
+      </form>
+      {% if any_translated %}
+      <a class="btn" href="/images/{{ doc.id }}/export?locale={{ locale }}">Export {{ locale }} image</a>
+      {% endif %}
+    </div>
+  {% endcall %}
+</div>
+
+{% if context_notes %}
+{% call m.card() %}
+  <h2>Image context</h2>
+  <p class="help">{{ context_notes }}</p>
+{% endcall %}
+{% endif %}
+
+{% call m.card() %}
+  <h2>Regions</h2>
+  {% if rows %}
+  <div class="regions-table">
+  {% set column_0 %}#{% endset %}
+  {% set column_1 %}Detected text{% endset %}
+  {% set column_2 %}Translation ({{ locale }}){% endset %}
+  {% set column_3 %}Flags{% endset %}
+  {% set column_4 %}{% endset %}
+{% call m.data_table('Regions', [{'label': column_0}, {'label': column_1}, {'label': column_2}, {'label': column_3}, {'label': column_4}]) %}
+      {% for r in rows %}
+      <tr>
+        <td class="data-mono">{{ r.region.reading_order_index + 1 }}
+          <div class="muted small">{{ r.region.bbox_axis_aligned[2] }}x{{ r.region.bbox_axis_aligned[3] }}px</div></td>
+        <td><span{{ project.source_locale|langattrs }}>{{ r.source_text }}</span>
+          <div class="muted small data-mono">conf {{ '%.2f' | format(r.confidence) }} · {{ r.region.source }}</div></td>
+        <td>
+          <form method="post" action="/images/{{ doc.id }}/regions/{{ r.segments[0].id if r.segments else 0 }}" class="form">
+            {% include "_csrf.html" %}
+            <input type="hidden" name="locale" value="{{ locale }}">
+            {% if r.segments | length == 1 %}
+            <textarea{{ locale|langattrs }} name="target_text" aria-label="Translation for region {{ r.region.reading_order_index + 1 }}" rows="2" style="width:100%">{{ r.segments[0].target_text or '' }}</textarea>
+            <button type="submit" class="btnlink small" aria-label="Save + re-render region {{ r.region.reading_order_index + 1 }}" data-busy-label="{{ t(request, 'busy.rendering') }}">Save + re-render</button>
+            {% else %}
+            {% if r.target_text %}<span{{ locale|langattrs }}>{{ r.target_text }}</span>{% else %}-{% endif %}
+            <p class="help">This region has {{ r.segments | length }} sentence segments -
+              edit them in the <a href="/documents/{{ doc.id }}?locale={{ locale }}">document editor</a>.</p>
+            {% endif %}
+          </form>
+        </td>
+        <td>
+          {% if r.overflow %}<span class="badge warn" title="Text hit the minimum readable size; kept in full, never truncated.">OVERFLOW</span>{% endif %}
+          {% if r.low_confidence %}<span class="badge warn" title="Detector confidence below the escalation threshold.">LOW CONF</span>{% endif %}
+          {% if r.vlm_error %}<span class="badge warn" title="{{ r.vlm_error }}">ENGINE BLOCKED</span>{% endif %}
+          {% if not r.overflow and not r.low_confidence and r.translated %}<span class="badge ok">ok</span>{% endif %}
+        </td>
+        <td class="muted small data-mono">{% if r.segments %}seg #{{ r.segments | map(attribute='id') | join(', #') }}{% endif %}</td>
+      </tr>
+      {% endfor %}
+    {% endcall %}
+  </div>
+  <p class="help">Saving a region writes the segment like the CAT editor and
+  re-renders only this image's preview. Export re-renders from the saved segments.</p>
+  {% else %}
+  {% set empty_message %}No text regions were detected in this image.
+  {% if kind == 'raster' %}Install a detection engine (winocr or
+  <code>pip install rapidocr onnxruntime</code>) and re-upload.{% endif %}{% endset %}
+{{ m.empty_state(empty_message) }}
+  {% endif %}
+{% endcall %}
+
+{% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,245 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Translation Memory{% endblock %}
+{% block content %}
+
+{% set header_meta %}
+  <p>Saved segment TM by customer: usage counts, last-used dates, and cleanup of old or unused entries.
+  {% if not can_delete %}<br>{{ m.status_badge('review', 'Read-only') }} Deleting TM entries is limited to linguists and admins.{% endif %}</p>
+{% endset %}
+{% set header_status %}<a class="help-hint" href="/help/tm" title="Translation memory guide" aria-label="Translation memory guide">?</a>{% endset %}
+{{ m.page_header('Translation Memory', meta=header_meta, status=header_status) }}
+
+
+{# --- customer picker (customer-first browse) --- #}
+{% if show_picker %}
+{% call m.card() %}
+  <h2>Customer</h2>
+  <form method="get" action="/tm" class="form inline-form">
+    <label>Customer
+      <select name="customer">
+        <option value="">- pick a customer -</option>
+        {% for c in customers %}
+        <option value="{{ c.id }}" {% if selected_customer and selected_customer.id == c.id %}selected{% endif %}>{{ customer_label(c) }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">Choose</button>
+  </form>
+{% endcall %}
+{% elif selected_customer %}
+<p class="muted small">Customer: <strong>{{ selected_customer.name }}</strong></p>
+{% endif %}
+
+{% if selected_customer is none %}
+{# No customer resolved - empty state, never an all-customers TM dump. #}
+{% call m.card() %}
+  {% set customer_empty %}
+    {% if no_customers %}
+    No customer is available to browse. TM is organized by customer - create a
+    customer (and a project under it) to start building translation memory.
+    {% else %}
+    Pick a customer above to browse its translation memory.
+    {% endif %}
+  {% endset %}
+  <div class="empty">{{ m.empty_state(customer_empty) }}</div>
+{% endcall %}
+{% else %}
+
+{% set cqs = '&customer=' ~ selected_customer.id %}
+{% if request.query_params.get('deleted') %}<p class="ok">Entry deleted.</p>{% endif %}
+{% if request.query_params.get('bulk_deleted') %}<p class="ok">Deleted {{ request.query_params.get('bulk_deleted')|int }} entr{{ 'y' if request.query_params.get('bulk_deleted') == '1' else 'ies' }}.</p>{% endif %}
+
+<nav class="asset-sections" aria-label="Translation Memory"><a href="#tm-filter">Filter</a><a href="#tm-entries">Entries</a>{% if can_delete %}<a href="#tm-delete">Bulk delete by filter</a>{% endif %}</nav>
+<div class="kpis">
+  <div class="kpi"><span class="kpi-num">{{ summary.total }}</span><span class="kpi-lbl">Total entries</span></div>
+  <div class="kpi"><span class="kpi-num">{{ summary.used }}</span><span class="kpi-lbl">Used</span></div>
+  <div class="kpi"><span class="kpi-num">{{ summary.never_used }}</span><span class="kpi-lbl">Never used</span></div>
+  <div class="kpi"><span class="kpi-num">{{ summary.total_applications }}</span><span class="kpi-lbl">Total applications</span></div>
+</div>
+
+<div class="grid2">
+  {% call m.card() %}
+    <h2>By language pair</h2>
+    {% if summary.pairs %}
+    {% call m.data_table('By language pair', [{'label': 'Pair'}, {'label': 'Entries'}]) %}
+        {% for p in summary.pairs %}
+        <tr><td class="data-mono">{{ p.source_locale }}→{{ p.target_locale }}</td><td class="data-mono">{{ p.count }}</td></tr>
+        {% endfor %}
+      {% endcall %}
+    {% else %}{{ m.empty_state('No entries yet.') }}{% endif %}
+    <p class="muted small">Oldest: {{ summary.oldest_created_at or '-' }} · Newest: {{ summary.newest_created_at or '-' }}</p>
+  {% endcall %}
+
+  {% call m.card() %}
+    <h2>Most used</h2>
+    {% if summary.top_used %}
+    {% call m.data_table('Most used', [{'label': 'Source'}, {'label': 'Uses'}, {'label': 'Last used'}]) %}
+        {% for e in summary.top_used %}
+        <tr>
+          <td><a href="/tm/{{ e.id }}?customer={{ selected_customer.id }}"{{ e.source_locale|langattrs }}>{{ e.source_text[:60] }}{% if e.source_text|length > 60 %}…{% endif %}</a></td>
+          <td class="data-mono">{{ e.use_count }}</td>
+          <td class="muted small data-mono">{{ e.last_used_at or '-' }}</td>
+        </tr>
+        {% endfor %}
+      {% endcall %}
+    {% else %}{{ m.empty_state('No entry has been used yet.') }}{% endif %}
+  {% endcall %}
+</div>
+
+{% set _tm_filtered = filters.source_locale or filters.target_locale or raw_query.get('project_id') or filters.content_type_id or raw_query.get('created_after') or raw_query.get('created_before') or raw_query.get('min_use') or raw_query.get('max_use') or filters.unused %}
+{% call m.card(flat=true) %}
+  <h2 id="tm-filter" class="sr-only">Filter</h2>
+  <form method="get" action="/tm" class="list-search-form" role="search">
+    <input type="hidden" name="customer" value="{{ selected_customer.id }}">
+    {% call m.form_section('tm-filter-fields', 'Filter') %}
+    <div class="list-toolbar">
+      <label class="list-search"><span class="sr-only">Search text</span>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+        <input type="search" name="q" value="{{ raw_query.get('q', '') }}" placeholder="Search source or target text" autocomplete="off">
+      </label>
+      <details class="filters"{% if _tm_filtered %} open{% endif %}>
+        <summary><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 5h18l-7 8v6l-4-2v-4z"></path></svg> Filters</summary>
+        <div class="filters-panel">
+    <div class="report-fields">
+      <label>Source locale
+        <select name="source_locale">
+          <option value="">Any</option>
+          {% for loc in source_locales %}
+          <option value="{{ loc }}" {% if filters.source_locale == loc %}selected{% endif %}>{{ loc }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Target locale
+        <select name="target_locale">
+          <option value="">Any</option>
+          {% for loc in target_locales %}
+          <option value="{{ loc }}" {% if filters.target_locale == loc %}selected{% endif %}>{{ loc }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Project id <input type="number" name="project_id" value="{{ raw_query.get('project_id', '') }}" min="1" placeholder="Any project" title="The project's number: the last part of its address, /projects/N" aria-describedby="tm-project-id-hint"><span class="muted small" id="tm-project-id-hint">The number in a project's address (/projects/N).</span></label>
+      <label>Content type
+        <select name="content_type_id">
+          <option value="">Any content type</option>
+          <option value="__none__" {% if filters.content_type_id == '__none__' %}selected{% endif %}>General (untyped)</option>
+          {% for t in content_types %}
+          <option value="{{ t.id }}" {% if filters.content_type_id == t.id|string %}selected{% endif %}>{{ t.name }}{% if t.customer_id %} (this customer){% else %} (global){% endif %}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Created after <input type="date" name="created_after" value="{{ raw_query.get('created_after', '') }}"></label>
+      <label>Created before <input type="date" name="created_before" value="{{ raw_query.get('created_before', '') }}"></label>
+      <label>Min uses <input type="number" name="min_use" value="{{ raw_query.get('min_use', '') }}" min="0"></label>
+      <label>Max uses <input type="number" name="max_use" value="{{ raw_query.get('max_use', '') }}" min="0"></label>
+      <label class="checkbox"><input type="checkbox" name="unused" value="1" {% if filters.unused %}checked{% endif %}> Never used only</label>
+      <label>Order
+        <select name="order">
+          <option value="recent" {% if order == 'recent' %}selected{% endif %}>Newest created</option>
+          <option value="oldest" {% if order == 'oldest' %}selected{% endif %}>Oldest created</option>
+          <option value="most_used" {% if order == 'most_used' %}selected{% endif %}>Most used</option>
+          <option value="least_used" {% if order == 'least_used' %}selected{% endif %}>Least used</option>
+          <option value="recently_used" {% if order == 'recently_used' %}selected{% endif %}>Recently used</option>
+        </select>
+      </label>
+    </div>
+    <button type="submit">Apply filters</button>
+    <a href="/tm?customer={{ selected_customer.id }}" class="ghost">Clear</a>
+        </div>
+      </details>
+    </div>
+    {% endcall %}
+  </form>
+{% endcall %}
+
+{% call m.card(flat=true) %}
+  <h2 id="tm-entries">Entries</h2>
+  {% if result.entries %}
+  {% call m.data_table('Entries', [{'label': 'Source'}, {'label': 'Target'}, {'label': 'Pair'}, {'label': 'Content type'}, {'label': 'Uses'}, {'label': 'Last used'}, {'label': 'Created'}] + ([{'label': '', 'actions': true}] if can_delete else []), css_class='tm-entries') %}
+      {% for e in result.entries %}
+      <tr>
+        <td><a href="/tm/{{ e.id }}?customer={{ selected_customer.id }}"{{ e.source_locale|langattrs }} title="{{ e.source_text }}">{{ e.source_text|truncate(60, false, "…") }}</a></td>
+        <td class="muted"{{ e.target_locale|langattrs }}><span title="{{ e.target_text }}">{{ e.target_text|truncate(60, false, "…") }}</span></td>
+        <td class="small data-mono nowrap">{{ e.source_locale }}→{{ e.target_locale }}</td>
+        <td class="small">{% if e.content_type_id %}{{ ct_names.get(e.content_type_id, '#' ~ e.content_type_id) }}{% else %}<span class="muted">General</span>{% endif %}</td>
+        <td class="data-mono">{{ e.use_count }}</td>
+        <td class="muted small data-mono nowrap">{{ e.last_used_at|utcdt or '-' }}</td>
+        <td class="muted small data-mono nowrap">{{ e.created_at|utcdt or '-' }}</td>
+        {% if can_delete %}
+        <td class="row-actions">
+          {% call m.row_menu('tmm-' ~ e.id, 'More actions for TM entry ' ~ e.id) %}
+            <a role="menuitem" href="/tm/{{ e.id }}?customer={{ selected_customer.id }}">Open entry</a>
+            <form method="post" action="/tm/{{ e.id }}/delete" data-action-confirm="Delete this TM entry?">
+              {% include "_csrf.html" %}
+              <input type="hidden" name="customer" value="{{ selected_customer.id }}">
+              <button type="submit" role="menuitem" class="rm-danger" aria-label="Delete entry {{ e.id }}">Delete entry</button>
+            </form>
+          {% endcall %}
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    {% endcall %}
+  {{ m.pager('/tm', result.page, result.pages, result.total, 'entries', cqs) }}
+  {% else %}
+  {% set clear_filters %}<a href="/tm?customer={{ selected_customer.id }}">Clear filters</a>{% endset %}
+  {{ m.empty_state("No entries match these filters.", action=clear_filters) }}
+  {% endif %}
+{% endcall %}
+
+{% if can_delete %}
+{% call m.card() %}
+  <h2 id="tm-delete">Bulk delete by filter</h2>
+  {% if request.query_params.get('confirm_n') is not none %}
+    {% set cn = request.query_params.get('confirm_n')|int %}
+    {% if cn > 0 %}
+    <p class="error">This will delete <strong>{{ cn }}</strong> entr{{ 'y' if cn == 1 else 'ies' }} matching the current filters. This cannot be undone.</p>
+    <form method="post" action="/tm/bulk-delete">
+      {% include "_csrf.html" %}
+      <input type="hidden" name="customer" value="{{ selected_customer.id }}">
+      <input type="hidden" name="source_locale" value="{{ filters.source_locale or '' }}">
+      <input type="hidden" name="target_locale" value="{{ filters.target_locale or '' }}">
+      <input type="hidden" name="project_id" value="{{ raw_query.get('project_id', '') }}">
+      <input type="hidden" name="content_type_id" value="{{ raw_query.get('content_type_id', '') }}">
+      <input type="hidden" name="q" value="{{ raw_query.get('q', '') }}">
+      <input type="hidden" name="created_before" value="{{ raw_query.get('created_before', '') }}">
+      <input type="hidden" name="created_after" value="{{ raw_query.get('created_after', '') }}">
+      <input type="hidden" name="min_use" value="{{ raw_query.get('min_use', '') }}">
+      <input type="hidden" name="max_use" value="{{ raw_query.get('max_use', '') }}">
+      <input type="hidden" name="unused" value="{{ '1' if filters.unused else '' }}">
+      <input type="hidden" name="confirm" value="1">
+      {% if request.query_params.get('confirm_all') %}<input type="hidden" name="confirm_all" value="1">{% endif %}
+      <button type="submit" class="danger-btn">Yes, delete {{ cn }} entr{{ 'y' if cn == 1 else 'ies' }}</button>
+      <a href="/tm?customer={{ selected_customer.id }}" class="ghost">Cancel</a>
+    </form>
+    {% else %}
+    {{ m.empty_state('No entries match the current filters - nothing to delete.') }}
+    {% endif %}
+  {% else %}
+  <p class="muted">Delete every entry matching the filters above. You will see a count
+  and confirm before anything is removed.</p>
+  <form method="post" action="/tm/bulk-delete">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="customer" value="{{ selected_customer.id }}">
+    <input type="hidden" name="source_locale" value="{{ filters.source_locale or '' }}">
+    <input type="hidden" name="target_locale" value="{{ filters.target_locale or '' }}">
+    <input type="hidden" name="project_id" value="{{ raw_query.get('project_id', '') }}">
+    <input type="hidden" name="content_type_id" value="{{ raw_query.get('content_type_id', '') }}">
+    <input type="hidden" name="q" value="{{ raw_query.get('q', '') }}">
+    <input type="hidden" name="created_before" value="{{ raw_query.get('created_before', '') }}">
+    <input type="hidden" name="created_after" value="{{ raw_query.get('created_after', '') }}">
+    <input type="hidden" name="min_use" value="{{ raw_query.get('min_use', '') }}">
+    <input type="hidden" name="max_use" value="{{ raw_query.get('max_use', '') }}">
+    <input type="hidden" name="unused" value="{{ '1' if filters.unused else '' }}">
+    <button type="submit" class="danger-btn">Preview bulk delete…</button>
+  </form>
+  {% endif %}
+{% endcall %}
+{% endif %}
+
+{% endif %}
+{# SPEC-ask-draft section 4: the grounded "Ask about this page" panel. Hidden (and
+   its route 404s) when the assist_enabled kill switch is off. #}
+{% with assist_module = 'tm' %}{% include "_assist_panel.html" %}{% endwith %}
+
+{% endblock %}

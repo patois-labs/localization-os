@@ -1,0 +1,14 @@
+{# Termbase import report (TBX v2/v3, TBX-Basic, MultiTerm XML): rendered after a redirect
+   from either glossary import route (glossary_tbx.report_query). Every value is escaped. #}
+{% set qp = request.query_params %}
+{% if qp.get('gl_dialect') %}
+<p class="muted" data-termbase-report>
+  Termbase ({{ qp.get('gl_dialect') }}): {{ qp.get('gl_imported', '0')|int }} entr(ies) imported,
+  {{ qp.get('gl_merged', '0')|int }} merged into existing terms,
+  {{ qp.get('gl_skipped', '0')|int }} skipped{% if qp.get('gl_why') %} (most common reason: {{ qp.get('gl_why') }}){% endif %}.
+  {% if qp.get('gl_status', '0')|int > 0 %}
+    {{ qp.get('gl_status')|int }} forbidden or deprecated term(s) found: never used as a required translation{% if qp.get('gl_kept', '0')|int > 0 %}, {{ qp.get('gl_kept')|int }} kept as do-not-use terms on their concepts{% else %}, listed in the term notes on a per-project glossary{% endif %}.
+  {% endif %}
+  The full per-entry report is in the CLI output and the API response.
+</p>
+{% endif %}

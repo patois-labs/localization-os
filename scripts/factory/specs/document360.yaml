@@ -1,0 +1,70 @@
+# Factory spec for the REBUILT Document360 connector (connector parity, un-archived 2026-10-10).
+# `python scripts/factory/generate.py check scripts/factory/specs/document360.yaml` must PASS.
+# Document360 predates the factory, so this spec only records the parametric touchpoints; the
+# module body is hand-written (see app/services/connectors/document360.py). No bb-io code was
+# read: the rebuild is from the current Document360 vendor docs only.
+
+connector:
+  kind: document360
+  name: Document360
+  class_name: Document360Connector
+  icon: "📘"
+  cat: "Knowledge base / help center"
+  blurb: >-
+    Translate Document360 knowledge-base articles into any language. Each translation is
+    written back as the article's per-language version (PUT /v2/Articles/{id}/{langCode}), so
+    the source article is never overwritten. Markdown and WYSIWYG articles are both handled.
+  docs_url: "https://apidocs.document360.com/v2-api/apidocs/update-an-article"
+  supports_oauth: false
+  archived: false
+
+  topology: T2
+  auth: [api_key]
+  api_version: "v2"
+  rich_text: markdown
+  regions: fixed-region
+  change_signals:
+    webhook_sig: null
+    poll_field: version_number
+    stale_flag: translation_option
+    thin_payload: false
+  anti_loop_label: false
+
+  retry_noun: article
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<article id>"
+  api_docstring: >-
+    Translate Document360 article(s) on the fly into one or more langCodes, writing each back
+    as the article's per-language version (T2). Article ids must sit inside the connection's
+    project version and category.
+
+  article_noun_phrase: "a Document360"
+  cli_parser_help: >-
+    Translate Document360 articles into the connection's langCodes as per-language article
+    versions.
+
+  item_units:
+    scan: "your Document360 articles"
+    becomes: "the article's per-language version (a draft by default; a translation already published is never edited in place, a held title or body keeps its stored value)"
+
+  help_row_body: "Translate Document360 article(s) as per-language article versions. Body: <code>article_ids</code>/<code>article_id</code> (inside the connection's project version and category), <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Translate Document360 articles into the connection's langCodes as per-language article versions (T2; Markdown & WYSIWYG handled). `--article-ids` must sit inside the connection's project version and category."
+
+  cli_expected_desc: "translate Document360 articles into per-language article versions (T2 SubResourceStrategy)"
+
+  config_fields:
+    - {name: project_version_id, label: "Project version id", help: "The workspace (project version) to translate.", placeholder: "a1b2c3d4"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated Document360 langCodes to write (must be enabled in the project).", required: false, placeholder: "de, fr, es"}
+  secret_fields:
+    - {name: api_token, label: "API token", help: "Document360, Settings, Knowledge base portal, API tokens.", secret: true, placeholder: "your-api-token"}
+  setup_steps:
+    - "Generate an API token under Settings, Knowledge base portal, API tokens."
+    - "Enter the project version id and the target langCodes (enabled in the project)."
+  other_side: >-
+    Document360 has no webhooks; change detection compares a content hash of the source per
+    (article, langCode) plus the translation_option stale signal.

@@ -1,0 +1,11 @@
+@echo off
+REM Localization OS headless CLI wrapper (cmd.exe). Forwards all args to the CLI,
+REM preferring the project virtualenv's Python so services import cleanly.
+setlocal
+set "HERE=%~dp0"
+if exist "%HERE%.venv\Scripts\python.exe" (
+    "%HERE%.venv\Scripts\python.exe" -m app.cli %*
+) else (
+    python -m app.cli %*
+)
+endlocal

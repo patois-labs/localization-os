@@ -1,0 +1,59 @@
+# pip-audit ignore list - Localization OS TMS (compliance gap G-08).
+#
+# WHAT THIS IS. One vulnerability-advisory ID per line that the CI `dep-audit`
+# job passes to `pip-audit --ignore-vuln`. The audit runs against the LOCKED
+# runtime tree (requirements.lock) and FAILS on any advisory NOT listed here.
+# This file is the escape hatch: an advisory is pinned here so the gate stays
+# green while the fix (a dependency upgrade) is scheduled as separate work.
+#
+# FORMAT. `<ADVISORY-ID>  # owner=<name> expires=YYYY-MM-DD reason=<short>`. Blank lines and lines whose first
+# token starts with `#` are ignored by the CI parser (it reads field 1 only).
+# Every entry needs owner, expiry, reason, reachability=, and fixed= version. verify_release_lock rejects stale
+# entries in CI, including scheduled audits. Expiry is inclusive (UTC in CI).
+# LOAD-BEARING: this file MUST stay LF (it is pinned eol=lf in .gitattributes). The
+# CI parser is `awk '$1 !~ /^#/ && NF {print $1}'`; under Linux gawk a CRLF line
+# leaves a trailing \r on field 1, so a bare-ID line becomes "PYSEC-...\r" and the
+# --ignore-vuln no longer matches - the gate would fail on an already-pinned CVE.
+#
+# HOW TO CLEAR AN ENTRY (the manual lock-regen step). Dependabot bumps the pin in
+# requirements.txt but does NOT touch requirements.lock, and this job audits the
+# LOCK - so an entry here clears only when a human refreshes the lock:
+#   1. Upgrade the affected package to (at least) the "Fix Versions" pip-audit
+#      reports, in requirements.txt (mind the load-bearing pins - e.g. starlette's
+#      floor is set by the pinned fastapi, so its cluster needs a coordinated bump).
+#   2. Use the clean Python 3.13 PowerShell recipe in docs/DEPLOY.md, keeping
+#      uvicorn[standard] in requirements.txt. Exact base refresh commands:
+#      & .\.lock-refresh\Scripts\python.exe -m pip install -r requirements.txt
+#      & .\.lock-refresh\Scripts\python.exe -m pip check
+#      $basePins = @(& .\.lock-refresh\Scripts\python.exe -m pip freeze | Where-Object { $_ -notmatch '^(pywin32|uvloop)==' })
+#      $basePins += 'pywin32==312 ; sys_platform == "win32"'
+#      $sortedPins = [Collections.Generic.SortedDictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
+#      foreach ($pin in $basePins) { $sortedPins.Add(($pin -split '==')[0], $pin) }
+#      $lockLines = @($sortedPins.Values) + @('uvloop==0.22.1; sys_platform != "win32"')
+#      [IO.File]::WriteAllText((Join-Path $PWD 'requirements.lock'), ($lockLines -join "`n") + "`n", [Text.Encoding]::ASCII)
+#      Refresh additive profile locks separately as documented; exclude base pins
+#      and tzdata from their freezes, then re-add the Postgres marker to the
+#      in-memory lines and write LF with WriteAllText, as in docs/DEPLOY.md.
+#      Keep development/optional deps out of the base lock and review marked pins.
+#   3. Run the release-lock suite and image checks, then audit every runtime profile.
+#   4. Delete cleared entries. For any remaining entry, review owner=<name>,
+#      expires=YYYY-MM-DD and reason=<short>; retain per-advisory reachability.
+#      Do not extend an expiry without a fresh owner review.
+# The next audit run re-fails if the advisory is somehow still present - the point.
+#
+# ------------------------------------------------------------------------------
+# SEEDED 2026-08-25 (Batch-10 Train 2, gap G-08): the FIRST baseline scan of
+# requirements.lock, pinned unfixed while upgrades were scheduled separately.
+#
+# REFRESHED 2026-09-05 (dependency refresh lock regen). The lock was
+# regenerated after applying the bumps that ARE drop-in - cryptography 49.0.0->50.0.1,
+# jinja2 3.1.4->3.1.6, lxml 5.3.0->6.1.2, pyasn1 0.6.3->0.6.4, python-dotenv
+# 1.0.1->1.2.3, python-multipart 0.0.20->0.0.32 - so every advisory those fixed is
+# DELETED here (per the "HOW TO CLEAR AN ENTRY" recipe above). Cluster status after the Pillow train:
+#   * pillow - closed by the 12.3.0 bump on 2026-09-08. All 18 recorded
+#     entries have fixed versions <=12.3.0. Reachable JPEG2000 advisory
+#     PYSEC-2026-3496 requires 12.3.0, so 12.2.0 is insufficient.
+#     A fresh network audit of all profiles remains a CI check.
+#   * starlette - all seven recorded exceptions are closed by the 1.6.0 bump.
+#     PYSEC-2026-1941/-1942 were already fixed by 0.52.1; the five 1.x-only
+#     exceptions are closed by fixes in 1.0.1 through 1.3.1.

@@ -1,0 +1,98 @@
+# Localization OS: Caddy reverse proxy for the hosted instance BEHIND CLOUDFLARE.
+#
+# Traffic path:  browser -> Cloudflare (orange cloud, WAF) -> this Caddy -> app container
+#
+# Differences from deploy/Caddyfile (the plain Let's Encrypt version):
+#   1. Caddy trusts Cloudflare's edge addresses as proxies and takes the visitor
+#      address from CF-Connecting-IP only (honoured only from those edge
+#      addresses), then REPLACES X-Forwarded-For with that one value.
+#      The app trusts only this Caddy, so the audit log, the access log and the
+#      login lockout record exactly what Cloudflare reported. The old setup kept
+#      Cloudflare's X-Forwarded-For chain and the app skipped every Cloudflare
+#      range in it, so a hop reported from a Cloudflare address (a Worker
+#      request) let the caller choose the address to the left of it.
+#   2. TLS uses a Cloudflare Origin CA certificate (Cloudflare SSL/TLS mode
+#      "Full (strict)"), because Let's Encrypt HTTP challenges do not pass through
+#      a proxied record reliably.
+#
+# The Cloudflare ranges below are copied from
+#     https://www.cloudflare.com/ips-v4
+#     https://www.cloudflare.com/ips-v6
+# on 2026-09-25. The stock caddy:2@sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52 image has no Cloudflare IP module, so they are
+# listed statically. REFRESH THEM AT LEAST YEARLY (and whenever Cloudflare announces
+# a change), in TWO places together: this file and the security group
+# (aws-instance-setup.sh --cloudflare-only).
+#
+# App side (must match this file). On a hosted box the app setting is
+#   trusted_proxy_ips = 172.30.0.10/32
+# (this Caddy only, never the Cloudflare ranges). See
+#   deploy/aws-hosted/LAUNCH.md, section 5 step 8.
+#   172.30.0.10 is this Caddy container's fixed address on the "locos" Docker
+#   network (docker network create --subnet 172.30.0.0/24 locos; docker run ...
+#   --network locos --ip 172.30.0.10 ... caddy:2@sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52).
+#
+# Files this config expects inside the Caddy container:
+#   /etc/caddy/Caddyfile        this file
+#   /etc/caddy/origin.pem       Cloudflare Origin CA certificate
+#   /etc/caddy/origin-key.pem   its private key (chmod 600 on the host)
+#   /etc/caddy/origin-auth.caddy  private zone-specific header matcher (LAUNCH.md section 5)
+
+{
+	servers {
+		# Cloudflare edge ranges (IPv4, then IPv6). Only requests arriving FROM these
+		# addresses may set the forwarded headers Caddy passes on.
+		trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+		# Caddy's own logs and {client_ip} use the visitor address Cloudflare reports,
+		# from CF-Connecting-IP ONLY (never the visitor-extendable X-Forwarded-For).
+		# A peer outside trusted_proxies gets its own socket address instead.
+		client_ip_headers CF-Connecting-IP
+	}
+}
+
+# ---- Replace with the university instance's real hostname ----
+tms.example.edu {
+	# Cloudflare Origin CA certificate (Cloudflare dashboard: SSL/TLS > Origin Server >
+	# Create certificate; keep RSA, 15 years). Browsers do not trust this certificate
+	# directly; only Cloudflare does, which is exactly what Full (strict) needs.
+	#
+	# ALTERNATIVE (Let's Encrypt): switch the Cloudflare DNS record to grey cloud
+	# (DNS only), replace the line below with "tls you@example.com", start Caddy
+	# so it issues the certificate, then turn the orange cloud back on. Renewals every
+	# ~60 days then need the same grey-cloud window, which is why Origin CA is the default.
+	tls /etc/caddy/origin.pem /etc/caddy/origin-key.pem
+
+	encode gzip zstd
+
+	# Security headers: identical to deploy/Caddyfile.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# The app container on the "locos" network (compose installs call it app:8000).
+	# Caddy keeps Host intact (the app's same-origin CSRF check needs it) and sends
+	# X-Forwarded-For as exactly ONE address, {client_ip}: the app trusts only
+	# this Caddy, so nothing a visitor or a Worker writes into X-Forwarded-For reaches it.
+	# Required file defines @origin with an exact random header value. No fallback value.
+	# Cloudflare MUST overwrite the visitor's header, after the zone's WAF has run.
+	import /etc/caddy/origin-auth.caddy
+	handle @origin {
+		reverse_proxy locosapp:8000 {
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-For {client_ip}
+			header_up -X-Locos-Origin
+		}
+	}
+	handle {
+		respond "Forbidden" 403
+	}
+
+	# Match the app's MAX_UPLOAD_BYTES default (100 MB). Cloudflare's free plan also
+	# caps request bodies at 100 MB, so this is the effective ceiling either way.
+	request_body {
+		max_size 100MB
+	}
+}

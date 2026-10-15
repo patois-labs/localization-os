@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE messagebundle [
+<!ELEMENT messagebundle (msg)*>
+<!ATTLIST messagebundle class CDATA #IMPLIED>
+
+<!ELEMENT msg (#PCDATA|ph|source)*>
+<!ATTLIST msg id CDATA #IMPLIED>
+<!ATTLIST msg seq CDATA #IMPLIED>
+<!ATTLIST msg name CDATA #IMPLIED>
+<!ATTLIST msg desc CDATA #IMPLIED>
+<!ATTLIST msg meaning CDATA #IMPLIED>
+<!ATTLIST msg obsolete (obsolete) #IMPLIED>
+<!ATTLIST msg xml:space (default|preserve) "default">
+<!ATTLIST msg is_hidden CDATA #IMPLIED>
+
+<!ELEMENT source (#PCDATA)>
+
+<!ELEMENT ph (#PCDATA|ex)*>
+<!ATTLIST ph name CDATA #REQUIRED>
+
+<!ELEMENT ex (#PCDATA)>
+]>
+<messagebundle handler="angular">
+  <msg id="introductionHeader" desc="An introduction header for this sample" meaning="User welcome"><source>src/app/app.component.html:4</source>Hello i18n!</msg>
+  <msg id="2367646551098052009" desc="Greets the signed-in user"><source>src/app/app.component.html:7</source>Hello, <ph name="INTERPOLATION"><ex>{{ user.name }}</ex>{{ user.name }}</ph>! You have <ph name="INTERPOLATION_1"><ex>{{ count }}</ex>{{ count }}</ph> new messages.</msg>
+  <msg id="5811701742971715242"><source>src/app/app.component.html:10,12</source>The <ph name="START_BOLD_TEXT"><ex>&lt;b&gt;</ex>&lt;b&gt;</ph>sky<ph name="CLOSE_BOLD_TEXT"><ex>&lt;/b&gt;</ex>&lt;/b&gt;</ph> is blue &amp; <ph name="START_LINK"><ex>&lt;a&gt;</ex>&lt;a&gt;</ph>clear<ph name="CLOSE_LINK"><ex>&lt;/a&gt;</ex>&lt;/a&gt;</ph><ph name="LINE_BREAK"><ex>&lt;br/&gt;</ex>&lt;br/&gt;</ph>today.</msg>
+  <msg id="4606963464835766483"><source>src/app/app.component.html:14</source>Updated <ph name="ICU"><ex>{minutes, plural, =0 {...} =1 {...} other {...}}</ex>{minutes, plural, =0 {...} =1 {...} other {...}}</ph></msg>
+  <msg id="2002272803511843863"><source>src/app/app.component.html:14</source>{VAR_PLURAL, plural, =0 {just now} =1 {one minute ago} other {<ph name="INTERPOLATION"><ex>{{ minutes }}</ex>{{ minutes }}</ph> minutes ago}}</msg>
+  <msg id="3967965900462880190"><source>src/app/app.component.ts:21</source><ph name="PH"><ex>{{ total }}</ex>{{ total }}</ph></msg>
+  <msg id="custom.save" desc="Button label"><source>src/app/app.component.html:20</source>
+      Save changes
+    </msg>
+  <msg id="custom.save"><source>src/app/other.component.html:3</source>Save changes</msg>
+</messagebundle>

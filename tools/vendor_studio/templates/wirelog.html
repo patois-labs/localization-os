@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Wire log{% endblock %}
+{% block body %}
+<h1>Wire log</h1>
+<p class="muted">Every inbound / outbound wire event. Reasons are sanitized - no secret or
+  claim token is ever recorded here.</p>
+<table class="grid small">
+  <thead><tr><th>When</th><th>Dir</th><th>Kind</th><th>Verdict</th><th>HTTP</th>
+    <th>Project</th><th>Reason</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr class="wl-{{ r.verdict }}">
+      <td>{{ r.created_at.strftime("%H:%M:%S") }}</td>
+      <td>{{ r.direction }}</td>
+      <td>{{ r.kind }}</td>
+      <td>{{ r.verdict }}</td>
+      <td>{{ r.status_code or "-" }}</td>
+      <td>{{ r.project_id or "-" }}</td>
+      <td class="reason">{{ r.reason }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

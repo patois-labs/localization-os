@@ -1,0 +1,396 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Review drafted workflow{% endblock %}
+{% block content %}
+<div class="ux-workflows">
+
+<p><a href="/workflows" class="back"><span aria-hidden="true">←</span> Workflows</a></p>
+
+{{ m.page_header('Review the drafted workflow') }}
+<section class="card">
+  <p class="help">An LLM drafted this from your description. Nothing is saved yet -
+  edit below, then <strong>Create workflow</strong>. Every value is re-validated on create.</p>
+
+  {% if description %}
+    <p class="help">Your description:</p>
+    <pre class="prompt">{{ description }}</pre>
+  {% endif %}
+
+  {% if errors %}
+    <div class="notice notice-warn">
+      <strong>The workflow could not be created - nothing was saved:</strong>
+      <ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+      <p>Fix the fields below, or select <strong>Fix this for me</strong> at the bottom to
+      have the assistant correct the draft for you.</p>
+    </div>
+  {% endif %}
+  {% if warnings %}
+    <div class="notice notice-warn">
+      <strong>Review these before creating:</strong>
+      <ul>{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+    </div>
+  {% endif %}
+  {# Draft repair ("Fix this for me"): a one-shot banner (a repair failure / "already
+     valid" note) + the repaired summary. The per-step badges + flash are rendered on the
+     steps below and highlighted by the scoped script at the bottom (zero-JS shows the
+     badges + this note honestly). #}
+  {% if repair_notice %}
+    <div class="notice">{{ repair_notice }}</div>
+  {% endif %}
+  {% if repaired %}
+    <div class="notice wf-repaired-note">
+      <strong>Repaired.</strong> The steps marked <span class="badge semantic">repaired</span>
+      below were changed to fix the errors.
+      {%- if errors %} Some errors remain - review them and select <em>Fix this for me</em>
+      again.{% else %} Review the highlighted changes, then Create workflow.{% endif %}
+    </div>
+  {% endif %}
+</section>
+
+{# The review page is a plain form POST chain - it works with JavaScript disabled.
+   The ONLY JS is the per-step model-dropdown fetch (degrades to a manual text input
+   exactly like the builder). Steps are indexed s{i}_<field>; a checkbox absent == off. #}
+<form method="post" action="/workflows/author/confirm" class="form">
+  {% include "_csrf.html" %}
+  <input type="hidden" name="description" value="{{ description }}" />
+  <input type="hidden" name="step_count" value="{{ fields.steps|length }}" />
+  {# The drafting engine, relayed so the "Fix this for me" button (which POSTs this form
+     to /workflows/author/repair) calls the SAME engine; the confirm route ignores them. #}
+  <input type="hidden" name="provider" value="{{ author_provider }}" />
+  <input type="hidden" name="model" value="{{ author_model }}" />
+
+  {# #594: one tab per step. Server-rendered tablist + panels; wftabs.js only hides the
+     unselected panels (no JS = every panel stacked as its own card). A server error that
+     starts "Step N" marks step N's tab and opens it first; any other error opens the
+     Workflow tab. Hidden panels still submit with the one form. #}
+  {% set _tl = {'tm_match': 'TM match', 'lqa': 'LQA', 'human_review': 'Review', 'external': 'External'} %}
+  {% set _bad = namespace(steps=[], other=false) %}
+  {% for e in errors %}
+    {% if e is string and e.startswith('Step ') and e[5:].split(':')[0].strip().isdigit() %}
+      {% set _bad.steps = _bad.steps + [e[5:].split(':')[0].strip()|int] %}
+    {% else %}{% set _bad.other = true %}{% endif %}
+  {% endfor %}
+  {% set _init = 'wftab-settings' if (_bad.other or not _bad.steps) else 'wftab-step-' ~ _bad.steps[0] %}
+  <div class="wf-steptabs" data-wf-tabs data-initial="{{ _init }}">
+  <div class="tabs wf-tabbar" role="tablist" aria-label="Workflow settings and steps">
+    <button type="button" class="tab" role="tab" id="wftab-settings" aria-controls="wftabpanel-settings" aria-selected="{{ 'true' if _init == 'wftab-settings' else 'false' }}" tabindex="{{ '0' if _init == 'wftab-settings' else '-1' }}"{% if _bad.other %} data-invalid="true"{% endif %}>Workflow{% if _bad.other %} <span class="sr-only">(has errors)</span>{% endif %}</button>
+    {% for step in fields.steps %}
+      {% set _lab = (step.name or 'Agent') if step.step_type == 'llm_agent' else _tl.get(step.step_type, step.step_type or 'Step') %}
+      {% if step.step_type == 'lqa' and step.lqa_threshold is not none %}{% set _lab = _lab ~ ' ' ~ step.lqa_threshold %}{% endif %}
+      {% set _sel = (_init == 'wftab-step-' ~ loop.index) %}
+      <button type="button" class="tab" role="tab" id="wftab-step-{{ loop.index }}" aria-controls="wftabpanel-step-{{ loop.index }}" aria-selected="{{ 'true' if _sel else 'false' }}" tabindex="{{ '0' if _sel else '-1' }}" title="Step {{ loop.index }}: {{ _lab }}"{% if loop.index in _bad.steps %} data-invalid="true"{% endif %}><span class="wf-tab-num">{{ loop.index }}</span> <span class="wf-tab-type">{{ _lab }}</span>{% if loop.index in _bad.steps %} <span class="sr-only">(has errors)</span>{% endif %}</button>
+    {% endfor %}
+  </div>
+
+  <section class="card wf-tabpanel wf-settings-panel" role="tabpanel" id="wftabpanel-settings" aria-labelledby="wftab-settings" tabindex="0">
+    <h2>Workflow</h2>
+    {% call m.form_section('workflow_author_review-fields-1', 'Basics') %}
+      <label>Name <input type="text" name="name" value="{{ fields.name or '' }}"
+        placeholder="Marketing 3-step MT" required /></label>
+      <label>Customer <span class="muted">(optional - blank = global)</span>
+        <select name="customer_id">
+          <option value="">- global -</option>
+          {% for c in customers %}
+            <option value="{{ c.id }}"{% if fields.customer_id == c.id %} selected{% endif %}>{{ customer_label(c) }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <p class="help">A workflow is written once and takes its languages from the project
+      it runs on. Each step's prompt uses <code>{{ '{target_locale}' }}</code> (and
+      <code>{{ '{source_locale}' }}</code> where the source language matters); no language pair
+      is stored on the workflow.</p>
+    {% endcall %}
+    <h3 class="wf-panel-title">Steps <span class="muted">(run top to bottom; each step's output feeds the next)</span></h3>
+    {# SPEC-workflows-redesign Phase 3: HEADLINE the shape the draft produced (calm,
+       server-rendered, generated from the real steps) so the structure is legible before
+       confirm, with the shape chips. #}
+    {% if shape_headline %}
+    <div class="wf-shape-line">
+      {% for c in shape_chips %}<span class="chip" title="{{ c.hint }}">{{ c.label }}</span> {% endfor %}
+      <p class="wf-shape-headline">{{ shape_headline }}</p>
+    </div>
+    {% endif %}
+    {# Phase 3.1: the enriched "how it works" diagram - every step's role, model &
+       packaged assets, plus any branch/loop-back edges. Renders for linear drafts too. #}
+    <div class="wf-graph-region" role="region" aria-label="Workflow" tabindex="0">{{ m.wf_graph(fields.steps, text_id='wfgText') }}</div>{{ m.wf_graph_text(fields.steps, none, 'wfgText') }}
+    {% set keyed_steps = fields.steps | selectattr('key') | list %}
+    {% if not fields.steps %}
+      <div class="notice notice-warn">No steps were proposed - add at least one in the builder after creating, or go back and refine the description.</div>
+    {% endif %}
+  </section>
+    {% for step in fields.steps %}
+      {% set i = loop.index0 %}
+      <fieldset class="lp-fieldset wf-step-fieldset{% if step.repaired_fields %} repaired-step{% endif %}" role="tabpanel" id="wftabpanel-step-{{ loop.index }}" aria-labelledby="wftab-step-{{ loop.index }}"{% if step.repaired_fields %} data-repaired-fields="{{ step.repaired_fields|join(' ') }}" data-step-idx="{{ i }}"{% endif %}>
+        <legend class="wf-step-legend"><span class="wf-step-num">Step {{ loop.index }}</span><span class="chip wf-step-type-chip">{{ step.step_type }}</span>{% if step.repaired_fields %} <span class="badge semantic">repaired</span>{% endif %}{% if step.step_type != 'human_review' and step.step_type != 'tm_match' %} <span class="chip wf-step-engine-chip">{{ step.provider or 'default' }}{% if step.model %} · {{ step.model }}{% endif %}</span>{% endif %}</legend>
+        {% if step.prompt_warning %}
+          <div class="notice notice-warn">{{ step.prompt_warning }}</div>
+        {% endif %}
+        <div class="grid2">
+          <label>Name <input type="text" name="s{{ i }}_name" value="{{ step.name or '' }}"
+            placeholder="Translator / LQA / Fix" /></label>
+          <label>Type
+            {# MED-A: mirror the originally-posted step_type in a hidden input. A disabled
+               blocked <option> below submits NOTHING (HTML spec), so on a re-POST the <select>
+               yields a blank type; _parse_review_form falls back to this mirror so the confirm
+               error stays the HONEST "external ..." message instead of degrading to "(blank)".
+               A real user pick wins (the enabled <select> then submits a non-blank value). #}
+            <input type="hidden" name="s{{ i }}_posted_step_type" value="{{ step.step_type or '' }}">
+            <select name="s{{ i }}_step_type" class="step-type-select" data-step="{{ i }}">
+              {% for t in step_types %}
+                <option value="{{ t }}"{% if t == step.step_type %} selected{% endif %}>{{ t }}</option>
+              {% endfor %}
+              {# MED-1/MED-A: a step_type the user POSTED that the assistant does not draft
+                 (external, junk, or a now-BLANK one) is shown here as a SELECTED + DISABLED
+                 option, so a confirm-rejection re-render never leaves this <select> silently
+                 defaulting to llm_agent (a blind re-confirm would create a stray llm_agent
+                 step). The human must pick a real type or delete the step. Only rendered on the
+                 step that posted it; a blank posted type gets the "(no type selected)" label. #}
+              {% for t in blocked_step_types %}{% if t == step.step_type %}
+                <option value="{{ t }}" selected disabled>{% if t %}{{ t }} - not draftable here; change or delete this step{% else %}(no type selected) - pick a step type{% endif %}</option>
+              {% endif %}{% endfor %}
+            </select>
+          </label>
+        </div>
+        <label class="assignee-field" data-types="human_review">Assignee email
+          <input type="email" name="s{{ i }}_assignee_email" value="{{ step.assignee_email or '' }}"
+            placeholder="reviewer@yourfirm.com" />
+          <span class="muted">Emailed when the run pauses at this human-review step; blank = no email.</span>
+        </label>
+
+        {# Engine & models: dead-field hiding ported from workflow_builder.html
+           (SPEC-lqa-step-honest-options, adversarial-review finding - the review
+           page rendered these fully visible+checked for a drafted lqa/human_review
+           step with no hiding at all). Provider/Model/Fallback stay LIVE for lqa
+           (The maintainer's 2026-07-22 decision -- feat/prompt-package-engine); dead only for
+           human_review (no provider call is ever made). Glossary/Prompt/QE/TM are
+           llm_agent-only for every step type. #}
+        <div class="grid2">
+          <label data-types="llm_agent lqa">Provider
+            <select name="s{{ i }}_provider" id="s{{ i }}_provider"><option value="">default</option>
+              {% for p in providers %}<option value="{{ p }}"{% if p == step.provider %} selected{% endif %}>{{ p }}</option>{% endfor %}
+              {% for value, lbl in engine_options(request) %}<option value="{{ value }}"{% if value == step.provider %} selected{% endif %}>{{ lbl }}</option>{% endfor %}
+            </select>
+          </label>
+          <label class="wfmodel" data-types="llm_agent lqa" data-provider="s{{ i }}_provider">Model
+            <select name="s{{ i }}_model" class="wfmodel-select" disabled style="display:none"></select>
+            <input aria-label="Model id" type="text" name="s{{ i }}_model" class="wfmodel-manual" value="{{ step.model or '' }}" placeholder="(default)" />
+            <span class="row-actions">
+              <button type="button" class="small ghost wfmodel-fetch" data-busy-label="{{ t(request, 'busy.fetching_models') }}"><span aria-hidden="true">↻</span> Fetch models</button>
+              <button type="button" class="small ghost wfmodel-toggle"><span class="wfmodel-toggle-label"><span aria-hidden="true">✎</span> Type id manually</span></button>
+            </span>
+            <span class="wfmodel-out muted small"></span>
+          </label>
+        </div>
+        <div class="grid2">
+          <label data-types="llm_agent lqa">Fallback provider
+            <select name="s{{ i }}_fallback_provider" id="s{{ i }}_fallback_provider"><option value="">none</option>
+              {% for p in providers %}<option value="{{ p }}"{% if p == step.fallback_provider %} selected{% endif %}>{{ p }}</option>{% endfor %}
+              {% for value, lbl in engine_options(request) %}<option value="{{ value }}"{% if value == step.fallback_provider %} selected{% endif %}>{{ lbl }}</option>{% endfor %}
+            </select>
+          </label>
+          <label class="wfmodel" data-types="llm_agent lqa" data-provider="s{{ i }}_fallback_provider">Fallback model
+            <select name="s{{ i }}_fallback_model" class="wfmodel-select" disabled style="display:none"></select>
+            <input aria-label="Fallback model id" type="text" name="s{{ i }}_fallback_model" class="wfmodel-manual" value="{{ step.fallback_model or '' }}" placeholder="(optional)" />
+            <span class="row-actions">
+              <button type="button" class="small ghost wfmodel-fetch" data-busy-label="{{ t(request, 'busy.fetching_models') }}"><span aria-hidden="true">↻</span> Fetch models</button>
+              <button type="button" class="small ghost wfmodel-toggle"><span class="wfmodel-toggle-label"><span aria-hidden="true">✎</span> Type id manually</span></button>
+            </span>
+            <span class="wfmodel-out muted small"></span>
+          </label>
+        </div>
+
+        <label data-types="llm_agent">Glossary
+          <select name="s{{ i }}_glossary_id"><option value="">project default</option>
+            {% for g in glossary_options %}<option value="{{ g.id }}"{% if g.id == step.glossary_id %} selected{% endif %}>{{ g.label }}</option>{% endfor %}
+          </select>
+          <span class="muted">Approved glossaries (a glossary is used only for runs whose languages it covers); blank = the project's own terms.</span>
+        </label>
+
+        <label data-types="llm_agent">Prompt <span class="muted">(optional - blank uses the default for this type)</span>
+          <textarea name="s{{ i }}_prompt_text" rows="5" spellcheck="false" placeholder="Leave blank for the default for this type">{{ step.prompt_text or '' }}</textarea>
+        </label>
+        <div data-types="llm_agent">{{ m.placeholder_legend() }}</div>
+
+        <label class="checkbox"><input type="checkbox" name="s{{ i }}_needs_review" value="1"{% if step.needs_review %} checked{% endif %} />
+          Flag for linguist review <span class="muted">(a human should check this step before it is used)</span></label>
+        <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="s{{ i }}_qe_gate" value="1"{% if step.qe_gate %} checked{% endif %} />
+          QE routing gate <span class="muted">(score each segment 0-100; low scores go to review. One judge call per segment: a paid judge counts against the spend cap, a local LLM or local Jev-compatible server is free)</span></label>
+        <div class="grid2">
+          <label data-types="llm_agent">QE threshold
+            <input type="number" name="s{{ i }}_qe_threshold" value="{{ step.qe_threshold if step.qe_threshold is not none else 70 }}" min="0" max="100" style="width:5em" /></label>
+          <label data-types="llm_agent">QE judge engine
+            <select name="s{{ i }}_qe_provider"
+                    title="A provider name or engine:&lt;id&gt; (an LLM or a Jev quality judge); blank reuses this step's provider."><option value="">(reuse step provider)</option>
+              {% for p in providers %}<option value="{{ p }}"{% if p == step.qe_provider %} selected{% endif %}>{{ p }}</option>{% endfor %}
+              {% set _qe_judges = engine_options(request, 'judge') %}
+              {% for value, lbl in _qe_judges %}<option value="{{ value }}"{% if value == step.qe_provider %} selected{% endif %}>{{ lbl }}</option>{% endfor %}
+              {# Keep a drafted legacy "jev" (or any pin not offered above) instead of silently
+                 dropping it to "(reuse step provider)" on Confirm. #}
+              {% if step.qe_provider and step.qe_provider not in providers and step.qe_provider not in (_qe_judges | map('first') | list) %}<option value="{{ step.qe_provider }}" selected>{{ step.qe_provider }}</option>{% endif %}
+            </select>
+          </label>
+          {# chip task_8face0e6 (review H3): the lqa step's numeric pass bar. Without
+             this input the drafter's "pass with a 94" reached the review screen, was
+             parsed by _STEP_TEXT_FIELDS as "" on Confirm, and silently fell back to the
+             default 90. Mirrors workflow_builder.html's LQA pass threshold field. #}
+          <label data-types="lqa" title="An lqa step FAILS unless score is at or above this; the no-major-error rule is unchanged. Blank = default 90.">LQA pass threshold
+            <input type="number" name="s{{ i }}_lqa_threshold" value="{{ step.lqa_threshold if step.lqa_threshold is not none else '' }}" min="0" max="100" placeholder="90" style="width:5em" /></label>
+        </div>
+        {# QE auto-fix (Train B): shown only while this step's QE judge is a Jev judge. #}
+        {{ m.autofix_block('s' ~ i ~ '_', step, providers, request) }}
+        <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="s{{ i }}_tm_examples" value="1"{% if step.tm_examples %} checked{% endif %} />
+          TM few-shot examples <span class="muted">(inject top-N similar TM matches as examples - the biggest quality lever)</span></label>
+        <label data-types="llm_agent">TM examples window
+          <input type="number" name="s{{ i }}_tm_examples_window" value="{{ step.tm_examples_window if step.tm_examples_window is not none else 3 }}" min="0" max="5" style="width:5em" /></label>
+        {# Conditional-workflow PRE-STEP GUARD (SPEC §5, Phase 2): editable, human-
+           confirmed. Blank source = always run. A guard proposed by the LLM but dropped
+           at draft time (unresolvable) comes back with source "always run" here. #}
+        <div class="lp-subfield">
+          <label>Run condition <span class="muted">(optional pre-step guard - run only if the prior LQA/QE outcome matches; needs an earlier LQA/QE-gate step)</span>
+            <select name="s{{ i }}_run_condition_ref">
+              <option value=""{% if not step.run_condition %} selected{% endif %}>always run (no guard)</option>
+              <option value="prev_lqa"{% if step.run_condition and step.run_condition.ref == 'prev_lqa' %} selected{% endif %}>prev_lqa - most recent LQA</option>
+              <option value="prev_qe"{% if step.run_condition and step.run_condition.ref == 'prev_qe' %} selected{% endif %}>prev_qe - most recent QE-gate</option>
+            </select></label>
+          <label>Condition
+            <select name="s{{ i }}_run_condition_op">
+              <option value="failed"{% if step.run_condition and step.run_condition.op == 'failed' %} selected{% endif %}>failed (did not pass)</option>
+              <option value="passed"{% if step.run_condition and step.run_condition.op == 'passed' %} selected{% endif %}>passed</option>
+              <option value="score_lt"{% if step.run_condition and step.run_condition.op == 'score_lt' %} selected{% endif %}>score below value</option>
+              <option value="score_gte"{% if step.run_condition and step.run_condition.op == 'score_gte' %} selected{% endif %}>score at or above value</option>
+            </select></label>
+          <label>Value
+            <input type="number" name="s{{ i }}_run_condition_value" min="0" max="100" style="width:5em" value="{{ step.run_condition.value if step.run_condition and step.run_condition.value is not none else '' }}" placeholder="90" /></label>
+        </div>
+        {# Conditional-workflow BRANCHING + loop-back (SPEC §5, Phase 3/4): editable, human-
+           confirmed. `key` names this step so a branch can target it; `branch` routes AFTER
+           a gate-producing step (an LQA step, or an llm_agent step with the QE gate ON) by
+           its pass/fail outcome. A target that names an EARLIER step is a bounded loop-back.
+           An LLM-proposed branch that was dropped at draft time (unresolvable / on a non-gate
+           step) comes back with the slot at "(no branch)" here. Everything is re-validated at
+           confirm (fail-closed). #}
+        <div class="lp-subfield">
+          <label>Step key <span class="muted">(a stable slug so a branch can target this step; blank = unnamed)</span>
+            <input type="text" name="s{{ i }}_key" value="{{ step.key or '' }}"
+                   pattern="[A-Za-z0-9][A-Za-z0-9_-]*" style="width:min(12em,100%)" placeholder="e.g. fix, lqa" /></label>
+          <div class="grid2">
+            <label data-types="llm_agent lqa">On pass &rarr;
+              <select name="s{{ i }}_branch_on_pass">
+                {% set op = (step.branch.on_pass if step.branch and step.branch.on_pass is defined else none) %}
+                {% set op_key = op.step if op is mapping else '' %}
+                <option value=""{% if not op %} selected{% endif %}>(no branch / fall through)</option>
+                <option value="next"{% if op == 'next' %} selected{% endif %}>next step</option>
+                <option value="end"{% if op == 'end' %} selected{% endif %}>end the run</option>
+                {% for ks in keyed_steps %}<option value="{{ ks.key }}"{% if op_key == ks.key %} selected{% endif %}>step: {{ ks.key }}{% if ks.name %} ({{ ks.name }}){% endif %}</option>{% endfor %}
+              </select></label>
+            <label data-types="llm_agent lqa">On fail &rarr;
+              <select name="s{{ i }}_branch_on_fail">
+                {% set of = (step.branch.on_fail if step.branch and step.branch.on_fail is defined else none) %}
+                {% set of_key = of.step if of is mapping else '' %}
+                <option value=""{% if not of %} selected{% endif %}>(no branch / fall through)</option>
+                <option value="next"{% if of == 'next' %} selected{% endif %}>next step</option>
+                <option value="end"{% if of == 'end' %} selected{% endif %}>end the run</option>
+                {% for ks in keyed_steps %}<option value="{{ ks.key }}"{% if of_key == ks.key %} selected{% endif %}>step: {{ ks.key }}{% if ks.name %} ({{ ks.name }}){% endif %}</option>{% endfor %}
+              </select></label>
+          </div>
+          <label>Max visits <span class="muted">(loop ceiling for this step; blank inherits the run default)</span>
+            <input type="number" name="s{{ i }}_max_visits" min="1" max="50" style="width:5em"
+                   value="{{ step.max_visits if step.max_visits is not none else '' }}" placeholder="5" /></label>
+        </div>
+      </fieldset>
+    {% endfor %}
+  </div>
+
+  <section class="card">
+    <label>Notes for reviewer <span class="muted">(not saved on the workflow; for your reference)</span>
+      <textarea name="notes_for_reviewer" rows="2" spellcheck="false">{{ fields.notes_for_reviewer or '' }}</textarea>
+    </label>
+    <button type="submit" data-busy-label="{{ t(request, 'busy.creating_workflow') }}">Create workflow</button>
+    {# "Fix this for me": submits THIS form (the current, possibly hand-edited state) to
+       the repair route via formaction, so the assistant corrects the draft against the
+       current errors. Shown only when there are errors to fix. formnovalidate so a
+       browser 'required' on an empty field never blocks the repair that would fill it. #}
+    {% if errors %}
+    <button type="submit" formaction="/workflows/author/repair" formnovalidate
+      class="ghost wf-repair-btn" data-busy-label="{{ t(request, 'busy.repairing_workflow') }}">Fix this for me</button>
+    {% endif %}
+    <a href="/workflows" class="btnlink">Cancel</a>
+  </section>
+</form>
+
+<script src="/static/wfmodel.js?v={{ static_v('wfmodel.js') }}"></script>
+<script src="/static/wftabs.js?v={{ static_v('wftabs.js') }}"></script>
+<script nonce="{{ csp_nonce() }}">
+// --- per-step model dropdowns (identical pattern to the builder page) --------
+// See /static/wfmodel.js for the shared implementation. This page has no
+// collapsed <details> wrapper around its .wfmodel blocks. Initialization is
+// intentionally quiet; provider changes and Fetch-models clicks load on demand.
+initWfModels();
+// --- honest step-type options (SPEC-lqa-step-honest-options) -----------------
+// Ported from workflow_builder.html: show/hide every field the CURRENT step type
+// has no effect on. Each step lives in its own <fieldset> (the "Step N" block),
+// so .closest('fieldset') from that step's OWN Type select scopes the toggle to
+// exactly that step's fields -- no data-step matching needed. An element with no
+// data-types attribute (Name, Type, Run condition, Step key, Max visits, Flag for
+// linguist review, ...) is always shown. PROGRESSIVE ENHANCEMENT ONLY: this never
+// removes a field's name/value, so a no-JS submission still carries every field --
+// apply_workflow_draft
+// is the real authority (it now STRIPS a dead field from an AI-proposed draft
+// with a visible per-step warning, rather than hard-rejecting the whole thing).
+(function () {
+  function sync(select) {
+    var fieldset = select.closest('fieldset');
+    if (!fieldset) return;
+    var type = select.value;
+    fieldset.querySelectorAll('[data-types]').forEach(function (el) {
+      var types = el.getAttribute('data-types').split(/\s+/);
+      el.style.display = types.indexOf(type) === -1 ? 'none' : '';
+    });
+  }
+  document.querySelectorAll('.step-type-select').forEach(function (sel) {
+    sel.addEventListener('change', function () { sync(sel); });
+    sync(sel);
+  });
+})();
+</script>
+{# Draft-repair markers (THIS page only): a changed step gets a calm left accent, and its
+   changed fields flash once via the EXISTING flashfill keyframe (no new colours/keyframes).
+   Selectors are page-unique (.repaired-step / .repaired-flash / .wf-repaired-note) so they
+   cannot leak into other pages. Token-only. #}
+<style>
+.repaired-step { border-left: 3px solid var(--primary); padding-left: var(--space-3); }
+.repaired-flash { animation: flashfill 1.2s ease-out; border-radius: var(--radius-sm); }
+.wf-repaired-note { border-color: var(--primary); }
+</style>
+{# The flash + scroll enhancement runs ONLY on a repair re-render. With JS off, the badges
+   + the "Repaired." note above still make the changed steps legible (zero-JS honest). #}
+{% if repaired %}
+<script nonce="{{ csp_nonce() }}">
+(function () {
+  var steps = document.querySelectorAll('.repaired-step');
+  if (!steps.length) return;
+  steps.forEach(function (fs) {
+    var idx = fs.getAttribute('data-step-idx');
+    var names = (fs.getAttribute('data-repaired-fields') || '').split(/\s+/)
+      .filter(Boolean);
+    names.forEach(function (f) {
+      // Exact field match plus composite fields (branch -> s{i}_branch_on_pass/on_fail;
+      // run_condition -> s{i}_run_condition_ref/op/value) via the "s{i}_{field}_" prefix.
+      var sel = '[name="s' + idx + '_' + f + '"], [name^="s' + idx + '_' + f + '_"]';
+      fs.querySelectorAll(sel).forEach(function (el) {
+        var label = el.closest('label') || el.closest('.lp-subfield') || el;
+        label.classList.add('repaired-flash');
+      });
+    });
+  });
+  // Scroll the FIRST repaired step into view so the change is immediately visible.
+  if (window.WfTabs && steps[0].id) window.WfTabs.selectPanel(steps[0].id);
+  try { steps[0].scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+  catch (e) { steps[0].scrollIntoView(); }
+})();
+</script>
+{% endif %}
+{{ m.autofix_block_script() }}
+
+</div>
+{% endblock %}

@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?><TRADOStag Version="2.0"><FrontMatter>
+<ToolSettings CreationDate="20071015T101500Z" CreationTool="TRADOS TagEditor" CreationToolVersion="7.0.0.615"></ToolSettings>
+<UserSettings DataType="HTML" O-Encoding="UTF-8" SettingsName="HTML" SettingsPath="" SourceLanguage="EN-US" TargetLanguage="DE-DE" TargetDefaultFont="" SourceDocumentPath="C:\Projects\guide.htm" SettingsRelativePath="" PlugInInfo=""></UserSettings>
+</FrontMatter><Body><Raw>
+<ut Type="start" Style="external" RightEdge="angle" DisplayText="p">&lt;p&gt;</ut><Tu MatchPercent="0"><Tuv Lang="EN-US">Click <ut Type="start" RightEdge="angle" DisplayText="b">&lt;b&gt;</ut>Save<ut Type="end" LeftEdge="angle" DisplayText="b">&lt;/b&gt;</ut> to keep R&amp;D notes.</Tuv><Tuv Lang="DE-DE"></Tuv></Tu> <Tu MatchPercent="0"><Tuv Lang="EN-US">Line one<ut DisplayText="br">&lt;br&gt;</ut><df Bold="on">line two</df> here. </Tuv></Tu><ut Type="end" Style="external" LeftEdge="angle" DisplayText="p">&lt;/p&gt;</ut>
+<ut Type="start" Style="external" RightEdge="angle" DisplayText="p">&lt;p&gt;</ut><Tu MatchPercent="100" Origin="manual"><Tuv Lang="EN-US">Already done.</Tuv><Tuv Lang="DE-DE">Schon erledigt.</Tuv></Tu><ut Type="end" Style="external" LeftEdge="angle" DisplayText="p">&lt;/p&gt;</ut>
+<ut Type="start" Style="external" RightEdge="angle" DisplayText="h1">&lt;h1&gt;</ut>Unsegmented heading<ut Type="end" Style="external" LeftEdge="angle" DisplayText="h1">&lt;/h1&gt;</ut>
+<ut Type="start" Style="external" RightEdge="angle" DisplayText="p">&lt;p&gt;</ut><Tu MatchPercent='0'><Tuv Lang="EN-US">Empty target here.</Tuv><Tuv Lang="DE-DE"/></Tu> <Tu MatchPercent="0"><Tuv Lang="EN-US"><ut DisplayText="img">&lt;img src="a.png"&gt;</ut> 42</Tuv></Tu><ut Type="end" Style="external" LeftEdge="angle" DisplayText="p">&lt;/p&gt;</ut>
+</Raw></Body></TRADOStag>

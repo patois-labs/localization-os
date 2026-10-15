@@ -1,0 +1,12 @@
+{
+  "_comment": "Maintained advisory inventory for native libraries bundled inside Python wheels. Deliberately small: only advisories confirmed from public records, each with a source link. Each entry flags any bundled version numerically below affected_below (one threshold per entry, so a fix backported to an older branch is not modelled). Before adding a component, check that its file-name version is a release: some libraries name only an ABI (libpq-*.so.5.16, libssl-*.so.1.1), which would misattribute. Entries for libpq and libxmlsec1 were removed at review because their ids and fixed versions could not be confirmed.",
+  "libxml2": [
+    {"id": "CVE-2021-3518", "severity": "HIGH", "affected_below": "2.9.11", "summary": "use-after-free in xmlXIncludeDoProcess", "source": "https://nvd.nist.gov/vuln/detail/CVE-2021-3518"},
+    {"id": "CVE-2022-23308", "severity": "HIGH", "affected_below": "2.9.13", "summary": "use-after-free of ID and IDREF attributes", "source": "https://nvd.nist.gov/vuln/detail/CVE-2022-23308"},
+    {"id": "CVE-2022-40303", "severity": "HIGH", "affected_below": "2.10.3", "summary": "integer overflows with XML_PARSE_HUGE", "source": "https://nvd.nist.gov/vuln/detail/CVE-2022-40303"},
+    {"id": "CVE-2022-40304", "severity": "HIGH", "affected_below": "2.10.3", "summary": "dict corruption caused by entity reference cycles", "source": "https://nvd.nist.gov/vuln/detail/CVE-2022-40304"}
+  ],
+  "libxslt": [
+    {"id": "CVE-2021-30560", "severity": "HIGH", "affected_below": "1.1.35", "summary": "use-after-free (reported via Blink XSLT), fixed in libxslt 1.1.35", "source": "https://nvd.nist.gov/vuln/detail/CVE-2021-30560"}
+  ]
+}

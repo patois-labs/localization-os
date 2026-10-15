@@ -1,0 +1,547 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_form_errors.html" as fe %}
+{% block title %}{{ g.name }} - Glossary{% endblock %}
+{% block content %}
+
+{% set header_meta %}
+  <p class="muted small"><a href="/glossaries"><span aria-hidden="true">←</span> All glossaries</a></p>
+  <p>
+    {% if g.status == 'approved' %}Approved by {{ g.approved_by or 'unknown' }}. Editing terms or pairs reverts it to draft.
+    {% elif not pairs %}Draft with no language pair yet: add a pair, then approve. It is skipped in workflows until then.
+    {% else %}Draft: not selectable in a workflow step until it is approved.{% endif %}
+  </p>
+{% endset %}
+{% set header_status %}
+    {% if g.status == 'approved' %}{{ m.status_badge('approved', 'Approved') }}
+    {% else %}{{ m.status_badge('draft', 'Draft') }}{% endif %}
+    {% if customer %}<span class="badge muted-badge">{{ customer.name }}</span>
+    {% else %}<span class="badge warn">No customer</span>{% endif %}
+  {% endset %}
+{% set header_actions %}
+  <button type="button" class="ghost" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+{% endset %}
+{{ m.page_header(g.name, meta=header_meta, status=header_status, secondary=header_actions) }}
+
+
+{% if g.customer_id is none %}
+{% call m.card() %}
+  <h2>Assign a customer</h2>
+  <p class="help">Every glossary now belongs to a customer. This legacy glossary has none.
+  Assign it once - assignment is permanent (a glossary can't be moved between customers,
+  since its terms and TM provenance stay with the owner).</p>
+  {% if assign_customers %}
+  <form method="post" action="/glossaries/{{ g.id }}/assign-customer" class="form inline-form">
+    {% include "_csrf.html" %}
+    <label>Customer <select name="customer_id" required><option value="">- customer -</option>
+      {% for c in assign_customers %}<option value="{{ c.id }}">{{ customer_label(c) }}</option>{% endfor %}
+    </select></label>
+    <button type="submit">Assign</button>
+  </form>
+  {% else %}
+  <p class="muted">Assigning a customer is limited to managers and admins.</p>
+  {% endif %}
+{% endcall %}
+{% endif %}
+
+{# a11y T6: a ?err= error renders once, as a sentence, in the summary at the top of
+   main (base.html + _form_errors.html), never as a raw code here. #}
+{% if request.query_params.get('gl_entries') %}
+  <p class="ok">Imported {{ request.query_params.get('gl_entries')|int }} entries, {{ request.query_params.get('gl_senses')|int }} senses{% if request.query_params.get('gl_changed') not in (none, '0') %}, {{ request.query_params.get('gl_changed')|int }} updated{% endif %}.{% if request.query_params.get('gl_skipped') not in (none, '0') %} Skipped {{ request.query_params.get('gl_skipped')|int }} TBX entr(ies) with no matching language pair.{% endif %}{% if request.query_params.get('gl_reverted') %} {{ request.query_params.get('gl_changed')|int }} term(s) updated - glossary returned to draft for re-approval.{% endif %}{% if request.query_params.get('gl_deleted', '0')|int > 0 %} Did not restore {{ request.query_params.get('gl_deleted')|int }} entr{{ 'y' if request.query_params.get('gl_deleted')|int == 1 else 'ies' }} someone deleted while the import ran (import the file again to store them).{% endif %}{% if request.query_params.get('gl_idconf') %} {{ request.query_params.get('gl_idconf')|int }} foreign concept id(s) collided and were imported as new.{% endif %}{% if request.query_params.get('gl_projected') %} {{ request.query_params.get('gl_projected')|int }} entr(ies) this import's terms enforce for the glossary's language pair(s).{% endif %}{% if request.query_params.get('gl_bindings_skipped') %} {{ request.query_params.get('gl_bindings_skipped')|int }} configured pair(s) left unbound - a bindings-bearing concept is not auto-widened.{% endif %}</p>
+{% endif %}
+{% include "_termbase_report.html" %}
+{% if request.query_params.get('gl_built') %}
+  <p class="ok">AI builder added {{ request.query_params.get('gl_built')|int }} terms.</p>
+{% endif %}
+{% if request.query_params.get('gl_proposed') is not none %}
+  <p class="ok">Extraction proposed {{ request.query_params.get('gl_proposed')|int }} candidate(s) for review below - nothing was added automatically.</p>
+  {% if request.query_params.get('gl_degraded') %}
+  <p class="notice">The spend cap was reached mid-run, so the
+    {{ request.query_params.get('gl_degraded').replace(',', ' and ') }} step was skipped -
+    these candidates were extracted but not precision-pruned/translated. Expect more noise;
+    review them a little more carefully.</p>
+  {% endif %}
+{% endif %}
+
+{% macro meta_fields(e) %}
+  {# The TBX-ish term-metadata inputs, shared by the add form and each row editor.
+     e is a GlossaryEntry (edit) or None (add - blank values). Meta is context for
+     humans / future context-driven workflows; it NEVER goes into a translation prompt. #}
+  {% set md = (e.meta if e else None) or {} %}
+  <div class="grid2">
+    <label>Part of speech <input type="text" name="part_of_speech" value="{{ md.get('part_of_speech', '') }}" placeholder="noun, verb…" /></label>
+    <label>Subject field / domain <input type="text" name="subject_field" value="{{ md.get('subject_field', '') }}" placeholder="software UI, finance…" /></label>
+  </div>
+  <label>Definition <textarea name="definition" rows="2">{{ md.get('definition', '') }}</textarea></label>
+  <label>Usage example <textarea name="usage_example" rows="2">{{ md.get('usage_example', '') }}</textarea></label>
+  <label>Notes <textarea name="notes" rows="2">{{ md.get('notes', '') }}</textarea></label>
+{% endmacro %}
+
+{# Draft to usable: ONE visible next step (issue #565). A glossary is usable in a workflow step once
+   it has a language pair, at least one term, and is approved. The panel names the first step not
+   done and puts its action right here; approved glossaries show nothing. #}
+{# A ?err= or an import/extract result opens the collapsed tool sections, so the error summary's
+   "Go to the field" link and the result message land on something visible. #}
+{% set open_tools = request.query_params.get('err') or request.query_params.get('gl_proposed') is not none or request.query_params.get('gl_entries') or request.query_params.get('gl_built') %}
+{% set has_pairs = pairs|length > 0 %}
+{% set has_terms = glossary_total > 0 %}
+{% set is_approved = g.status == 'approved' %}
+{% if not is_approved %}
+{% set next_step = 'pairs' if not has_pairs else ('terms' if not has_terms else 'approve') %}
+<section class="card glossary-next-step" id="glossary-next-step" aria-labelledby="glossary-next-title">
+  <p class="help">Draft glossary: 3 steps to make it usable</p>
+  {{ m.step_indicator('Steps to make this glossary usable', [
+    {'label': 'Add a language pair', 'current': next_step == 'pairs', 'status': 'approved' if has_pairs else 'draft', 'status_label': 'Done' if has_pairs else 'To do'},
+    {'label': 'Add terms', 'current': next_step == 'terms', 'status': 'approved' if has_terms else 'draft', 'status_label': 'Done' if has_terms else 'To do'},
+    {'label': 'Approve', 'current': next_step == 'approve', 'status': 'draft', 'status_label': 'To do'},
+  ]) }}
+  {% if next_step == 'pairs' %}
+  <h2 id="glossary-next-title">Next: choose the language pair this glossary covers</h2>
+  <p class="help">A pair is a source and a target language. A glossary with no pair is skipped in every run.</p>
+  {% if can_edit %}<p><a class="btn-primary" href="#glossary-pair-source">Add a language pair</a></p>
+  {% else %}<p class="muted">Adding pairs is limited to linguists and admins.</p>{% endif %}
+  {% elif next_step == 'terms' %}
+  <h2 id="glossary-next-title">Next: add your first term</h2>
+  <p class="help">Add terms one at a time, import a CSV or TBX file, or let the AI builder propose candidates.</p>
+  {% if can_edit %}<p><a class="btn-primary" href="#glossary-add-term">Add a term</a></p>
+  {% else %}<p class="muted">Adding terms is limited to linguists and admins.</p>{% endif %}
+  {% else %}
+  <h2 id="glossary-next-title">Next: approve the glossary</h2>
+  <p class="help">Approval makes it selectable in a workflow step. Editing terms or pairs later sends it back to draft.</p>
+  {% if can_approve %}
+  <form method="post" action="/glossaries/{{ g.id }}/approve" id="glossary-next-approve">{% include "_csrf.html" %}
+    <button type="submit">Approve glossary</button></form>
+  {% else %}<p class="muted">Approval is limited to linguists and admins.</p>{% endif %}
+  {% endif %}
+</section>
+{% endif %}
+
+<nav class="asset-sections" aria-label="Glossary"><a href="#glossary-terms">Terms</a><a href="#glossary-pairs">Language pairs</a><a href="#glossary-status">Status</a><a href="#concepts">Concepts</a><a href="#candidates">Extract terms from a document</a>{% if can_edit %}<a href="#glossary-import">Import and export</a><a href="#glossary-ai-builder">AI builder</a><a href="#glossary-rename">Settings</a><a href="#glossary-danger">Danger zone</a>{% endif %}</nav>
+<div id="page-layout" class="page-layout" data-layout-page="glossary">
+{% call m.card(layout_key='terms', flat=true) %}
+  <h2 id="glossary-terms">Terms ({{ entries|length }} of {{ glossary_total }})</h2>
+  <p class="help">Open a term for its details. Only source, target and DNT reach the translation model.</p>
+  {% if entries %}
+  {% call m.data_table('Terms', [{'label': 'Source'}, {'label': 'Target'}, {'label': 'Pair'}, {'label': 'DNT'}, {'label': 'Senses'}, {'label': 'Details'}] + ([{'label': '', 'actions': true}] if can_edit else [])) %}
+      {% for it in entries %}
+      {% set e = it.entry %}
+      {% set md = e.meta or {} %}
+      <tr>
+        <td{{ e.source_locale|langattrs }}><span class="cell-primary">{{ e.source_term }}</span></td>
+        <td{% if e.target_term %}{{ e.target_locale|langattrs }}{% endif %}>{{ e.target_term or '-' }}</td>
+        <td class="muted small data-mono">{{ e.source_locale }}→{{ e.target_locale }}</td>
+        <td>{{ 'yes' if e.dnt else '' }}</td>
+        <td class="muted small">
+          {% for s in it.senses %}{{ s.sense_label }}{% if not loop.last %}, {% endif %}{% else %}-{% endfor %}
+        </td>
+        <td class="muted small">
+          <details>
+            <summary>{{ 'edit' if can_edit else 'view' }}{% if md %} •{% endif %}</summary>
+            {% if can_edit %}
+            <form method="post" action="/glossaries/{{ g.id }}/terms/{{ e.id }}/edit" class="form">
+              {% include "_csrf.html" %}
+              <label>Target term <input type="text" name="target_term" value="{{ e.target_term }}"{{ e.target_locale|langattrs }} /></label>
+              <label class="checkbox"><input type="checkbox" name="dnt" value="1"{{ ' checked' if e.dnt }} /> Do Not Translate</label>
+              <input type="hidden" name="cs_present" value="1" />
+              <label class="checkbox"><input type="checkbox" name="case_sensitive" value="1"{{ ' checked' if e.case_sensitive }} /> Case sensitive</label>
+              {{ meta_fields(e) }}
+              <button type="submit">Save details</button>
+            </form>
+            {% else %}
+            <dl>
+              {% if md.get('part_of_speech') %}<dt>Part of speech</dt><dd>{{ md.get('part_of_speech') }}</dd>{% endif %}
+              {% if md.get('subject_field') %}<dt>Subject field</dt><dd>{{ md.get('subject_field') }}</dd>{% endif %}
+              {% if md.get('definition') %}<dt>Definition</dt><dd>{{ md.get('definition') }}</dd>{% endif %}
+              {% if md.get('usage_example') %}<dt>Usage</dt><dd>{{ md.get('usage_example') }}</dd>{% endif %}
+              {% if md.get('notes') %}<dt>Notes</dt><dd>{{ md.get('notes') }}</dd>{% endif %}
+              {% if not md %}<dd class="muted">No details.</dd>{% endif %}
+            </dl>
+            {% endif %}
+          </details>
+        </td>
+        {% if can_edit %}
+        <td class="row-actions">
+          {% call m.row_menu('gtm-' ~ e.id, 'More actions for term ' ~ e.source_term) %}
+          <form method="post" action="/glossaries/{{ g.id }}/terms/{{ e.id }}/delete">{% include "_csrf.html" %}<button type="submit" role="menuitem" class="rm-danger" aria-label="Remove {{ e.source_term }}">Remove</button></form>
+          {% endcall %}
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    {% endcall %}
+  {% else %}
+  <p class="muted">No terms yet. Add one, import a CSV, or use the AI builder below.</p>
+  {% endif %}
+  {% if glossary_next_cursor is not none %}
+  <a href="{{ request.url.include_query_params(glossary_cursor=glossary_next_cursor) }}">Next glossary terms</a>
+  {% endif %}
+  {% if request.query_params.get('glossary_cursor') %}
+  <a href="{{ request.url.include_query_params(glossary_cursor='') }}">First page</a>
+  {% endif %}
+
+  {% if can_edit %}
+  <h3>Add a term</h3>
+  {% call m.form_section('glossary-new-term', 'Add a term') %}
+  <form method="post" action="/glossaries/{{ g.id }}/terms/add" class="form" data-preserve-draft="glossary-add-term">
+    {% include "_csrf.html" %}
+    <div class="grid2">
+      <label>Source term <input type="text" name="source_term" id="glossary-add-term" required{{ fe.invalid_attrs(request, 'glossary-add-term') }} /></label>
+      <label>Target term <input type="text" name="target_term" /></label>
+    </div>
+    <label class="checkbox"><input type="checkbox" name="dnt" value="1" /> Do Not Translate</label>
+    <details class="adv"><summary>Languages and details (optional)</summary>
+      <div class="grid2">
+        <label>Source locale <select name="source_locale"><option value="">(any)</option>{% for l in locales %}<option value="{{ l }}">{{ label_for(l) }}</option>{% endfor %}</select></label>
+        <label>Target locale <select name="target_locale"><option value="">(any)</option>{% for l in locales %}<option value="{{ l }}">{{ label_for(l) }}</option>{% endfor %}</select></label>
+      </div>
+      {{ meta_fields(none) }}
+    </details>
+    <button type="submit">Add term</button>
+  </form>
+  {% endcall %}
+  {% endif %}
+{% endcall %}
+
+<div class="grid2">
+{% call m.card(layout_key='pairs') %}
+  <h2 id="glossary-pairs">Language pairs</h2>
+  <p class="help">The source to target pairs this glossary applies to. A glossary whose pairs miss a
+  run's languages is skipped for that run. Adding or removing a pair sends an approved glossary
+  back to draft.</p>
+  {% if pairs %}
+  <ul class="chips" id="pair-rows">
+    {% for p in pairs %}
+    <li class="chip glossary-pair-chip"><span class="data-mono">{{ p.source_locale }} → {{ p.target_locale }}</span>
+      {% if can_edit %}
+      {#- Remove = the same /pairs route with every OTHER pair resubmitted (the API replaces the list). -#}
+      <form method="post" action="/glossaries/{{ g.id }}/pairs" class="glossary-pair-remove">
+        {% include "_csrf.html" %}
+        <input type="hidden" name="pairs_seen" value="{{ pairs_seen }}" />
+        {% for q in pairs if q != p %}<input type="hidden" name="source_locale" value="{{ q.source_locale }}" /><input type="hidden" name="target_locale" value="{{ q.target_locale }}" />{% endfor %}
+        <button type="submit" class="btnlink small" aria-label="Remove pair {{ p.source_locale }} to {{ p.target_locale }}"><span aria-hidden="true">Remove</span></button>
+      </form>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted" id="pair-rows">{% if can_edit %}No pairs yet. Add one below.{% else %}No language pairs yet.{% endif %}</p>
+  {% endif %}
+  {% if can_edit %}
+  {#- Add = the same /pairs route: the current pairs ride along as hidden fields, then the new pair. -#}
+  <form method="post" action="/glossaries/{{ g.id }}/pairs" class="form" id="glossary-add-pair">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="pairs_seen" value="{{ pairs_seen }}" />
+    {% for q in pairs %}<input type="hidden" name="source_locale" value="{{ q.source_locale }}" /><input type="hidden" name="target_locale" value="{{ q.target_locale }}" />{% endfor %}
+    <fieldset class="grid2 pair-row"><legend>Add a pair</legend>
+      <label>Source <select name="source_locale" id="glossary-pair-source" required><option value="">(source)</option>{% for l in locales %}<option value="{{ l }}">{{ label_for(l) }}</option>{% endfor %}</select></label>
+      <label>Target <select name="target_locale" id="glossary-pair-target" required><option value="">(target)</option>{% for l in locales %}<option value="{{ l }}">{{ label_for(l) }}</option>{% endfor %}</select></label>
+    </fieldset>
+    <button type="submit">Add pair</button>
+  </form>
+  {% endif %}
+{% endcall %}
+{% call m.card(layout_key='status') %}
+  <details class="component-disclosure" open>
+  <summary>
+  <h2 id="glossary-status">Status</h2>
+  </summary>
+  <div>
+  <p class="help" id="glossary-state-line">{% if g.status == 'approved' %}Current state: <strong>Approved</strong>. Usable in workflow steps.{% elif not pairs %}Current state: <strong>Draft</strong>. Set a language pair first, then approve.{% else %}Current state: <strong>Draft</strong>. Not usable in workflow steps until approved.{% endif %}</p>
+  {% if can_approve %}
+    {% if g.status == 'approved' %}
+    <form method="post" action="/glossaries/{{ g.id }}/unapprove">{% include "_csrf.html" %}
+      <button type="submit" class="">Revert to draft</button></form>
+    {% else %}
+    <form method="post" action="/glossaries/{{ g.id }}/approve">{% include "_csrf.html" %}
+      <button type="submit">Approve glossary</button></form>
+    {% endif %}
+  {% else %}
+    <p class="help">Approval is limited to linguists and admins.</p>
+  {% endif %}
+  </div>
+  </details>
+{% endcall %}
+</div>
+
+{% call m.card(layout_key='concepts') %}
+  {# LT-2: the concept EDITOR write seams are gated on terminology_concept_editor (default OFF
+     this release); when off this card is READ-ONLY -- no Save/Delete/x/Add-a-concept controls. #}
+  {% set edit_concepts = can_edit and concept_editor_enabled %}
+  <details class="component-disclosure"{% if open_tools %} open{% endif %}>
+  <summary>
+  <h2 id="concepts">Concepts ({{ concepts|length }})</h2>
+  </summary>
+  <div>
+  <p class="help">The concept/term store: each concept groups its terms per language, each
+  term carrying status (preferred/admitted/deprecated/forbidden), audience (human/mt/llm),
+  and type. The concept store is authoritative; the term grid above is its derived view
+  (LAW-TERM-18).
+  <a href="/glossaries/{{ g.id }}/export?format=json">Export .glossary.json</a> carries the
+  concept store losslessly for documents with a bindings block.</p>
+  {% if not concept_editor_enabled %}
+  <p class="notice">Concept editing is off on this install - this view is read-only. Enable
+  <code>terminology_concept_editor</code> in Settings &gt; Features to edit concepts and terms.</p>
+  {% endif %}
+  {% if concepts %}
+  {% call m.data_table('Concepts', [{'label': 'Definition / domain'}, {'label': 'Terms'}] + ([{'label': '<span class="sr-only">Actions</span>'|safe}] if edit_concepts else [])) %}
+      {% for c in concepts %}
+      <tr>
+        <td>{{ c.definition or '' }}{% if c.domain %} <span class="muted">[{{ c.domain }}]</span>{% endif %}</td>
+        <td>
+          {% for t in c.terms %}
+            <div>{{ t.locale }}: <b{{ t.locale|langattrs }}>{{ t.term }}</b>
+              <span class="muted">({{ t.status }}; {{ t.audience|join('|') }})</span>
+              {% if edit_concepts %}
+              <form method="post" action="/glossaries/{{ g.id }}/concepts/{{ c.id }}/terms/{{ t.id }}/delete" style="display:inline">{% include "_csrf.html" %}
+                <button type="submit" class="link-btn" data-busy-keep-label aria-label="Delete term {{ t.term }} ({{ t.locale }})"><span aria-hidden="true">×</span></button>
+              </form>
+              {# L-3: a per-term EDIT form so R7-I's DNT tri-state and the A.4-4 locale-edit refusal
+                 are reachable from the UI (previously concept terms had a delete button only). The
+                 hidden dnt_present/cs_present companions make an UNCHECKED box mean "set False"
+                 rather than "unchanged" (M-3), so DNT can be turned OFF from the web. #}
+              <details class="adv" style="display:inline">
+                <summary class="small muted">edit</summary>
+                <form method="post" action="/glossaries/{{ g.id }}/concepts/{{ c.id }}/terms/{{ t.id }}/edit" class="form">{% include "_csrf.html" %}
+                  <label class="small">Term <input name="term" type="text" value="{{ t.term }}"{{ t.locale|langattrs }}></label>
+                  <label class="small">Locale <input name="locale" type="text" value="{{ t.locale or '' }}"
+                    placeholder="e.g. es-ES (refused while it backs a binding)"></label>
+                  <label class="small">Status
+                    <select name="status">
+                      {% for st in ('preferred', 'admitted', 'deprecated', 'forbidden') %}
+                      <option value="{{ st }}" {{ 'selected' if st == t.status }}>{{ st }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                  <input type="hidden" name="dnt_present" value="1" />
+                  <label class="checkbox small"><input type="checkbox" name="dnt" value="1"{{ ' checked' if t.dnt }} /> Do Not Translate</label>
+                  <input type="hidden" name="cs_present" value="1" />
+                  <label class="checkbox small"><input type="checkbox" name="case_sensitive" value="1"{{ ' checked' if t.case_sensitive }} /> Case sensitive</label>
+                  <button type="submit" class="small">Save term</button>
+                </form>
+              </details>
+              {% endif %}
+            </div>
+          {% endfor %}
+        </td>
+        {% if edit_concepts %}
+        <td>
+          <form method="post" action="/glossaries/{{ g.id }}/concepts/{{ c.id }}/edit" class="form">{% include "_csrf.html" %}
+            <label class="small">Definition <input name="definition" type="text" value="{{ c.definition or '' }}"></label>
+            <label class="small">Domain <input name="domain" type="text" value="{{ c.domain or '' }}"></label>
+            <label class="small">Notes <input name="notes" type="text" value="{{ c.notes or '' }}"></label>
+            <label class="small">Homonym group <input name="homonym_group" type="text" value="{{ c.homonym_group or '' }}"
+              placeholder="share with a rival concept to keep both"></label>
+            <button type="submit">Save</button>
+          </form>
+          <form method="post" action="/glossaries/{{ g.id }}/concepts/{{ c.id }}/delete"
+                data-action-confirm="Delete this concept and its terms?">{% include "_csrf.html" %}
+            <button type="submit">Delete</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    {% endcall %}
+  {% else %}
+  <p class="muted">No concepts yet. Terms added above are folded into concepts automatically.</p>
+  {% endif %}
+  {% if edit_concepts %}
+  <h3>Add a concept</h3>
+  <form method="post" action="/glossaries/{{ g.id }}/concepts" class="form">{% include "_csrf.html" %}
+    <label>Definition <input name="definition" type="text"></label>
+    <label>Domain <input name="domain" type="text"></label>
+    <button type="submit">Add concept</button>
+  </form>
+  {% endif %}
+  </div>
+  </details>
+{% endcall %}
+
+{% call m.card(layout_key='extract') %}
+  {#- The section anchor sits on the heading (not an empty <a id>): "Go to the section"
+      in the error summary moves focus here, and a heading is announced. -#}
+  <details class="component-disclosure"{% if open_tools or candidates %} open{% endif %}>
+  <summary>
+  <h2 id="candidates">Extract terms from a document</h2>
+  </summary>
+  <div>
+  <p class="help">Pull candidate terminology from one of this customer's documents, review
+  each candidate, then accept it into this glossary or drop it. Two-stage extraction
+  (LLM extract → precision prune → your review) - nothing is added automatically.
+  Dropped candidates are remembered, so re-running never re-proposes them.</p>
+  {% if can_edit %}
+    {% if extract_documents %}
+    <form method="post" action="/glossaries/{{ g.id }}/extract" class="form">
+      {% include "_csrf.html" %}
+      <label>Document
+        <select name="document_id" id="glossary-extract-document" required{{ fe.invalid_attrs(request, 'glossary-extract-document') }}>
+          <option value="">- pick a document -</option>
+          {% for d in extract_documents %}
+          <option value="{{ d.id }}">{{ d.filename }} ({{ d.project_name }})</option>
+          {% endfor %}
+        </select>
+      </label>
+      <div class="grid2">
+        <label>Source locale <select name="source_locale"><option value="">(document's default)</option>{% for l in locales %}<option value="{{ l }}">{{ label_for(l) }}</option>{% endfor %}</select></label>
+        <label>Target locale <select name="target_locale"><option value="">(any)</option>{% for l in locales %}<option value="{{ l }}">{{ label_for(l) }}</option>{% endfor %}</select></label>
+      </div>
+      <p class="help">Runs 3 LLM passes (extract, prune, propose translations). Free and
+      deterministic offline (no key); real token spend on a live engine.</p>
+      <button type="submit" data-busy-label="{{ t(request, 'busy.extracting_terms') }}">Extract candidates</button>
+    </form>
+    {% else %}
+    <p class="notice">No documents in this customer's projects yet. Upload a document to a
+    project first, then extract terms from it here.</p>
+    {% endif %}
+  {% else %}
+    <p class="help">Extracting terms is limited to linguists and admins.</p>
+  {% endif %}
+
+  <h3>Candidates awaiting review
+    {% if candidate_counts and (candidate_counts.accepted or candidate_counts.dropped) %}
+    <span class="muted small">({{ candidate_counts.accepted }} accepted, {{ candidate_counts.dropped }} dropped so far)</span>
+    {% endif %}
+  </h3>
+  {{ m.term_candidate_grid(candidates, '/glossaries/' ~ g.id, request, can_edit) }}
+  </div>
+  </details>
+{% endcall %}
+
+{% if can_edit %}
+<div class="grid2">
+{% call m.card(layout_key='import') %}
+  <details class="component-disclosure"{% if open_tools %} open{% endif %}>
+  <summary>
+  <h2 id="glossary-import">Import CSV or TBX</h2>
+  </summary>
+  <div>
+  <p class="help">CSV columns: source_term, target_term, dnt, sense_label, context_cue,
+  part_of_speech, definition, usage_example, subject_field, notes. The last five are
+  optional - an older CSV without them still imports. Export includes them all.</p>
+  <p class="help">A <code>.tbx</code> termbase (TBX 2.0/martif or TBX-Basic v3 DCA) imports
+  for the locale pair below: source/target terms, part of speech, definition, subject field
+  and the Do-Not-Translate flag. It takes the flat import (one entry per matching pair).
+  <strong>Concept-preserving TBX import is reserved</strong>: it arrives with the terminology
+  authority train, so ticking it is refused for now, pointing you at the standard import (a
+  <code>.glossary.json</code> round-trip carries the concept store losslessly meanwhile). Tick
+  <strong>Strict</strong> to refuse the
+  whole import on the first TBX-Basic conformance finding. A base-language termbase (e.g.
+  <code>xml:lang="es"</code>) projects onto a regional pair (<code>es-ES</code>) by base
+  language; a termbase whose languages match no configured pair imports 0 entries and
+  reports them as skipped (the flat entry import never refuses on a language mismatch).</p>
+  <p class="help">TBX export defaults to TBX-Basic v3 (DCA): house fields with no standard
+  data category (DNT, audience, status, case-sensitivity, exact-match, out-of-picklist
+  categories, subdomain, usage note) ride a documented private namespace
+  (<code>los:</code>). <strong>Portable</strong> drops the <code>los:</code> fields and emits
+  a clean pure-TBX-Basic instance that validates with zero findings (lossy - the download
+  names every field type it drops). The <code>.glossary.json</code> export is the no-caveat
+  lossless format.</p>
+  <form method="get" action="/glossaries/{{ g.id }}/export" class="form" id="glossary-export" data-busy-release="3">
+    <div class="grid2">
+      <label>Export format
+        <select name="format">
+          <option value="csv">CSV</option>
+          <option value="tbx">TBX-Basic v3 (DCA)</option>
+          <option value="json">.glossary.json (lossless)</option>
+        </select>
+      </label>
+      <label>TBX dialect
+        <select name="dialect">
+          <option value="tbx-basic">TBX-Basic (with los:)</option>
+          <option value="tbx-core">TBX-Core (no los:)</option>
+        </select>
+      </label>
+    </div>
+    <label><input type="checkbox" name="strict_portable" value="1" /> Portable: drop the
+      <code>los:</code> private fields (pure TBX-Basic, lossy)</label>
+    <button type="submit" data-busy-label="{{ t(request, 'busy.preparing_download') }}">Export</button>
+  </form>
+  <form method="post" action="/glossaries/{{ g.id }}/import" enctype="multipart/form-data" class="form">
+    {% include "_csrf.html" %}
+    <div class="grid2">
+      <label>Source locale <select name="source_locale">{% for l in locales %}<option value="{{ l }}">{{ label_for(l) }}</option>{% endfor %}</select></label>
+      <label>Target locale <select name="target_locale">{% for l in locales %}<option value="{{ l }}">{{ label_for(l) }}</option>{% endfor %}</select></label>
+    </div>
+    <label>CSV, TBX, MultiTerm XML or spreadsheet file <input type="file" name="file" id="glossary-import-file" accept=".csv,.tbx,.xml,.mtf,.glossary.json,.json,.xlsx,.tsv" required{{ fe.invalid_attrs(request, 'glossary-import-file') }} /></label>
+    <label><input type="checkbox" name="concepts" value="1" /> Concept-preserving TBX import
+      (reserved: refused for now; arrives with the terminology authority train)</label>
+    <label><input type="checkbox" name="strict" value="1" /> Strict: refuse on the first
+      TBX-Basic conformance finding</label>
+    <button type="submit" data-busy-label="{{ t(request, 'busy.importing') }}">Import</button>
+  </form>
+  </div>
+  </details>
+{% endcall %}
+
+{% call m.card(layout_key='ai_builder') %}
+  <details class="component-disclosure"{% if open_tools %} open{% endif %}>
+  <summary>
+  <h2 id="glossary-ai-builder">AI builder (paste text)</h2>
+  </summary>
+  <div>
+  <p class="help">Paste source text; an LLM proposes candidate terms into the review grid
+  above - nothing is added automatically. Offline (no key): a deterministic mock runs
+  instead. Accept or drop each candidate under "Candidates awaiting review".</p>
+  <form method="post" action="/glossaries/{{ g.id }}/build" class="form">
+    {% include "_csrf.html" %}
+    <div class="grid2">
+      <label>Source locale <select name="source_locale"><option value="">(any)</option>{% for l in locales %}<option value="{{ l }}">{{ label_for(l) }}</option>{% endfor %}</select></label>
+      <label>Target locale <select name="target_locale"><option value="">(any)</option>{% for l in locales %}<option value="{{ l }}">{{ label_for(l) }}</option>{% endfor %}</select></label>
+    </div>
+    <label>Text <textarea name="text" rows="5" placeholder="Paste source content to extract terminology from"></textarea></label>
+    <button type="submit" data-busy-label="{{ t(request, 'busy.proposing_terms') }}">Propose candidates</button>
+  </form>
+  </div>
+  </details>
+{% endcall %}
+</div>
+{% endif %}
+
+{% if can_edit %}
+{% call m.card(layout_key='rename') %}
+  <details class="component-disclosure" open>
+  <summary>
+  <h2 id="glossary-rename">Settings</h2>
+  </summary>
+  <div>
+  <h3>Rename</h3>
+  <form method="post" action="/glossaries/{{ g.id }}/rename" class="form">
+    {% include "_csrf.html" %}
+    <label>Name <input type="text" name="name" value="{{ g.name }}" /></label>
+    <button type="submit">Rename</button>
+  </form>
+  <h3>Content type</h3>
+  {% if can_edit %}
+  <form method="post" action="/glossaries/{{ g.id }}/content-type" class="form">
+    {% include "_csrf.html" %}
+    <label>Content type
+      <select name="content_type_id">
+        <option value="">(none: General, applies to all content types)</option>
+        {% for t in content_types %}
+        <option value="{{ t.id }}"{% if g.content_type_id == t.id %} selected{% endif %}>{{ t.name }}{% if t.customer_id is none %} (global){% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <p class="help">Scopes this glossary to one content type: offered and auto-attached
+    only to projects of that type (General applies to all). Does not revert an approved
+    glossary to draft.</p>
+    <button type="submit">Save content type</button>
+  </form>
+  {% endif %}
+  </div>
+  </details>
+{% endcall %}
+{% call m.card(layout_key='danger') %}
+  <h2 id="glossary-danger">Danger zone</h2>
+  <p class="help">Deleting a glossary removes it and all its terms. This cannot be undone.</p>
+  <form method="post" action="/glossaries/{{ g.id }}/delete" data-action-confirm="Delete this glossary and all its terms?">
+    {% include "_csrf.html" %}
+    <button type="submit" class="btnlink danger-btn">Delete glossary</button>
+  </form>
+{% endcall %}
+{% endif %}
+</div>
+{% with layout_page = 'glossary' %}{% include "_page_layout.html" %}{% endwith %}
+
+{% endblock %}

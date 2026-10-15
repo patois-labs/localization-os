@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Empty targets for delivery{% endblock %}
+{% block content %}
+
+<section class="review-intro">
+  {{ m.page_header('Untranslated targets - locale ' ~ (locale or '(default)')) }}
+  {% if mode == "doc" %}
+  <p class="muted">Document <span class="data-mono">{{ doc.filename }}</span> was produced by a
+  TM-match workflow and still carries <strong>{{ empties|length }}</strong> empty (untranslated)
+  segment(s). It is <strong>held from delivery</strong> until a person approves shipping those
+  segments as empty strings (not source text). Approval is audited, and this hold cannot be
+  bypassed with <code>allow_held</code>.</p>
+  {% else %}
+  <p class="muted">This key project was produced by a TM-match workflow and still carries
+  <strong>{{ empties|length }}</strong> empty (untranslated) key(s) for this locale. The export
+  is <strong>held</strong> until a person approves delivering them (rendered per your
+  <code>empty_as</code> setting). Approval is audited.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Status</h2>
+  <p>
+    {% if approved %}
+    {{ m.status_badge('approved', 'Approved.') }} The current empty set is covered - delivery will ship these
+    as empty strings. A later run that adds NEW empties re-holds until re-approved.
+    {% elif decision == "release_empties" %}
+    {{ m.status_badge('approved', 'Approved.') }} A covering approval releases this delivery.
+    {% else %}
+    {{ m.status_badge('in_review', 'Held.') }} No covering approval yet.
+    {% endif %}
+  </p>
+
+  {% if empties %}
+  <h2>The empty strings</h2>
+  {% call m.data_table('The empty strings', [{'label': 'order' if mode == 'doc' else 'key'}, {'label': 'source (untranslated)'}, {'label': 'target'}]) %}
+      {% for e in empties %}
+      <tr>
+        {% if mode == "doc" %}
+        <td class="data-mono">{{ e.order_index }}</td>
+        {% else %}
+        <td class="data-mono">{{ e.name }}</td>
+        {% endif %}
+        <td{{ source_locale|langattrs }}>{{ e.source_text }}</td>
+        <td class="muted"><em>(empty)</em></td>
+      </tr>
+      {% endfor %}
+  {% endcall %}
+  {% else %}
+  {% set empty_copy %}No empty targets for this locale - nothing to approve.{% endset %}{{ m.empty_state(empty_copy) }}
+  {% endif %}
+
+  {% if live_run_id %}
+  {# #105: mid-run these targets are empty because the run has not reached them, so the
+     service REFUSES an approval -- the panel must not offer the button that blanked a
+     126-segment document. REVOKE (the safe direction) stays available. #}
+  {# round-2 HIGH-1: `live_run_label` names the TIER ("Run" / "Advanced-Workflow run"), so an
+     Advanced mission is not reported to the operator as a classic run. #}
+  <p class="mt"><strong>{{ live_run_label|default("Run", true) }} #{{ live_run_id }} is still in progress</strong> on this locale.
+  These targets are empty because that run has not translated them yet, not because they are
+  final, so approving empty delivery is refused until it finishes (or is cancelled).</p>
+  {% endif %}
+  {% if can_write and empties %}
+  <div class="mt">
+    {% if not live_run_id %}
+    <form method="post" action="{{ approve_action }}" style="display:inline">
+      {% include "_csrf.html" %}
+      <button type="submit">Approve delivering empty targets</button>
+    </form>
+    {% endif %}
+    {% if approved %}
+    <form method="post" action="{{ revoke_action }}" style="display:inline">
+      {% include "_csrf.html" %}
+      <button type="submit" class="danger-btn">Revoke approval</button>
+    </form>
+    {% endif %}
+  </div>
+  {% elif empties %}
+  <p class="muted mt">Your role cannot approve deliveries.</p>
+  {% endif %}
+
+  <p class="mt"><a class="btnlink" href="{{ back_url }}">Back</a></p>
+</section>
+
+{% endblock %}

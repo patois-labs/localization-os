@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{# #753: a person's own MCP OAuth grants (app/web/mcp_oauth_as.py). #}
+{% block title %}Connected apps{% endblock %}
+{% block content %}
+{% set apps_title %}Connected apps{% endset %}
+{% set apps_meta %}Account: <strong>{{ me.email }}</strong>{% endset %}
+{{ m.page_header(apps_title, meta=apps_meta) }}
+<section class="card" id="connected-apps">
+  {% if revoked %}<p class="ok" role="status">The app was disconnected.</p>{% endif %}
+  <p class="muted">AI apps you connected to this install by signing in (MCP OAuth). Disconnecting
+    one ends its access at once. API keys are managed on your <a href="/account#account-apikeys">Account</a> page.</p>
+  {% if not server_on %}<p class="muted" id="connected-apps-off">Connecting apps by signing in is not switched on for this install.</p>{% endif %}
+  {% if grants %}
+  <table class="table" id="connected-apps-table">
+    <thead><tr><th scope="col">App</th><th scope="col">Answers go to</th><th scope="col">Access</th><th scope="col">Connected</th><th scope="col">Last used</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+    <tbody>
+    {% for g in grants %}
+      <tr>
+        <td>{{ g.client_name }}</td>
+        <td>{{ g.redirect_host }}</td>
+        <td>{{ g.scopes }}</td>
+        <td>{{ g.created_at or '-' }}</td>
+        <td>{{ g.last_used or '-' }}</td>
+        <td>
+          <form method="post" action="/account/connected-apps/{{ g.id }}/revoke">
+            {% include "_csrf.html" %}
+            <button type="submit" class="ghost" aria-label="Disconnect {{ g.client_name }}">Disconnect</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p id="connected-apps-empty">No connected apps.</p>
+  {% endif %}
+</section>
+{% endblock %}

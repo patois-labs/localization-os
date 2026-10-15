@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{# #753: the opt-in MCP OAuth authorization server (app/web/mcp_oauth_as.py). Same keys as
+   `config set mcp_oauth_*` and `mcp-oauth status / rs-secret / grants` on the CLI. #}
+{% block title %}MCP OAuth{% endblock %}
+{% block content %}
+{% set mo_title %}MCP OAuth (connect AI apps by signing in){% endset %}
+{{ m.page_header(mo_title) }}
+<section class="card" id="mcp-oauth-status">
+  <h2>Status</h2>
+  {% if saved %}<p class="ok" role="status">Saved.</p>{% endif %}
+  {% if refusal %}<p class="err" role="alert" id="mcp-oauth-error">{{ refusal }}</p>{% endif %}
+  <p id="mcp-oauth-state"><strong>{% if st.active %}On{% elif st.enabled %}Switched on, not ready{% else %}Off{% endif %}</strong></p>
+  {% if st.enabled and st.problems %}
+  <ul id="mcp-oauth-problems">{% for p in st.problems %}<li>{{ p }}</li>{% endfor %}</ul>
+  {% endif %}
+  <p class="muted">When on, this install is the OAuth authorization server for its own remote MCP
+    server, so apps such as claude.ai or ChatGPT connectors can connect with a sign-in and a consent
+    page instead of a pasted API key. Personal API keys keep working either way.
+    Issuer: <code>{{ st.issuer or '(app_base_url not set)' }}</code>.</p>
+</section>
+<section class="card" id="mcp-oauth-settings">
+  <h2>Settings</h2>
+  <form method="post" action="/security/mcp-oauth" class="form">
+    {% include "_csrf.html" %}
+    <label><input type="checkbox" name="mcp_oauth_enabled" value="1" {{ 'checked' if vals.mcp_oauth_enabled == '1' }} /> Turn on the MCP OAuth authorization server</label>
+    <label for="mcp-oauth-resource">MCP server URL (the address apps connect to)</label>
+    <input type="url" id="mcp-oauth-resource" name="mcp_oauth_resource" value="{{ vals.mcp_oauth_resource }}" placeholder="https://mcp.example.com/mcp" />
+    <label for="mcp-oauth-cimd-hosts">Accept apps published only on these hosts (blank = any public host)</label>
+    <input type="text" id="mcp-oauth-cimd-hosts" name="mcp_oauth_cimd_hosts" value="{{ vals.mcp_oauth_cimd_hosts }}" placeholder="claude.ai, *.openai.com" />
+    <label><input type="checkbox" name="mcp_oauth_dcr_enabled" value="1" {{ 'checked' if vals.mcp_oauth_dcr_enabled == '1' }} /> Also allow dynamic client registration (older apps; deprecated)</label>
+    <button type="submit" id="mcp-oauth-save">Save</button>
+  </form>
+</section>
+<section class="card" id="mcp-oauth-rs-secret">
+  <h2>MCP server secret</h2>
+  {% if new_secret %}
+  <p class="ok" role="status">New secret. Copy it now, it will not be shown again. Give it to the MCP server as <code>LOC_STUDIO_MCP_RS_SECRET</code>.</p>
+  <p><code id="mcp-oauth-new-secret">{{ new_secret }}</code></p>
+  {% endif %}
+  <p class="muted">{% if st.rs_secret_set %}A secret is set.{% else %}No secret yet.{% endif %}
+    The MCP server uses it to trade an app's token for API access as that person; apps never see it.
+    A new secret replaces the old one at once.</p>
+  <form method="post" action="/security/mcp-oauth/rs-secret" class="form">
+    {% include "_csrf.html" %}
+    <button type="submit" id="mcp-oauth-rotate">Generate a new secret</button>
+  </form>
+</section>
+{% if grants %}
+<section class="card" id="mcp-oauth-grants">
+  <h2>Connected apps on this install</h2>
+  <table class="table">
+    <thead><tr><th scope="col">Grant</th><th scope="col">User id</th><th scope="col">App</th><th scope="col">Answers go to</th><th scope="col">Access</th><th scope="col">Last used</th></tr></thead>
+    <tbody>{% for g in grants %}<tr><td>{{ g.id }}</td><td>{{ g.user_id }}</td><td>{{ g.client_name }}</td><td>{{ g.redirect_host }}</td><td>{{ g.scopes }}</td><td>{{ g.last_used or '-' }}</td></tr>{% endfor %}</tbody>
+  </table>
+  <p class="help">Revoke one with <code>mcp-oauth revoke &lt;grant&gt;</code> on the host, or disable the account.</p>
+</section>
+{% endif %}
+{% endblock %}

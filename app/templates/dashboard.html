@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}{{ t(request, 'nav.dashboard') }}{% endblock %}
+{% import "_macros.html" as m %}
+{% block content %}
+<div class="dashboard-page">
+
+{% set dashboard_meta %}
+      {% set proj_txt = tl(request, ('page.dashboard.projects_one' if summary.projects == 1 else 'page.dashboard.projects_other'), n=summary.projects) %}
+      {% set runs_txt = tl(request, ('page.dashboard.runs_one' if summary.runs == 1 else 'page.dashboard.runs_other'), n=summary.runs) %}
+      <div class="dash-summary">
+        {{ proj_txt }} ·
+        <strong class="accent">{{ summary.in_progress }}</strong> {{ tl(request, 'page.dashboard.status_in_progress')|lower }} ·
+        {{ summary.completed }} {{ tl(request, 'page.dashboard.status_completed')|lower }} ·
+        {{ runs_txt }}
+      </div>
+      <div class="dash-attention">
+        {% if summary.paused %} {% if feature_enabled('worklist') %}<a href="/my-work"><strong class="warn-text">{{ summary.paused }}</strong> {{ tl(request, 'page.dashboard.awaiting_review') }}</a>{% else %}<strong class="warn-text">{{ summary.paused }}</strong> {{ tl(request, 'page.dashboard.awaiting_review') }}{% endif %}{% endif %}
+        {% if feature_enabled('queries') and summary.my_open_queries %} <a href="{{ '/my-work' if feature_enabled('worklist') else '/queries?assignee=me' }}"><strong class="accent">{{ summary.my_open_queries }}</strong> {{ tl(request, 'page.dashboard.queries_assigned') }}</a>{% endif %}
+      </div>
+{% endset %}
+{% set dashboard_primary %}<a class="btn-primary" href="/projects#new" data-np-open>＋ {{ tl(request, 'nav.new_project') }}</a>{% endset %}
+{% set dashboard_secondary %}
+<button type="button" class="ghost layout-edit-btn layout-edit-inline" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+{% endset %}
+{{ m.page_header(tl(request, 'page.dashboard.title'), meta=dashboard_meta, primary=dashboard_primary, secondary=dashboard_secondary) }}
+
+{% if onboarding %}{% include "_onboarding.html" %}{% endif %}
+
+<div id="page-layout" class="page-layout" data-layout-page="dashboard">
+<section class="card flat" data-card="running">
+  <div class="row-between dash-running-head"><h2>{{ tl(request, 'page.dashboard.running_projects') }}</h2><a class="btnlink small" href="/projects">{{ tl(request, 'page.dashboard.all_projects') }}</a></div>
+  {% if rows %}
+    <div class="projects-table">
+    {% call m.data_table(t(request, 'page.dashboard.running_projects'), [
+      {'label': tl(request, 'page.dashboard.col_project')},
+      {'label': tl(request, 'page.dashboard.col_customer')},
+      {'label': tl(request, 'page.dashboard.col_owner')},
+      {'label': tl(request, 'page.dashboard.col_progress')},
+      {'label': tl(request, 'page.dashboard.col_docs'), 'numeric': true},
+      {'label': tl(request, 'page.dashboard.col_updated')},
+      {'label': tl(request, 'page.dashboard.col_status')}]) %}
+        {% for r in rows %}
+          <tr>
+            <td>
+              <span class="cell-primary"><a href="/projects/{{ r.project.id }}" class="proj-name">{{ r.project.name }}</a></span>
+              <div class="muted small data-mono">{{ r.project.source_locale }} → {{ r.locales|join(', ') or '-' }}</div>
+            </td>
+            <td class="muted small">{{ r.customer }}</td>
+            <td class="muted small">{{ r.owner }}</td>
+            <td class="prog-cell">
+              <div class="prog"><div class="prog-bar" style="width:{{ r.approved_pct }}%"></div></div>
+              <span class="muted small data-mono" title="{{ r.source_segments }} segments x {{ r.locale_count }} language{{ '' if r.locale_count == 1 else 's' }}; each segment is counted once per target language">{{ r.approved_pct }}% · {{ r.segments }} {{ tl(request, 'page.dashboard.seg') }}</span>
+            </td>
+            <td class="data-mono numeric">{{ r.docs }}</td>
+            <td class="muted small data-mono">{{ r.updated.strftime('%Y-%m-%d') }} UTC</td>
+            <td class="status-cell">
+              <span{{ lang_attr(request, 'page.dashboard.status_' ~ r.state) }}>{{ m.status_badge(r.state, label=t(request, 'page.dashboard.status_' ~ r.state)) }}</span>
+            </td>
+          </tr>
+        {% endfor %}
+    {% endcall %}
+    </div>
+  {% else %}
+    {% set empty_action %}<a class="btnlink small" href="/projects#new" data-np-open>＋ {{ tl(request, 'page.dashboard.create_first') }}</a>{% endset %}
+      {{ m.empty_state(tl(request, 'page.dashboard.no_projects'), action=empty_action) }}
+  {% endif %}
+</section>
+
+<div class="grid2">
+  <section class="card flat" data-card="activity">
+    <h2>{{ tl(request, 'page.dashboard.recent_activity') }}</h2>
+    {% if recent_runs %}
+      <ul class="activity">
+        {% for r in recent_runs %}
+          <li>
+            {% set run_label = t(request, 'page.jobs.status_' ~ r.status) %}
+            <span{{ lang_attr(request, 'page.jobs.status_' ~ r.status) }}><span class="badge {% if r.status == 'completed' %}exact{% elif r.status == 'paused' %}paused{% elif r.status == 'failed' %}danger{% elif r.status == 'running' %}run{% else %}fuzzy{% endif %}" title="{{ run_label }}">{{ run_label }}</span></span>
+            <a href="/runs/{{ r.id }}">{{ r.workflow }}</a>
+            <span class="muted small">{{ tl(request, 'page.dashboard.on_document', document=r.document) }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      {% set empty_action %}<a class="btnlink small" href="/workflows/new"><span aria-hidden="true">⚙</span> {{ tl(request, "page.dashboard.qa_build_workflow") }}</a>{% endset %}
+      {{ m.empty_state(tl(request, 'page.dashboard.no_runs'), action=empty_action) }}
+    {% endif %}
+  </section>
+
+  <section class="card flat" data-card="quick">
+    <h2>{{ tl(request, 'page.dashboard.quick_actions') }}</h2>
+    <div class="quick">
+      <a class="btnlink small" href="/projects#new" data-np-open>＋ {{ tl(request, 'page.dashboard.qa_new_project') }}</a>
+      <a class="btnlink small" href="/workflows/new"><span aria-hidden="true">⚙</span> {{ tl(request, "page.dashboard.qa_build_workflow") }}</a>
+      {% if can_tune_ai(current_user(request)) %}<a class="btnlink small" href="/setup-ai"><span aria-hidden="true">✨</span> {{ tl(request, 'page.dashboard.qa_setup_ai') }}</a>{% endif %}
+      <a class="btnlink small" href="/workflows/building-blocks"><span aria-hidden="true">🧩</span> {{ tl(request, 'page.dashboard.qa_templates') }}</a>
+      {% if feature_enabled('reports') %}<a class="btnlink small" href="/reports"><span aria-hidden="true">📊</span> {{ tl(request, 'page.dashboard.qa_reports') }}</a>{% endif %}
+    </div>
+  </section>
+</div>
+</div>
+{% with layout_page = 'dashboard' %}{% include "_page_layout.html" %}{% endwith %}
+
+</div>
+{% endblock %}

@@ -1,0 +1,59 @@
+# Localization OS TMS - DEV/TEST dependencies (Phase 4-D).
+#
+# Kept SEPARATE from requirements.txt / requirements.lock so the runtime install
+# (Docker image, prod) stays lean and never pulls the test toolchain.
+#
+# Local test envs: install alongside the runtime deps (plain requirements.txt,
+# no hashes) in ONE call:
+#     pip install -r requirements.txt -r requirements-dev.txt
+#     pytest -q
+# A hash anywhere arms pip's require-hashes mode for the whole call (GitHub #403),
+# so never mix this unpinned file with a hashed lock in one pip call.
+#
+# CI installs the test toolchain hash-pinned from the generated requirements-dev.lock
+# (GitHub #412), never this unpinned file:
+#     pip install --require-hashes --no-deps -r requirements.lock -r requirements-dev.lock
+# For local runs prefer the same hashed install; the unpinned form above is only for trying a bump.
+# Regenerate the lock after changing the pins below (network; review the diff), from the repo
+# root, as ONE command line:
+#     uv pip compile requirements-dev.txt --universal --python-version 3.13 --no-header
+#         -c requirements.lock -c requirements-saml.lock -c requirements-postgres.lock
+#         -c requirements-ldap.lock -o requirements-dev.lock
+# then re-add the provenance header and run scripts/hash_locks.py (adds the SHA256s).
+# Same flow for scripts/locks/requirements-ci-check-tools.lock (pytest + packaging subset).
+# The lines below stay the human-curated DIRECT pins.
+#
+# `pytest -q` runs tests/test_verify_suites.py, which spawns each of the 418
+# tests/verify_*.py suites as its own subprocess, ~13s apiece. A full run is
+# therefore ~90 MINUTES, not a few minutes -- budget for that or run a narrow
+# selection instead:
+#     pytest tests/test_verify_suites.py -k "<name>"
+# Verify what a selection actually collected before trusting a green run
+# (a `-k` filter is substring match, not a gate).
+
+pytest==9.1.1
+packaging==26.3  # public PEP 440/508 API for release-lock validation
+# Pinned to an EXACT patch: even a ruff patch can change `ruff format` output
+# (0.16.0-0.16.3 vs 0.16.4 disagreed, causing format-check drift), and a new
+# minor can add rules/fixes. Both break the CI lint/format gate on unrelated PRs.
+# Bump deliberately: re-run `ruff format .` + repo-wide `ruff check .` when you do.
+ruff==0.16.10
+# Accessibility browser suite (tests/verify_a11y_browser.py, opt-in): headless Chromium
+# driver for axe-core + reflow + Tab-walk checks. Apache-2.0 (deps greenlet, pyee: MIT).
+# The suite SKIPS cleanly without it or without a browser build; install the browser once
+# per machine with `python -m playwright install chromium` (network, one time).
+playwright==1.63.0
+# Security tooling for the local pre-merge gate (scripts/pregate.py "Dependency audit"
+# step, via scripts/audit_runtime_profiles.py --local) and the release SBOM
+# (scripts/sbom.py). Pinned exactly: the audit's exit semantics and the SBOM's byte
+# output are part of the gate. pip-audit matches the CI dep-audit job's pin.
+pip-audit==2.10.1
+cyclonedx-bom==7.5.0
+
+# --- SAML 2.0 SP (Train I, BETA) -- OPT-IN EXTRA ---------------------------------
+# python3-saml (OneLogin) powers the SAML Service Provider (app/services/saml.py). It
+# is DELIBERATELY NOT in requirements.txt: it pulls the native `xmlsec` (libxml2/xmlsec1)
+# bindings, which the lean runtime image should not carry unless SAML is actually used.
+# Install it on the HOST when enabling saml_enabled=1 (a boot capability check fails loud
+# otherwise). Listed here so CI + local test runs exercise tests/verify_saml.py.
+-r requirements-saml.txt

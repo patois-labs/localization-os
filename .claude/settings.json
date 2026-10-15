@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -x .venv/bin/python ]; then exec .venv/bin/python .claude/hooks/ruff_postedit.py; elif [ -x .venv/Scripts/python.exe ]; then exec .venv/Scripts/python.exe .claude/hooks/ruff_postedit.py; else exec python .claude/hooks/ruff_postedit.py; fi"
+          }
+        ]
+      }
+    ]
+  }
+}

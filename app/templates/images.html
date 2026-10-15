@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Images{% endblock %}
+{% block content %}
+<div class="documents-page">
+
+<section class="document-heading">
+  {% set page_title %}Images{% endset %}
+  {{ m.page_header(page_title) }}
+  <p class="muted">Localize images end to end: upload a PNG/JPG/SVG, detected text
+  regions become ordinary segments (TM, glossary and workflows apply), and the
+  translated text is rendered back onto the image for review and export.</p>
+</section>
+
+{% if err == 'toolarge' %}<p class="error">That file is over the upload size limit.</p>
+{% elif err == 'badimage' %}<p class="error">Not a usable image (SVG/PNG/JPEG only, within the pixel-size guard).</p>
+{% elif err == 'parse' %}<p class="error">Could not read that image.</p>
+{% elif err == 'busy' %}<p class="error">The server is busy. Try the upload again in a moment.</p>
+{% elif err == 'noproject' %}<p class="error">Pick a project for the upload.</p>
+{% endif %}
+
+{# --- customer picker (customer-first, mirrors /tm) --- #}
+{% if show_picker %}
+{% call m.card() %}
+  <h2>Customer</h2>
+  <form method="get" action="/images" class="form">
+    <label>Customer
+      <select name="customer">
+        <option value="">- pick a customer -</option>
+        {% for c in customers %}
+        <option value="{{ c.id }}" {% if selected_customer and selected_customer.id == c.id %}selected{% endif %}>{{ customer_label(c) }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">Choose</button>
+  </form>
+{% endcall %}
+{% elif selected_customer %}
+<p class="muted small">Customer: <strong>{{ selected_customer.name }}</strong></p>
+{% endif %}
+
+{% if selected_customer is none %}
+{% call m.card() %}
+  {% set empty_message %}
+    {% if no_customers %}
+    No customer is available. Images live in projects under a customer -
+    create a customer and a project first.
+    {% else %}
+    Pick a customer above to browse its images.
+    {% endif %}
+  {% endset %}
+  {{ m.empty_state(empty_message) }}
+{% endcall %}
+{% else %}
+
+<div class="grid2">
+  {% call m.card() %}
+    <h2>Upload an image</h2>
+    <form method="post" action="/images/upload" enctype="multipart/form-data" class="form">
+      {% include "_csrf.html" %}
+      <label>Project
+        <select name="project_id" required>
+          {% for p in projects if p.intake != 'connected' %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Image file
+        <input type="file" name="file" accept=".svg,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.gif,.webp" required>
+      </label>
+      <button type="submit" class="btn" data-busy-label="{{ t(request, 'busy.uploading') }}">Upload</button>
+      <p class="help">SVG swaps text in place. PNG, JPG, TIFF, BMP, GIF and WebP run text detection, then an
+      overlay render replaces each region (an animated GIF or WebP, or a multi-page TIFF, is refused).</p>
+    </form>
+  {% endcall %}
+
+  {% call m.card() %}
+    <h2>Text detection</h2>
+    {% set column_0 %}Engine{% endset %}
+    {% set column_1 %}Status{% endset %}
+{% call m.data_table('Text detection', [{'label': column_0}, {'label': column_1}]) %}
+        <tr><td>winocr (Windows OCR)</td><td>{{ 'available' if detector.available.winocr else 'not installed' }}</td></tr>
+        <tr><td>rapidocr (ONNX)</td><td>{{ 'available' if detector.available.rapidocr else 'not installed' }}</td></tr>
+        <tr><td>mock (fixtures)</td><td>available</td></tr>
+      {% endcall %}
+    <p class="help">Default engine: <strong>{{ detector.default }}</strong>.
+    {% if detector.hint %}Optional local OCR: <code>pip install rapidocr onnxruntime</code>.{% endif %}
+    Low-confidence regions can escalate to your vision-capable engine (text only,
+    spend-capped).</p>
+  {% endcall %}
+</div>
+
+{% call m.card() %}
+  <h2>Images</h2>
+  {% if rows %}
+  {% set column_0 %}Image{% endset %}
+  {% set column_1 %}Project{% endset %}
+  {% set column_2 %}Type{% endset %}
+  {% set column_3 %}Regions{% endset %}
+  {% set column_4 %}Locales{% endset %}
+  {% set column_5 %}{% endset %}
+{% call m.data_table('Images', [{'label': column_0}, {'label': column_1}, {'label': column_2}, {'label': column_3}, {'label': column_4}, {'label': column_5}]) %}
+      {% for r in rows %}
+      <tr>
+        <td><a href="/images/{{ r.doc.id }}">{{ r.doc.filename }}</a></td>
+        <td>{{ r.project.name if r.project else '-' }}</td>
+        <td>{{ r.kind }}</td>
+        <td class="data-mono">{{ r.regions }}</td>
+        <td class="data-mono">{{ r.locales | join(', ') or '-' }}</td>
+        <td class="row-actions"><a class="btnlink" href="/images/{{ r.doc.id }}" aria-label="Review {{ r.doc.filename }}">Review</a></td>
+      </tr>
+      {% endfor %}
+    {% endcall %}
+  {% else %}
+  {% set empty_message %}No images yet for this customer. Upload one above.{% endset %}
+{{ m.empty_state(empty_message) }}
+  {% endif %}
+{% endcall %}
+
+{% endif %}
+</div>
+{% endblock %}

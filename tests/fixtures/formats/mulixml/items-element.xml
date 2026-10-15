@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<items>
+	<item key="menu.file">
+		<en>File</en>
+		<fr>Fichier</fr>
+	</item>
+	<item key="menu.open">
+		<en>Open <![CDATA[recent]]> files</en>
+		<fr>Ouvrir les fichiers récents</fr>
+	</item>
+	<item key="menu.quit">
+		<en>Quit {{app}}</en>
+		<!-- fr missing on purpose -->
+	</item>
+</items>

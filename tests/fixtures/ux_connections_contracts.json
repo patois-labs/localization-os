@@ -1,0 +1,2355 @@
+{
+  "connectors": {
+    "forms": [],
+    "links": [
+      "/connectors/airtable",
+      "/connectors/akeneo",
+      "/connectors/bitbucket",
+      "/connectors/catalog",
+      "/connectors/confluence",
+      "/connectors/contentful",
+      "/connectors/document360",
+      "/connectors/drupal",
+      "/connectors/freshdesk",
+      "/connectors/gdocs",
+      "/connectors/github",
+      "/connectors/gitlab",
+      "/connectors/helpscout",
+      "/connectors/hubspot",
+      "/connectors/intercom",
+      "/connectors/jira",
+      "/connectors/manage",
+      "/connectors/mcp_cms",
+      "/connectors/msgraph",
+      "/connectors/notion",
+      "/connectors/plytix",
+      "/connectors/salesforce",
+      "/connectors/sanity",
+      "/connectors/servicenow",
+      "/connectors/shopify",
+      "/connectors/sitecore",
+      "/connectors/strapi",
+      "/connectors/wordpress",
+      "/connectors/zendesk",
+      "/connectors/zoho",
+      "/setup-ai",
+      "/setup-ai",
+      "/setup-ai",
+      "/setup-ai"
+    ],
+    "cards": [
+      "integrations",
+      "engines"
+    ],
+    "controls": [
+      [
+        "button",
+        {
+          "type": "button",
+          "data-layout-edit": null
+        }
+      ]
+    ]
+  },
+  "connectors-catalog": {
+    "forms": [],
+    "links": [
+      "/connectors",
+      "/connectors/airtable",
+      "/connectors/akeneo",
+      "/connectors/bitbucket",
+      "/connectors/confluence",
+      "/connectors/contentful",
+      "/connectors/document360",
+      "/connectors/drupal",
+      "/connectors/freshdesk",
+      "/connectors/gdocs",
+      "/connectors/github",
+      "/connectors/gitlab",
+      "/connectors/helpscout",
+      "/connectors/hubspot",
+      "/connectors/intercom",
+      "/connectors/jira",
+      "/connectors/manage",
+      "/connectors/mcp_cms",
+      "/connectors/msgraph",
+      "/connectors/notion",
+      "/connectors/plytix",
+      "/connectors/salesforce",
+      "/connectors/sanity",
+      "/connectors/servicenow",
+      "/connectors/shopify",
+      "/connectors/sitecore",
+      "/connectors/strapi",
+      "/connectors/wordpress",
+      "/connectors/zendesk",
+      "/connectors/zoho"
+    ],
+    "cards": [
+      "available",
+      "roadmap"
+    ],
+    "controls": [
+      [
+        "button",
+        {
+          "type": "button",
+          "data-layout-edit": null
+        }
+      ],
+      [
+        "button",
+        {
+          "disabled": null
+        }
+      ],
+      [
+        "button",
+        {
+          "disabled": null
+        }
+      ],
+      [
+        "button",
+        {
+          "disabled": null
+        }
+      ],
+      [
+        "button",
+        {
+          "disabled": null
+        }
+      ]
+    ]
+  },
+  "connectors-manage": {
+    "forms": [
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/airtable",
+          "data-confirm": "Disable Airtable? 1 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/jira",
+          "data-confirm": "Disable Jira? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/confluence",
+          "data-confirm": "Disable Confluence? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/zendesk",
+          "data-confirm": "Disable Zendesk Guide? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/document360",
+          "data-confirm": "Disable Document360? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/freshdesk",
+          "data-confirm": "Disable Freshdesk Solutions? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/zoho",
+          "data-confirm": "Disable Zoho Desk? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/intercom",
+          "data-confirm": "Disable Intercom Help Center? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/salesforce",
+          "data-confirm": "Disable Salesforce Knowledge? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/notion",
+          "data-confirm": "Disable Notion? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/helpscout",
+          "data-confirm": "Disable Help Scout Docs? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/strapi",
+          "data-confirm": "Disable Strapi? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/contentful",
+          "data-confirm": "Disable Contentful? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/shopify",
+          "data-confirm": "Disable Shopify? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/hubspot",
+          "data-confirm": "Disable HubSpot CMS? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/gdocs",
+          "data-confirm": "Disable Google Docs? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/akeneo",
+          "data-confirm": "Disable Akeneo? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/mcp_cms",
+          "data-confirm": "Disable CMS via MCP? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/servicenow",
+          "data-confirm": "Disable ServiceNow? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/msgraph",
+          "data-confirm": "Disable Microsoft 365 Files? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/plytix",
+          "data-confirm": "Disable Plytix? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/drupal",
+          "data-confirm": "Disable Drupal? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/github",
+          "data-confirm": "Disable GitHub? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/sanity",
+          "data-confirm": "Disable Sanity? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/sitecore",
+          "data-confirm": "Disable Sitecore? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/bitbucket",
+          "data-confirm": "Disable Bitbucket? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/gitlab",
+          "data-confirm": "Disable GitLab? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/manage/wordpress",
+          "data-confirm": "Disable WordPress? 0 existing connection(s) will be hidden until re-enabled."
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "enabled",
+              "value": "0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      }
+    ],
+    "links": [
+      "/connectors",
+      "/connectors/catalog"
+    ],
+    "cards": [],
+    "controls": [
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ]
+    ]
+  },
+  "connector-type": {
+    "forms": [
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/airtable",
+          "data-browse": "add",
+          "data-kind": "airtable"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "name",
+              "placeholder": "Airtable - Marketing base",
+              "required": null
+            }
+          ],
+          [
+            "select",
+            {
+              "name": "customer_id"
+            }
+          ],
+          [
+            "option",
+            {
+              "value": ""
+            }
+          ],
+          [
+            "option",
+            {
+              "value": "1"
+            }
+          ],
+          [
+            "select",
+            {
+              "name": "content_type_id"
+            }
+          ],
+          [
+            "option",
+            {
+              "value": ""
+            }
+          ],
+          [
+            "option",
+            {
+              "value": "1"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "button",
+              "data-connector-browse": null
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "base_id",
+              "placeholder": "appXXXXXXXXXXXXXX"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "table",
+              "placeholder": "Content"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "source_field",
+              "placeholder": "Notes",
+              "required": null
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "target_field",
+              "placeholder": "Notes (fr-FR)"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "naming_pattern",
+              "placeholder": "{src} ({loc})"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "source_locale",
+              "placeholder": "en-US"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "target_locale",
+              "placeholder": "fr-FR"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "view",
+              "placeholder": "Grid view"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "max_records",
+              "placeholder": "500"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "auto_translate_on_change",
+              "placeholder": "0"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "allow_select_typecast",
+              "placeholder": "0"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "harvest_context",
+              "placeholder": "1"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "password",
+              "name": "api_key",
+              "placeholder": "patXXXX.XXXXXXXX",
+              "required": null
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/token/regenerate"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      }
+    ],
+    "links": [
+      "/account",
+      "/connectors",
+      "/connectors/connection/1",
+      "/help#api-companion"
+    ],
+    "cards": [
+      "connections",
+      "howto",
+      "oauth",
+      "add",
+      "embed"
+    ],
+    "controls": [
+      [
+        "button",
+        {
+          "type": "button",
+          "data-layout-edit": null
+        }
+      ],
+      [
+        "input",
+        {
+          "type": "text",
+          "value": "<generated legacy token>",
+          "readonly": null,
+          "data-select-on-click": null
+        }
+      ]
+    ]
+  },
+  "connection": {
+    "forms": [
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/connection/1/sync"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit",
+              "data-busy-label": "Syncing..."
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/connection/1/test"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit",
+              "data-busy-label": "Testing..."
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/connection/1/pull"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit",
+              "data-busy-label": "Pulling..."
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/connection/1/push"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit",
+              "data-busy-label": "Pushing..."
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/connection/1/delete",
+          "data-action-confirm": "Delete this connection? (Its synced project/documents stay.)"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/connection/1/languages"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "select",
+            {
+              "name": "language_set_id"
+            }
+          ],
+          [
+            "option",
+            {
+              "value": ""
+            }
+          ],
+          [
+            "option",
+            {
+              "value": "1"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "target_locales",
+              "value": "",
+              "placeholder": "es-MX, de-DE, fr-FR"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/connection/1/airtable-webhook/register"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit",
+              "disabled": null
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/connection/1/schedule"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "select",
+            {
+              "name": "every_minutes"
+            }
+          ],
+          [
+            "option",
+            {
+              "value": "0"
+            }
+          ],
+          [
+            "option",
+            {
+              "value": "15"
+            }
+          ],
+          [
+            "option",
+            {
+              "value": "60"
+            }
+          ],
+          [
+            "option",
+            {
+              "value": "360"
+            }
+          ],
+          [
+            "option",
+            {
+              "value": "1440"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/connection/1",
+          "data-browse": "settings",
+          "data-kind": "airtable",
+          "cid": "1"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "name",
+              "value": "Northstar product documentation and international launch content",
+              "required": null
+            }
+          ],
+          [
+            "select",
+            {
+              "name": "customer_id"
+            }
+          ],
+          [
+            "option",
+            {
+              "value": ""
+            }
+          ],
+          [
+            "option",
+            {
+              "value": "1",
+              "selected": null
+            }
+          ],
+          [
+            "select",
+            {
+              "name": "content_type_id"
+            }
+          ],
+          [
+            "option",
+            {
+              "value": "",
+              "selected": null
+            }
+          ],
+          [
+            "option",
+            {
+              "value": "1"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "button",
+              "data-connector-browse": null
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "base_id",
+              "value": "appOfflineFixture",
+              "placeholder": "appXXXXXXXXXXXXXX"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "table",
+              "value": "",
+              "placeholder": "Content"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "source_field",
+              "value": "Launch documentation",
+              "placeholder": "Notes"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "target_field",
+              "value": "",
+              "placeholder": "Notes (fr-FR)"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "naming_pattern",
+              "value": "",
+              "placeholder": "{src} ({loc})"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "source_locale",
+              "value": "",
+              "placeholder": "en-US"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "target_locale",
+              "value": "",
+              "placeholder": "fr-FR"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "view",
+              "value": "",
+              "placeholder": "Grid view"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "max_records",
+              "value": "",
+              "placeholder": "500"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "auto_translate_on_change",
+              "value": "",
+              "placeholder": "0"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "allow_select_typecast",
+              "value": "",
+              "placeholder": "0"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "harvest_context",
+              "value": "",
+              "placeholder": "1"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "password",
+              "name": "api_key",
+              "placeholder": "patXXXX.XXXXXXXX"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/connectors/connection/1/rotate"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "password",
+              "name": "api_key",
+              "placeholder": "patXXXX.XXXXXXXX"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      }
+    ],
+    "links": [
+      "/account",
+      "/connectors/airtable",
+      "/languages",
+      "/security"
+    ],
+    "cards": [
+      "langs",
+      "airtable_webhook",
+      "schedule",
+      "settings",
+      "rotate",
+      "inbound",
+      "history"
+    ],
+    "controls": [
+      [
+        "button",
+        {
+          "type": "button",
+          "data-layout-edit": null
+        }
+      ],
+      [
+        "input",
+        {
+          "type": "text",
+          "readonly": null,
+          "data-select-on-click": null,
+          "value": "http://testserver/api/connectors/1/airtable/webhook"
+        }
+      ],
+      [
+        "input",
+        {
+          "type": "text",
+          "readonly": null,
+          "data-select-on-click": null,
+          "value": "<generated legacy token>"
+        }
+      ]
+    ]
+  },
+  "vendors": {
+    "forms": [
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/vendors"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "name",
+              "id": "vendor-create-name",
+              "placeholder": "Acme Localization",
+              "required": null
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "description",
+              "placeholder": "(optional)"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "endpoint_url",
+              "placeholder": "https://vendor.example.com/intake"
+            }
+          ],
+          [
+            "select",
+            {
+              "name": "protocol"
+            }
+          ],
+          [
+            "option",
+            {
+              "value": "native"
+            }
+          ],
+          [
+            "option",
+            {
+              "value": "manual"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      }
+    ],
+    "links": [
+      "/vendors/1",
+      "/vendors/1",
+      "/vendors/2",
+      "/vendors/2"
+    ],
+    "cards": [],
+    "controls": [
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ]
+    ]
+  },
+  "vendor-detail": {
+    "forms": [
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/vendors/1"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "name",
+              "value": "Northstar multilingual editorial and localization partners",
+              "required": null
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "description",
+              "value": "Offline review fixture",
+              "placeholder": "(optional)"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "endpoint_url",
+              "value": "",
+              "placeholder": "https://vendor.example.com/intake"
+            }
+          ],
+          [
+            "select",
+            {
+              "name": "protocol"
+            }
+          ],
+          [
+            "option",
+            {
+              "value": "native"
+            }
+          ],
+          [
+            "option",
+            {
+              "value": "manual",
+              "selected": null
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/vendors/1/secret"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "password",
+              "name": "signing_secret",
+              "value": "",
+              "placeholder": ""
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "password",
+              "name": "auth_token",
+              "value": "",
+              "placeholder": ""
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/vendors/1/rate-card"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "text",
+              "name": "currency",
+              "value": "USD"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "number",
+              "step": "any",
+              "min": "0",
+              "name": "band_repetitions",
+              "value": "0.0"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "number",
+              "step": "any",
+              "min": "0",
+              "name": "band_context",
+              "value": "0.0"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "number",
+              "step": "any",
+              "min": "0",
+              "name": "band_exact",
+              "value": "0.0"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "number",
+              "step": "any",
+              "min": "0",
+              "name": "band_fuzzy_high",
+              "value": "0.0"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "number",
+              "step": "any",
+              "min": "0",
+              "name": "band_fuzzy_mid",
+              "value": "0.0"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "number",
+              "step": "any",
+              "min": "0",
+              "name": "band_fuzzy_low",
+              "value": "0.0"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "number",
+              "step": "any",
+              "min": "0",
+              "name": "band_new",
+              "value": "0.0"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/vendors/1/dispatch-options"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "checkbox",
+              "name": "omit_locked_targets",
+              "value": "1"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "checkbox",
+              "name": "requires_quote_approval",
+              "value": "1"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/vendors/1/unlink-customer"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "customer_id",
+              "value": "1"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/vendors/1/archive"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      },
+      {
+        "attrs": {
+          "method": "post",
+          "action": "/vendors/1/delete",
+          "data-confirm-delete": null,
+          "data-vendor-name": "Northstar multilingual editorial and localization partners"
+        },
+        "controls": [
+          [
+            "input",
+            {
+              "type": "hidden",
+              "name": "csrf_token"
+            }
+          ],
+          [
+            "button",
+            {
+              "type": "submit"
+            }
+          ]
+        ]
+      }
+    ],
+    "links": [
+      "/vendors"
+    ],
+    "cards": [
+      "basics",
+      "credentials",
+      "rates",
+      "dispatch",
+      "customers",
+      "open_dispatches",
+      "lifecycle"
+    ],
+    "controls": [
+      [
+        "button",
+        {
+          "type": "button",
+          "data-layout-edit": null
+        }
+      ],
+      [
+        "button",
+        {
+          "type": "button",
+          "data-row-menu-btn": null
+        }
+      ]
+    ]
+  }
+}

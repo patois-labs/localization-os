@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_form_errors.html" as fe %}
+{% block title %}Vendors{% endblock %}
+{% block content %}
+<div class="connections-page">
+
+{% set header_meta %}<p>External translation and review vendors, each with a connection, a rate card and linked customers.</p>{% endset %}
+{% set header_actions %}
+{% if vendor_studio_configured %}
+  <form method="post" action="/vendor-studio/open" class="form inline-form">
+    {% include "_csrf.html" %}
+    <button type="submit">Open Vendor Studio</button>
+  </form>
+  <p class="help small">Hands you off to the Vendor Studio companion app with a
+  short-lived signed SSO token (POSTed in the request body, valid 60s).</p>
+  {% endif %}{% endset %}
+{{ m.page_header('Vendors', meta=header_meta, primary=header_actions) }}
+
+{# a11y T7: a ?err= error renders once, as a sentence, in the summary at the top of
+   main (base.html + _form_errors.html), never as a raw code here. #}
+{% if request.query_params.get('saved') %}
+  <p class="ok">Saved.</p>
+{% endif %}
+{% if request.query_params.get('notice') %}
+  <p class="notice">{{ request.query_params.get('notice') }}</p>
+{% endif %}
+
+{% call m.card(flat=true) %}
+  <h2 class="sr-only">All vendors</h2>
+  {% if rows %}
+  {% call m.data_table('All vendors', [{'label': 'Name'}, {'label': 'Connection'}, {'label': 'Protocol'}, {'label': 'Credentials'}, {'label': 'Customers'}, {'label': 'Status'}, {'label': '', 'actions': true}]) %}
+
+      {% for r in rows %}
+      <tr{% if r.archived %} class="muted"{% endif %}>
+        <td><span class="cell-primary"><a href="/vendors/{{ r.id }}">{{ r.name }}</a>
+          {% if r.archived %}{{ m.status_badge('archived', 'Archived', 'warn') }}{% endif %}</span>
+          {% if r.description %}<span class="cell-secondary">{{ r.description }}</span>{% endif %}
+        </td>
+        <td class="muted small">{{ r.endpoint_url or '-' }}</td>
+        <td class="muted small">{{ r.protocol }}</td>
+        <td class="small">{% if r.has_secret %}{{ m.status_badge('new', 'set') }}{% else %}<span class="muted">not set</span>{% endif %}</td>
+        <td class="muted small">{{ r.customer_ids | length }} linked</td>
+        <td>{{ m.status_badge(r.status, {'new': 'new', 'connected': 'connected', 'error': 'error'}.get(r.status, r.status)) }}</td>
+        <td class="row-actions">
+          {% call m.row_menu('vm-' ~ r.id, 'More actions for ' ~ r.name) %}
+            <a role="menuitem" href="/vendors/{{ r.id }}">Manage vendor</a>
+          {% endcall %}
+        </td>
+      </tr>
+      {% endfor %}
+
+{% endcall %}
+  {% else %}
+    {{ m.empty_state('No vendors yet.') }}
+  {% endif %}
+
+  <form method="post" action="/vendors" class="form">
+    {% include "_csrf.html" %}
+    {% set field_label_1 %}Add a vendor{% endset %}
+{% call m.form_section("vendors-fields-1", field_label_1) %}
+
+      <label>Name <input type="text" name="name" id="vendor-create-name" placeholder="Acme Localization" required{{ fe.invalid_attrs(request, 'vendor-create-name') }} /></label>
+      <label>Description <input type="text" name="description" placeholder="(optional)" /></label>
+      <label>Endpoint URL <span class="muted small">(optional)</span>
+        <input type="text" name="endpoint_url" placeholder="https://vendor.example.com/intake" />
+      </label>
+      <label>Transport protocol
+        <select name="protocol">
+          {% for p in protocols %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+        </select>
+      </label>
+      <button type="submit">Add vendor</button>
+    {% endcall %}
+  </form>
+{% endcall %}
+
+</div>
+{% endblock %}

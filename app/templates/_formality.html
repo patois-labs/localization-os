@@ -1,0 +1,63 @@
+{# MT formality panel (#617 item 7, ADR 0062). Included by customer.html, project.html and
+   document.html with `fscope` ('customer' | 'project' | 'document') and `fobj` (that object).
+   One row per target language: the setting at THIS level (Inherit clears it), the register in
+   force after the whole chain (document, then project, then customer) and which level it came
+   from. Editing: a customer default needs admin or manager, a project or document entry admin,
+   manager or linguist (formality.can_set, the same predicate the POST /formality checks). #}
+{% import "_macros.html" as m %}
+{% set fv = formality_view(fscope, fobj) %}
+{% set fedit = formality_can_set(current_user(request), fscope) %}
+{% set fcols = [{'label': tl(request, 'formality.col_language')}, {'label': tl(request, 'formality.col_setting')}, {'label': tl(request, 'formality.col_in_force')}, {'label': tl(request, 'formality.col_from')}] %}
+{% if fscope == 'customer' %}{% set fhelp = tl(request, 'formality.help_customer') %}{% elif fscope == 'project' %}{% set fhelp = tl(request, 'formality.help_project') %}{% else %}{% set fhelp = tl(request, 'formality.help_document') %}{% endif %}
+{% call m.form_section('formality', tl(request, 'formality.title'), fhelp) %}
+  {% if fv.rows %}
+  {% call m.data_table(tl(request, 'formality.title'), fcols) %}
+    {% for r in fv.rows %}
+    <tr>
+      <td>{{ r.locale }}</td>
+      <td>
+        {% if fedit %}
+        <form method="post" action="/formality" class="inline-form">
+          {% include "_csrf.html" %}
+          <input type="hidden" name="scope" value="{{ fscope }}" />
+          <input type="hidden" name="id" value="{{ fobj.id }}" />
+          <input type="hidden" name="target_locale" value="{{ r.locale }}" />
+          <label><span class="sr-only">{{ tl(request, 'formality.title') }} {{ r.locale }}</span>
+            <select name="register">
+              <option value="" {{ lang_attr(request, 'formality.inherit') }}>{{ t(request, 'formality.inherit') }}{% if r.inherited_label %} ({{ r.inherited_label }}){% endif %}</option>
+              {% for o in r.options %}<option value="{{ o.value }}" {% if o.value == r.current %}selected{% endif %}>{{ o.label }}</option>{% endfor %}
+            </select>
+          </label>
+          <button type="submit" class="btn-small">{{ tl(request, 'formality.save') }}</button>
+        </form>
+        {% else %}{{ r.current_label or '-' }}{% endif %}
+      </td>
+      <td>{{ r.resolved_label or tl(request, 'formality.none') }}</td>
+      <td>{% if r.resolved %}{% if r.resolved.source == 'document' %}{{ tl(request, 'formality.source_document') }}{% elif r.resolved.source == 'project' %}{{ tl(request, 'formality.source_project') }}{% else %}{{ tl(request, 'formality.source_customer') }}{% endif %}{% else %}-{% endif %}</td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+  {% else %}
+  <p class="muted small">{{ tl(request, 'formality.empty') }}</p>
+  {% endif %}
+  {% if fedit and fscope == 'customer' and all_locales %}
+  <form method="post" action="/formality" class="form inline-form">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="scope" value="customer" />
+    <input type="hidden" name="id" value="{{ fobj.id }}" />
+    <label>{{ tl(request, 'formality.add_language') }}
+      <select name="target_locale">
+        {% for l in all_locales %}<option value="{{ l.code }}">{{ l.code }} - {{ l.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>{{ tl(request, 'formality.col_setting') }}
+      <select name="register">
+        <option value="formal">formal</option>
+        <option value="informal">informal</option>
+        <option value="auto">auto</option>
+      </select>
+    </label>
+    <button type="submit" class="btn-small">{{ tl(request, 'formality.save') }}</button>
+  </form>
+  {% endif %}
+{% endcall %}

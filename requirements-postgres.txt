@@ -1,0 +1,13 @@
+# Localization OS TMS - OPTIONAL Postgres backend (opt-in extra).
+#
+# The psycopg3 driver for a `postgresql+psycopg://` DATABASE_URL. Kept OUT of the
+# default `requirements.txt` on purpose: psycopg is LGPL-licensed, and the default
+# install must carry NO GPL-family (AGPL/LGPL/GPL) dependency so an enterprise
+# "zero-copyleft" procurement scan of the base install passes (see
+# tests/verify_licenses.py). SQLite stays the zero-config default engine; install
+# this only when opting into Postgres, then run `alembic upgrade head`:
+#     pip install -r requirements.txt -r requirements-postgres.txt
+#
+# The container image (Dockerfile) bundles this so the documented container/
+# enterprise Postgres profile keeps working out of the box.
+psycopg[binary]==3.3.6    # psycopg3 driver for postgresql+psycopg://

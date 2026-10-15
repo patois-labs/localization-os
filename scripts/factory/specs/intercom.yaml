@@ -1,0 +1,74 @@
+# Factory spec for the shipped Intercom Help Center connector (T1, FieldMapStrategy).
+# Written by the connector parity rebuild so `python scripts/factory/generate.py check
+# scripts/factory/specs/intercom.yaml` proves every shared-file touchpoint is wired. The
+# prose fields carry the EXACT shipped wording (check is a whitespace-normalized substring
+# match). The module body is hand-finished (T1 semantics are not generated).
+
+connector:
+  kind: intercom
+  name: Intercom Help Center
+  class_name: IntercomConnector
+  icon: "\U0001F4AC"
+  cat: "Knowledge base / help center"
+  blurb: >-
+    Translate Intercom Help Center articles into any language. Each translation is written
+    into the article's per-locale translated_content map (draft by default) via a
+    GET-merge-PUT of the whole map, so the source article and other locales are never
+    overwritten.
+  docs_url: "https://developers.intercom.com/docs/references/rest-api/api.intercom.io/articles"
+  supports_oauth: false
+  archived: false
+
+  topology: T1
+  auth: [api_key, oauth3lo]
+  api_version: "2.16"
+  rich_text: html
+  regions: fixed-region
+  change_signals:
+    webhook_sig: null
+    poll_field: updated_at
+    stale_flag: null
+    thin_payload: true
+  anti_loop_label: false
+
+  retry_noun: article
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<numeric article id>"
+  api_docstring: >-
+    Translate Intercom Help Center article(s) on the fly into one or more locales, writing
+    each into the article's per-locale translated_content map (T1).
+  article_noun_phrase: "an Intercom"
+  cli_parser_help: >-
+    Translate Intercom Help Center articles into the connection's locales, written into each
+    article's per-locale translated_content map (T1).
+
+  item_units:
+    scan: "your Intercom Help Center articles"
+    becomes: "the article's per-locale translated_content map entry (draft by default)"
+
+  help_row_body: "Translate Intercom article(s). Body: <code>article_ids</code>/<code>article_id</code>, <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Translate Intercom articles (default: the connection's article list). Ids and locale overrides are comma/space separated."
+
+  cli_expected_desc: "translate Intercom Help Center articles into the article's per-locale translated_content map (T1 FieldMapStrategy; POST /api/connectors/{cid}/intercom/translate parity)"
+
+  config_fields:
+    - {name: region, label: "Region", help: "Workspace region, pins the API base (US/EU/AU).", placeholder: "US"}
+    - {name: source_locale, label: "Source locale", help: "The workspace default locale. Never written as a target.", required: false, placeholder: "en"}
+    - {name: author_id, label: "Localization author id", help: "Intercom teammate id stamped as author on written translations.", required: false, placeholder: "123456"}
+    - {name: help_center_id, label: "Help Center id", help: "Limit discovery to one Help Center (optional).", required: false, placeholder: "12345"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated locales to write.", required: false, placeholder: "de, fr, pt-BR"}
+    - {name: publish, label: "Publish after write", help: "1 = published, 0 = draft (default).", required: false, placeholder: "0"}
+  secret_fields:
+    - {name: access_token, label: "Access token", help: "Intercom access token with read + write articles scopes. Sent as Bearer.", secret: true, placeholder: "token"}
+  setup_steps:
+    - "In the Intercom Developer Hub, create an app and grant the Read and list articles + Read and write articles permissions."
+    - "Copy an Access Token and paste it as the access token."
+    - "Set the Region to your workspace region (US / EU / AU)."
+  other_side: >-
+    Change detection polls the article list and gates re-translation on a per-locale
+    source-content hash.

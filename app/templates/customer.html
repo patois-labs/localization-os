@@ -1,0 +1,509 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ customer.name }} - Customer 360{% endblock %}
+{% block content %}
+
+<p><a href="/customers"><span aria-hidden="true">←</span> All customers</a></p>
+
+<div class="project-header has-layout-edit">
+{% set customer_state %}{% if customer.archived_at %}<span class="small muted">(Archived)</span>{% endif %}{% endset %}
+{% set customer_meta %}<p>Customer 360: defaults, language pairs, projects, connectors and vendors for this customer.</p>{% endset %}
+{{ m.page_header(customer.name, meta=customer_meta, status=customer_state) }}
+<button type="button" class="ghost layout-edit-btn" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+
+{% if saved %}<p class="ok small">Saved.</p>{% endif %}
+
+{# AI opt-out (HECVAT DPAI-08): switch AI off for EVERY project of this customer. #}
+<div id="ai-use" class="ai-use">
+  {% if customer.ai_opt_out %}
+  <p class="notice notice-warn"><strong>AI is off for this customer.</strong>
+    This instance's AI engines never process content from this customer's projects,
+    current or future. Content you download, export, or connect to your own AI tools
+    (for example the MCP agent connection) is outside this switch.
+    Projects can only use human-only workflows (human review, TM match, external
+    vendor); TM and glossary lookups still work.</p>
+  {% endif %}
+  {% if can_manage %}
+  <form method="post" action="/customers/{{ customer.id }}/ai-opt-out" class="inline-form">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="ai_opt_out" value="{{ '0' if customer.ai_opt_out else '1' }}" />
+    <button type="submit" class="btn-small">{{ 'Switch AI back on for this customer' if customer.ai_opt_out else 'Switch AI off for all projects of this customer' }}</button>
+  </form>
+  {% endif %}
+</div>
+{% with fscope='customer', fobj=customer %}{% include "_formality.html" %}{% endwith %}
+{# a11y T7: a ?err= error renders once, as a sentence, in the summary at the top of
+   main (base.html + _form_errors.html), never as a raw code here. #}
+
+{# --- archive / unarchive (SPEC-customer-archive): a standing status notice
+     when archived, so it stays visible rather than collapsed --- #}
+{% if customer.archived_at %}
+<div class="error small">
+  This customer is <strong>ARCHIVED</strong> - retired from every picker and the
+  customers list. Its existing projects, connections and bound users keep working.
+  Unarchive it to offer it for selection again.
+  {% if is_admin %}
+  <form method="post" action="/customers/{{ customer.id }}/unarchive" class="inline-form mt">
+    {% include "_csrf.html" %}
+    <button type="submit" class="btn-small">Unarchive customer</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
+{# --- rename / archive / delete (SPEC-rename-delete, SPEC-customer-archive):
+     compact horizontal row of small edit affordances, mirroring project.html --- #}
+<div class="edit-row">
+  {% if can_edit %}
+  <details class="inline-edit">
+    <summary class="btnlink small">Rename customer</summary>
+    <div class="mt">
+      <form method="post" action="/customers/{{ customer.id }}/rename" class="form inline-form">
+        {% include "_csrf.html" %}
+        <input type="text" name="name" aria-label="New name for {{ customer.name }}" value="{{ customer.name }}" required />
+        <button type="submit" class="btn-small">Rename</button>
+      </form>
+    </div>
+  </details>
+  {% endif %}
+  {% if is_admin and not customer.archived_at %}
+  <form method="post" action="/customers/{{ customer.id }}/archive" class="inline-form">
+    {% include "_csrf.html" %}
+    <button type="submit" class="btn-small ghost">Archive customer</button>
+  </form>
+  {% endif %}
+  {% if is_admin %}
+  {# SECURITY: the name rides in a data-* attribute (safe HTML-attribute context) and
+     confirm() runs from a static addEventListener handler at the end of this template -
+     NEVER interpolated into an inline on* JS string (that would be stored XSS: the
+     browser HTML-decodes the escaped quote before the JS parser runs, so a crafted name
+     breaks out). Mirrors the content-type delete confirm below. #}
+  <form method="post" action="/customers/{{ customer.id }}/delete" class="inline-form"
+        data-confirm-delete data-cust-name="{{ customer.name }}">
+    {% include "_csrf.html" %}
+    <button type="submit" class="small danger-btn">Delete customer</button>
+  </form>
+  {% endif %}
+</div>
+</div>
+
+{# --- Preferences + scoped defaults --- #}
+<div id="page-layout" class="page-layout" data-layout-page="customer">
+{% call m.card(layout_key='preferences') %}
+  <h2>Preferences &amp; defaults</h2>
+  {% if can_edit %}
+  <form method="post" action="/customers/{{ customer.id }}/settings" class="form">
+    {% include "_csrf.html" %}
+    <label>Notes
+      <textarea name="notes" rows="2" placeholder="Anything the team should know about this customer…">{{ data.settings.get('notes', '') }}</textarea>
+    </label>
+    <label>Primary contact
+      <input type="text" name="primary_contact" value="{{ data.settings.get('primary_contact', '') }}" placeholder="name@acme.com" />
+    </label>
+    <label>Technical contact
+      <input type="text" name="technical_contact" value="{{ data.settings.get('technical_contact', '') }}" placeholder="localization@acme.com" />
+    </label>
+    <label>Default engine <span class="muted small">(inherited at project creation)</span>
+      <select name="default_provider">
+        <option value="">- none -</option>
+        {% for p in providers %}
+          <option value="{{ p }}" {% if data.default_provider == p %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+        {% if data.default_provider and data.default_provider not in providers %}
+          <option value="{{ data.default_provider }}" selected>{{ data.default_provider }}</option>
+        {% endif %}
+      </select>
+    </label>
+    <label>Default workflow
+      <select name="default_workflow_id">
+        <option value="">- none -</option>
+        {% for w in wf_choices %}
+          <option value="{{ w.id }}" {% if data.default_workflow_id == w.id %}selected{% endif %}>{{ w.name }}{% if w.scope == 'customer' %} (this customer){% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Default segmentation profile
+      <select name="default_segmentation_profile_id">
+        <option value="">- inherit (system default / active ruleset) -</option>
+        {% for p in seg_choices %}
+          <option value="{{ p.id }}" {% if data.default_segmentation_profile_id == p.id %}selected{% endif %}>{{ p.name }}{% if p.customer_id %} (this customer){% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Default content type <span class="muted small">(pre-fills new projects)</span>
+      <select name="default_content_type_id">
+        <option value="">- none (General) -</option>
+        {% for t in ct_choices %}
+          <option value="{{ t.id }}" {% if data.default_content_type_id == t.id %}selected{% endif %}>{{ t.name }}{% if t.customer_id %} (this customer){% else %} (global){% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">Save preferences</button>
+  </form>
+  {% else %}
+    <dl class="kv">
+      <dt>Notes</dt><dd>{{ data.settings.get('notes', '') or '-' }}</dd>
+      <dt>Primary contact</dt><dd>{{ data.settings.get('primary_contact', '') or '-' }}</dd>
+      <dt>Default engine</dt><dd>{{ data.default_provider or '-' }}</dd>
+    </dl>
+  {% endif %}
+{% endcall %}
+
+{# --- Context cards (SPEC-context-metadata phase 1) --- #}
+{% macro ctx_card_form(customer, card, content_type_id, label) %}
+  {% set c = (card.context if card else {}) or {} %}
+  <div class="mt">
+    <p class="small"><strong>{{ label }}</strong>{% if card %} <span class="muted">(card #{{ card.id }})</span>{% endif %}</p>
+    <form method="post" action="/customers/{{ customer.id }}/context-cards" class="form">
+      <fieldset {% if not can_edit %}disabled{% endif %}>
+      {% include "_csrf.html" %}
+      <input type="hidden" name="content_type_id" value="{{ content_type_id or '' }}" />
+      <label>Domain <input type="text" name="domain" value="{{ c.domain or '' }}" placeholder="software UI" /></label>
+      <label>Content kind <input type="text" name="content_kind" value="{{ c.content_kind or '' }}" placeholder="help article" /></label>
+      <label>Audience <input type="text" name="audience" value="{{ c.audience or '' }}" placeholder="end customers, non-technical" /></label>
+      <label>Formality
+        <select name="formality">
+          <option value="" {% if not c.formality %}selected{% endif %}>-</option>
+          {% for f in ["formal", "informal", "neutral"] %}
+            <option value="{{ f }}" {% if c.formality == f %}selected{% endif %}>{{ f }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Tone <input type="text" name="tone" value="{{ (c.tone or []) | join(', ') }}" placeholder="friendly, concise" /></label>
+      <label>Char limit <input type="text" name="char_limit" value="{{ c.char_limit or '' }}" placeholder="(optional)" /></label>
+      <label>Notes <input type="text" name="notes" value="{{ c.notes or '' }}" placeholder="Product names stay in English." /></label>
+      {% if can_edit %}<button type="submit">Save card</button>{% endif %}
+      </fieldset>
+    </form>
+    {% if card and can_edit %}
+      <form method="post" action="/context-cards/{{ card.id }}/delete" class="inline-form">
+        {% include "_csrf.html" %}
+        <input type="hidden" name="back" value="/customers/{{ customer.id }}" />
+        <button type="submit" class="small ghost">Delete card</button>
+      </form>
+    {% endif %}
+  </div>
+{% endmacro %}
+{% call m.card(layout_key='context_cards') %}
+  <h2>Context cards</h2>
+  <p class="help">Standing context cards for this customer. The general card holds
+    brand facts; per-content-type cards hold tone/formality/audience. Most specific wins.</p>
+  {{ ctx_card_form(customer, ctx_cards_by_ct.get(None), '', 'General (all content)') }}
+  {% for t in own_content_types %}
+    {{ ctx_card_form(customer, ctx_cards_by_ct.get(t.id), t.id, t.name + ' content') }}
+  {% endfor %}
+  {% if not own_content_types %}
+    <p class="help">Add content types above to create per-content-type cards.</p>
+  {% endif %}
+{% endcall %}
+
+<div class="grid2">
+{# --- Language pairs (derived + explicit) --- #}
+{% call m.card(layout_key='lang_pairs') %}
+  <h2>Language pairs</h2>
+  {% if data.all_pairs %}
+    {% call m.data_table('Language pairs', [{"label": 'Pair'}, {"label": 'Source'}, {"label": 'In use'}, {"label": 'Declared'}] + ([{"label": '', "actions": true}] if can_edit else [])) %}
+
+        {% for p in data.all_pairs %}
+          <tr>
+            <td>{{ p.label }} <span class="muted small data-mono">{{ p.pair }}</span></td>
+            <td class="data-mono">{{ p.src }}</td>
+            <td>{% if p.pair in data.derived_pairs %}✓ project{% else %}-{% endif %}</td>
+            <td>{% if p.pair in data.active_pairs %}✓ declared{% else %}-{% endif %}</td>
+            {% if can_edit %}
+            <td class="row-actions">
+              {% if p.pair in data.active_pairs %}
+              {% call m.row_menu('lpm-' ~ loop.index, 'More actions for pair ' ~ p.pair) %}
+              <form method="post" action="/customers/{{ customer.id }}/pairs/remove">
+                {% include "_csrf.html" %}
+                <input type="hidden" name="pair" value="{{ p.pair }}" />
+                <button type="submit" role="menuitem" class="rm-danger">Remove pair</button>
+              </form>
+              {% endcall %}
+              {% endif %}
+            </td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+
+{% endcall %}
+  {% else %}
+    {{ m.empty_state("No language pairs yet - they appear automatically from this customer's projects, or add one below.") }}
+  {% endif %}
+  {% if can_edit %}
+  <form method="post" action="/customers/{{ customer.id }}/pairs" class="form inline-form">
+    {% include "_csrf.html" %}
+    <label>Add pair <input type="text" name="pair" placeholder="en-US->fr-FR" /></label>
+    <button type="submit">Add</button>
+  </form>
+  <h3>Bulk import</h3>
+  {% if request.query_params.get('pairs_added') is not none %}
+    <p class="ok small">Imported: {{ request.query_params.get('pairs_added')|int }} added,
+    {{ request.query_params.get('pairs_skipped')|int }} already present (skipped).</p>
+  {% endif %}
+  <p class="help">CSV columns: <code>source_locale,target_locale</code> - one pair per
+  row. Atomic (a bad row rejects the whole file) and idempotent (a pair already
+  present is skipped, not duplicated).</p>
+  <form method="post" action="/customers/{{ customer.id }}/pairs/import"
+        enctype="multipart/form-data" class="form inline-form">
+    {% include "_csrf.html" %}
+    <label>Import CSV <input type="file" name="file" accept=".csv" required /></label>
+    <button type="submit" data-busy-label="{{ t(request, 'busy.importing') }}">Import</button>
+  </form>
+  {% endif %}
+{% endcall %}
+
+{# --- Content types (SPEC-content-types) --- #}
+{% call m.card(layout_key='content_types') %}
+  <h2>Content types</h2>
+  <p class="help">Domain tags (e.g. Marketing, Product UI, Legal) selectable at
+    project creation; they scope this customer's glossaries and TM to the matching content.</p>
+  {% if own_content_types %}
+    {% call m.data_table('Content types', [{"label": 'Name'}, {"label": 'Description'}, {"label": 'In use'}] + ([{"label": '', "actions": true}] if can_edit_content_types else [])) %}
+
+        {% for t in own_content_types %}
+          <tr>
+            <td><span class="cell-primary">{{ t.name }}</span></td>
+            <td class="muted">{{ t.description or '-' }}</td>
+            <td class="muted small">
+              {% if t.id in ct_summaries %}
+              {{ ct_summaries[t.id].references.projects }} project(s),
+              {{ ct_summaries[t.id].references.get('glossaries', 0) }} glossary(ies),
+              {{ ct_summaries[t.id].references.get('connections', 0) }} connection(s),
+              {{ ct_summaries[t.id].references.get('tm_rows', 0) }} TM row(s)
+              {% else %}Counts require access to all projects.{% endif %}
+            </td>
+            {% if can_edit_content_types %}
+            <td class="row-actions">
+              {# SECURITY: the name rides in a data-* attribute (safe HTML-attribute
+                 context) and confirm() runs from a static addEventListener handler at
+                 the end of this template - NEVER interpolated into an inline on* JS
+                 string (that would be stored XSS: the browser HTML-decodes the escaped
+                 quote before the JS parser runs, so a crafted name breaks out). #}
+              {% call m.row_menu('ctcm-' ~ t.id, 'More actions for ' ~ t.name) %}
+              <form method="post" action="/content-types/{{ t.id }}/delete?back=/customers/{{ customer.id }}" class="form inline-form" data-confirm-delete data-ct-name="{{ t.name }}">
+                {% include "_csrf.html" %}
+                <input type="hidden" name="back" value="/customers/{{ customer.id }}" />
+                <button type="submit" role="menuitem" class="rm-danger">Delete</button>
+              </form>
+              {% endcall %}
+            </td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+
+{% endcall %}
+  {% else %}
+    {{ m.empty_state("No content types for this customer yet.") }}
+  {% endif %}
+  {% if can_edit_content_types %}
+  <form method="post" action="/content-types?back=/customers/{{ customer.id }}" class="form inline-form">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="customer_id" value="{{ customer.id }}" />
+    <input type="hidden" name="back" value="/customers/{{ customer.id }}" />
+    <label>New content type <input type="text" name="name" placeholder="Marketing" required /></label>
+    <label>Description <input type="text" name="description" placeholder="(optional)" /></label>
+    <button type="submit">Add</button>
+  </form>
+  {% endif %}
+{% endcall %}
+</div>
+
+{# --- Projects --- #}
+{% call m.card(layout_key='projects', flat=true) %}
+  <h2>Projects <span class="muted small">({{ data.projects | length }})</span></h2>
+  {% if data.projects %}
+    {% call m.data_table('Projects', [{"label": 'Name'}, {"label": 'Status'}, {"label": 'Source'}, {"label": 'Docs'}, {"label": 'TM'}]) %}
+
+        {% for p in data.projects %}
+          <tr>
+            <td><span class="cell-primary"><a href="/projects/{{ p.id }}">{{ p.name }}</a></span></td>
+            <td class="status-cell">{{ m.status_badge(p.status, p.status_label) }}</td>
+            <td class="data-mono">{{ p.source_locale }}</td>
+            <td class="data-mono">{{ p.documents }}</td>
+            <td class="data-mono">{{ p.tm_segments }}/{{ p.tm_fulltext }}</td>
+          </tr>
+        {% endfor %}
+
+{% endcall %}
+  {% else %}
+    {{ m.empty_state("No projects for this customer yet.") }}
+  {% endif %}
+{% endcall %}
+
+<div class="grid2">
+{# --- Connectors --- #}
+{% call m.card(layout_key='connectors') %}
+  <h2>Connectors <span class="muted small">({{ data.connections | length }})</span></h2>
+  {% if data.connections %}
+    {% call m.data_table('Connectors', [{"label": 'Name'}, {"label": 'Kind'}, {"label": 'Scope'}, {"label": 'Status'}, {"label": '', "actions": true}]) %}
+
+        {% for c in data.connections %}
+          <tr>
+            <td><span class="cell-primary">{{ c.name }}</span></td>
+            <td>{{ c.kind }}</td>
+            <td>{% if c.scope == 'customer' %}<span class="chip">this customer</span>{% else %}<span class="muted">global</span>{% endif %}</td>
+            <td class="status-cell">{{ m.status_badge(c.status, c.status) }}</td>
+            <td class="row-actions">
+              {% call m.row_menu('ccm-' ~ c.id, 'More actions for ' ~ c.name) %}
+                <a role="menuitem" href="/connectors/connection/{{ c.id }}">Open connection</a>
+              {% endcall %}
+            </td>
+          </tr>
+        {% endfor %}
+
+{% endcall %}
+  {% else %}
+    <p class="muted">No connectors visible - <a href="/connectors">add one</a> and scope it to this customer.</p>
+  {% endif %}
+{% endcall %}
+
+{# --- Workflows --- #}
+{% call m.card(layout_key='workflows') %}
+  <h2>Workflows <span class="muted small">({{ data.workflows | length }})</span></h2>
+  {% if data.workflows %}
+    {% call m.data_table('Workflows', [{"label": 'Name'}, {"label": 'Scope'}, {"label": '', "actions": true}]) %}
+
+        {% for w in data.workflows %}
+          <tr>
+            <td><span class="cell-primary">{{ w.name }}</span></td>
+            <td>{% if w.customer %}<span class="chip">this customer</span>{% else %}<span class="muted">global</span>{% endif %}</td>
+            <td class="row-actions">
+              {% call m.row_menu('cwm-' ~ w.id, 'More actions for ' ~ w.name) %}
+                <a role="menuitem" href="/workflows/{{ w.id }}">Open workflow</a>
+              {% endcall %}
+            </td>
+          </tr>
+        {% endfor %}
+
+{% endcall %}
+  {% else %}
+    <p class="muted">No workflows - <a href="/workflows/new">create one</a> (global, or scoped to this customer).</p>
+  {% endif %}
+{% endcall %}
+</div>
+
+{# --- Connected vendors (SPEC cross-org linking, customer side) ---
+   Admin-only, mirroring /vendors (the whole vendor surface is operator-admin). The
+   server only assembles linked_vendors/vendor_choices when is_admin, and this block is
+   gated too, so a non-admin never sees the panel. Vendor names are user-controlled
+   cross-org text - rendered through Jinja autoescaping (no data-* / inline-JS path here,
+   so no confirm handler is needed, matching the vendor detail page's plain unlink).
+   ffadmin Wave 3 (LOW-1): the whole LIVE panel (link/unlink forms + /vendors links) is
+   also gated on feature_enabled('vendors') -- with Vendors off it vanishes from this
+   core Customer-360 page, matching the kill-switch law on every other surface. #}
+{% if is_admin and feature_enabled('vendors') %}
+{% call m.card(layout_key='vendors', flat=true) %}
+  <h2>Connected vendors <span class="muted small">({{ linked_vendors | length }})</span></h2>
+  <p class="help">External translation/review vendors linked to this customer - a vendor is
+    only offered on a workflow's external step within a customer it is linked to
+    (fail-closed). A vendor in another org can be connected here by id (cross-org): the
+    link is the buyer-side authorization.</p>
+  {% if linked_vendors %}
+    {% call m.data_table('Connected vendors', [{"label": 'Vendor'}, {"label": 'Status'}, {"label": 'Open legs'}, {"label": 'MSA'}, {"label": '', "actions": true}]) %}
+
+        {% for v in linked_vendors %}
+          <tr>
+            <td>
+              {% if v.out_of_ring %}
+                {{ v.name }} <span class="muted small">(external org)</span>{% if v.archived %} <span class="small muted">(archived)</span>{% endif %}
+              {% else %}
+                <a href="/vendors/{{ v.id }}">{{ v.name }}</a>{% if v.archived %} <span class="small muted">(archived)</span>{% endif %}
+              {% endif %}
+            </td>
+            <td class="data-mono">{{ v.status }}</td>
+            {# Per-vendor facts (open legs FOR THIS CUSTOMER, Wave E-aware; MSA/cost-model
+               presence). Assembled ONLY for an in-ring vendor - a foreign row omits the
+               keys, so it renders a muted dash and never discloses a foreign vendor's
+               operational/cost state. #}
+            <td class="data-mono">{% if 'open_legs' in v %}{{ v.open_legs }}{% else %}<span class="muted">-</span>{% endif %}</td>
+            <td>{% if 'has_rate_card' in v %}{% if v.has_rate_card %}<span class="small">On file</span>{% else %}<span class="muted small">none</span>{% endif %}{% else %}<span class="muted">-</span>{% endif %}</td>
+            <td class="row-actions">
+              {% call m.row_menu('cvm-' ~ v.id, 'More actions for ' ~ v.name) %}
+              <form method="post" action="/customers/{{ customer.id }}/unlink-vendor">
+                {% include "_csrf.html" %}
+                <input type="hidden" name="vendor_id" value="{{ v.id }}" />
+                <button type="submit" role="menuitem" class="rm-danger">Unlink vendor</button>
+              </form>
+              {% endcall %}
+            </td>
+          </tr>
+        {% endfor %}
+
+{% endcall %}
+  {% else %}
+    {{ m.empty_state("No vendors connected to this customer yet.") }}
+  {% endif %}
+  {# F2: the connect form is a PICKER - retired customers are off every picker
+     (SPEC-customer-archive). Only the form is gated; the unlink buttons above stay so a
+     stale link on an archived customer can still be severed. #}
+  {% if not customer.archived_at %}
+  <form method="post" action="/customers/{{ customer.id }}/link-vendor" class="form inline-form">
+    {% include "_csrf.html" %}
+    <label>Connect one of your vendors
+      <select name="vendor_pick">
+        <option value="">- choose a vendor -</option>
+        {% for v in vendor_choices %}<option value="{{ v.id }}">{{ v.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>…or by vendor id <span class="muted small">(another org's vendor)</span>
+      <input type="text" name="vendor_id" placeholder="e.g. 42" size="8" inputmode="numeric" autocomplete="off" />
+    </label>
+    <button type="submit">Connect vendor</button>
+  </form>
+  {% endif %}
+{% endcall %}
+{% endif %}
+
+{# --- TM stats + templates placeholder --- #}
+{% call m.card(layout_key='tm') %}
+  <h2>Translation memory</h2>
+  <p>{{ data.tm_stats.segments }} segment TM · {{ data.tm_stats.fulltext }} full-text TM entries across this customer's projects.</p>
+  <h2 class="mt">Templates</h2>
+  {% if cust_templates %}
+  <ul>
+    {% for t in cust_templates %}
+    <li><strong>{{ t.name }}</strong> <span class="muted">- {{ t.source_locale }} →
+      {{ (t.target_locales or [])|join(', ') }} · {{ 'this customer' if t.customer_id else 'global' }}</span></li>
+    {% endfor %}
+  </ul>
+  <p class="help">Apply one from the <a href="/projects#templates">projects page</a>;
+    save a new one from any project's page.</p>
+  {% else %}
+  <p class="muted">No templates yet - open one of this customer's projects and use
+    <em>Save as template</em>.</p>
+  {% endif %}
+{% endcall %}
+</div>
+{% with layout_page = 'customer' %}{% include "_page_layout.html" %}{% endwith %}
+
+<script nonce="{{ csp_nonce() }}">
+// SECURITY (stored-XSS fix): every delete confirm() here reads the name from a
+// data-* attribute via getAttribute() and concatenates it into the confirm() argument
+// at runtime - never interpolated into an inline on* handler (which the browser would
+// HTML-decode before the JS parser runs, letting a crafted name break out).
+(function () {
+  document.querySelectorAll('form[data-confirm-delete]').forEach(function (f) {
+    f.addEventListener('submit', function (e) {
+      var msg;
+      if (f.hasAttribute('data-cust-name')) {
+        var custName = f.getAttribute('data-cust-name') || 'this customer';
+        msg = 'Delete customer "' + custName + '"? This is refused while ANYTHING '
+          + 'still references it - any project, connection, content type, glossary, '
+          + 'workflow, template, bound user, routing rule, or even recorded audit history '
+          + '- and the refusal lists exactly what is blocking.';
+      } else {
+        var ctName = f.getAttribute('data-ct-name') || 'this content type';
+        msg = 'Delete content type "' + ctName + '"? This is refused while any project, '
+          + 'customer default, glossary, connection, or context card still uses it - '
+          + 'and TM rows written under this type keep it (their provenance), so a type that '
+          + 'has stored translation memory cannot be deleted.';
+      }
+      if (window.LocAsk && window.LocAsk.guard) { window.LocAsk.guard(e, msg); }
+      else { e.preventDefault(); }
+    });
+  });
+})();
+</script>
+
+{% endblock %}

@@ -1,0 +1,12 @@
+{
+    // Editor settings (VS Code style JSON with Comments)
+    "editor.title": "My Workspace",
+    "window.welcome": "Welcome back, {{user}}",
+    /* block
+       comment */
+    "tabSize": 4,
+    "files.exclude": {
+        "**/.git": true,
+    },
+    "messages": ["Saved", "Not saved", ""],
+}

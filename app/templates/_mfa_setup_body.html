@@ -1,0 +1,34 @@
+{# Two-step sign-in set-up body (TOTP train, HECVAT AAAI-17), shared by the forced set-up
+   page after the password (mfa_enroll.html) and the Account page flow (account_mfa.html).
+   Context: qr_svg (Markup from app/web/auth_mfa.py::_qr), secret_text, account,
+   form_action, error_field. The key is always written out as text beside the QR code, so
+   nobody needs to scan (WCAG 1.1.1 / 2.5.x: a camera is never the only way). #}
+{% import "_form_errors.html" as fe %}
+<ol class="mfa-steps">
+  <li>Install an authenticator app on your phone or computer if you do not have one, for
+    example Microsoft Authenticator, Google Authenticator, 1Password, Bitwarden or Aegis.</li>
+  <li>In the app, add an account: scan the QR code below, or choose to enter a setup key and
+    type the key shown under it.</li>
+  <li>Type the 6-digit code the app now shows for this account, then choose
+    <strong>Turn on two-step sign-in</strong>.</li>
+</ol>
+<div class="auth-mfa-setup">
+<figure class="mfa-qr">
+  <div role="img" aria-label="QR code for your authenticator app. The same setup key is written out below.">{{ qr_svg }}</div>
+  <figcaption class="help">Can't scan it? Enter this key in the app instead.</figcaption>
+</figure>
+<dl class="mfa-key">
+  <dt>Setup key</dt>
+  <dd><code class="data-mono" id="mfa-setup-key">{{ secret_text }}</code></dd>
+  <dt>Account name</dt>
+  <dd>{{ account }}</dd>
+  <dt>Type</dt>
+  <dd>Time-based, 6 digits, every 30 seconds</dd>
+</dl>
+</div>
+<form method="post" action="{{ form_action }}" class="form">
+  {% include "_csrf.html" %}
+  <label>6-digit code from your app <input type="text" name="code" id="mfa-enroll-code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" required{{ fe.invalid_attrs(request, 'mfa-enroll-code', 'mfa-enroll-help', when=(error_field|default('') == 'mfa-enroll-code')) }} /></label>
+  <p class="help" id="mfa-enroll-help">The code proves the app is set up correctly. Spaces are ignored.</p>
+  <button type="submit" data-busy-label="{{ t(request, 'busy.checking') }}">Turn on two-step sign-in</button>
+</form>

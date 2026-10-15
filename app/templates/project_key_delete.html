@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Delete key{% endblock %}
+{% block content %}
+<div class="project-confirmation">
+
+{% set confirmation_title %}Delete key: <span class="data-mono">{{ key.name }}</span>{% endset %}
+{{ m.page_header(confirmation_title) }}
+<div class="confirmation-notice">
+  <p class="muted">This is a SOFT delete. The key stops appearing in the grid and in
+  exports, and every sync consumer receives a tombstone for it on the next poll -
+  but its translations are kept, so it can be restored if this was a mistake.</p>
+</div>
+
+<section class="card">
+  <h2>What happens</h2>
+  <table class="table">
+    <tbody>
+      <tr><td>namespace</td><td class="data-mono">{{ key.namespace or '(default)' }}</td></tr>
+      <tr><td>context</td><td class="data-mono">{{ key.context or '-' }}</td></tr>
+      <tr><td>translations kept (restorable)</td>
+          <td><strong>{{ key['values']|length }}</strong> locale(s)</td></tr>
+      <tr><td>delta feed</td><td>one <code>key</code> / <code>deleted</code> entry</td></tr>
+      <tr><td>future translate runs</td><td>this key is excluded</td></tr>
+    </tbody>
+  </table>
+  {% if can_write %}
+  <form method="post" action="/projects/{{ project.id }}/keys/{{ key.id }}/delete" class="form mt">
+    {% include "_csrf.html" %}
+    <label>Type the key name <strong class="data-mono">{{ key.name }}</strong> to confirm
+      <input type="text" name="confirm_name" autocomplete="off" required /></label>
+    <button class="danger-btn" type="submit">Delete this key</button>
+  </form>
+  {% else %}
+  <p class="muted">Your role cannot delete keys.</p>
+  {% endif %}
+  <p class="mt"><a class="btnlink" href="/projects/{{ project.id }}/keys">Cancel</a></p>
+</section>
+
+</div>
+{% endblock %}

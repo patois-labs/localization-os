@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Export blocked{% endblock %}
+{% block content %}
+
+{# Issue #593: what a browser sees when a delivery safety check refuses a document export.
+   The /api route and the CLI keep the exact JSON; this page is the web twin. Anchor tests
+   on the ids below (export-refusal, export-refusal-why, export-refusal-items,
+   export-refusal-actions, export-act-*), never on the copy. #}
+
+<p><a href="/documents/{{ doc.id }}?locale={{ locale|urlencode }}" class="back"><span aria-hidden="true">←</span> {{ filename }}</a></p>
+
+<section class="review-intro">
+  {{ m.page_header('Export blocked - ' ~ filename ~ ' (' ~ locale ~ ')') }}
+</section>
+
+<section class="card" id="export-refusal" aria-labelledby="export-refusal-title">
+  <div class="notice notice-warn" role="status" aria-live="polite" id="export-refusal-status">
+    <h2 id="export-refusal-title" tabindex="-1" autofocus>{{ headline }}</h2>
+    <p id="export-refusal-plain">{{ plain }}</p>
+  </div>
+
+  <h3 id="export-refusal-why-h">Why delivery is blocked</h3>
+  <p id="export-refusal-why">{{ why }}</p>
+  <details class="mt" id="export-refusal-raw">
+    <summary>Exact message from the check</summary>
+    <p class="data-mono">{{ check_message }}</p>
+  </details>
+
+  {% if items %}
+  <h3 id="export-refusal-items-h" class="mt">{{ items_heading }}</h3>
+  {% call m.data_table(items_heading, [{'label': items_unit}, {'label': 'What is wrong'}, {'label': 'Source'}, {'label': 'Current target'}]) %}
+      {% for it in items %}
+      <tr id="export-refusal-item-{{ loop.index0 }}">
+        <td class="data-mono">{{ it.label }}</td>
+        <td>{{ it.problem }}</td>
+        <td{{ source_locale|langattrs }}>{{ (it.source or '')|truncate(160) }}</td>
+        <td{{ locale|langattrs }}>{{ (it.target or '')|truncate(160) }}</td>
+      </tr>
+      {% endfor %}
+  {% endcall %}
+  <p class="muted" id="export-refusal-items-more">
+    {% if items_more %}Showing the first {{ items|length }} of {{ items_total }}. The rest are in the full list.{% else %}Showing all {{ items|length }}.{% endif %}
+  </p>
+  {% endif %}
+
+  <h3 class="mt" id="export-refusal-steps-h">What to do</h3>
+  <ol id="export-refusal-steps">
+    {% for st in steps %}<li>{{ st }}</li>{% endfor %}
+  </ol>
+
+  <h3 class="mt" id="export-refusal-actions-h">Actions</h3>
+  <div class="row-actions" id="export-refusal-actions" role="group" aria-labelledby="export-refusal-actions-h">
+    {% if review_url %}
+    <a class="btn-primary" id="export-act-review" href="{{ review_url }}">Open Post Editor</a>
+    {% endif %}
+    {% if paragraphs_url %}
+    <a class="btn-primary" id="export-act-paragraphs" href="{{ paragraphs_url }}">View paragraphs</a>
+    {% endif %}
+    {% if empties_url %}
+    <a class="btn-primary" id="export-act-empties" href="{{ empties_url }}">Review empty targets</a>
+    {% endif %}
+    {% if export_anyway_url and can_override %}
+    <a class="btnlink" id="export-act-anyway" href="{{ export_anyway_url }}">{{ anyway_label }}</a>
+    {% endif %}
+    <a class="btnlink" id="export-act-back" href="/documents/{{ doc.id }}?locale={{ locale|urlencode }}">Back to document</a>
+  </div>
+  {% if export_anyway_url and can_override %}
+  <p class="muted mt" id="export-anyway-note">{{ anyway_note }}</p>
+  {% elif export_anyway_url_offered %}
+  <p class="muted mt" id="export-anyway-note">Your role cannot override this check. Ask someone with edit rights (translator or above).</p>
+  {% elif not_bypassable %}
+  <p class="muted mt" id="export-nobypass-note">This check cannot be bypassed. Once the items above are resolved it clears by itself and the export works.</p>
+  {% endif %}
+</section>
+
+{% endblock %}

@@ -1,0 +1,1036 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_form_errors.html" as fe %}
+{% block title %}Setup AI{% endblock %}
+{# a11y T7: ?key_error= (the /setup-ai page alias), ?engine_error= and ?spend_error= render
+   once, as a sentence, in the page error summary (the route passes the latter two as err);
+   the summary links to the Engines card or the spend cap field they came from. #}
+{% block error_summary %}{{ fe.error_summary(request, err|default(none), field=('spend-cap-input' if spend_error else none), anchor=('engines' if engine_error else none)) }}{% endblock %}
+{% block content %}
+
+<div class="admin-ai-page">
+{% set heading %}Setup AI <a class="help-hint" href="/help/engines" title="Engines and providers guide" aria-label="Engines and providers guide">?</a>{% endset %}
+{% set actions %}
+<button type="button" class="ghost layout-edit-btn layout-edit-inline" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+{% endset %}
+{% set intro %}
+  <p class="muted">Translation engines and defaults. Cloud engines go <em>live</em> once you add an
+  API key; the <strong>local engine</strong> stays on your hardware. With none set, translation is
+  refused and never faked. To try the app offline, choose <strong>Mock</strong> under Defaults:
+  it returns clearly labelled placeholder text, not real translations.</p>
+  <p class="help">Only administrators can register, edit or enable engines, set provider keys, or configure and probe a local server. Linguists can use configured engines and tune workflows and prompts.</p>
+  {% if saved %}<p class="ok">Settings saved.</p>{% endif %}
+{% endset %}
+{{ m.page_header(heading, meta=intro, secondary=actions) }}
+<div class="admin-ai-layout">
+<nav class="admin-ai-index" aria-label="Setup AI">
+  <a href="#ai-cloud">Cloud engines</a>
+  <a href="#ai-local">Local / self-hosted engine</a>
+  <a href="#engines">Engines</a>
+  <a href="#quality-judges">Quality judges</a>
+  <a href="#ai-defaults">Defaults</a>
+  <a href="#ai-spend">Spend cap</a>
+  <a href="#ai-assist_limits">Ask and Draft allowance</a>
+  <a href="#ai-egress">Mock-egress guard</a>
+  <a href="#ai-tm_match">TM matching &amp; locks</a>
+</nav>
+<div id="page-layout" class="page-layout" data-layout-page="setup_ai">
+<section class="card" data-card="cloud" id="ai-cloud"
+         data-spotlight-anchor="provider"
+         data-spotlight-title="{{ t(request, 'page.onboarding.step_provider_title') }}"
+         data-spotlight-desc="{{ t(request, 'page.onboarding.spot_provider_target') }}">
+  <h2>Cloud engines</h2>
+  <p class="help">Add a provider's API key to go <strong>live</strong>. Stored
+    <strong>encrypted</strong>; overrides <code>.env</code> immediately, no restart. Only the last 4
+    characters are shown. Leave blank to use <code>.env</code>.</p>
+  <div class="tilegrid">
+    {% for p in cloud_providers %}
+      {% set ck = cloud_keys[p] %}
+      <div class="tile" style="text-align:left">
+        <div class="tile-top"><span class="tile-icon" aria-hidden="true">✨</span>
+          {{ m.status_badge('active' if live[p] else 'needs_review', 'live' if live[p] else 'not live') }}</div>
+        <strong>{{ p|capitalize }}</strong>
+        <div class="help">model: {{ models[p] }}</div>
+        {# Masked fingerprint (last 4 only) + source badge. The full key is NEVER in the HTML. #}
+        <div class="help mt">
+          {% if ck.last4 %}key: <code>&bullet;&bullet;&bullet;&bullet;{{ ck.last4 }}</code>{% else %}key: <code>(none)</code>{% endif %}
+        </div>
+        <div class="small">
+          {% if ck.source == 'app' %}{{ m.status_badge('active', 'key set in app') }}
+          {% elif ck.source == 'env' %}<span class="badge muted-badge">key from .env</span>
+          {% else %}{{ m.status_badge('needs_review', 'no key') }}{% endif %}
+        </div>
+        {% if can_inspect_judges %}
+        <form method="post" action="/setup-ai/keys/{{ p }}" class="form mt">
+          {% include "_csrf.html" %}
+          <label class="small">{{ 'Replace' if ck.stored else 'Set' }} API key
+            {# Renders EMPTY always - the key must never appear in a value attribute. #}
+            <input type="password" name="api_key" value="" autocomplete="new-password"
+                   placeholder="paste {{ env_keys[p] }}" /></label>
+          <div class="row-actions">
+            <button type="submit" class="small">Save key</button>
+            {% if ck.stored %}
+            {# Remove is only for an APP-stored key; it falls back to the .env key if present. #}
+            <button type="submit" class="small ghost danger-btn"
+                    formaction="/setup-ai/keys/{{ p }}/delete"
+                    data-action-confirm="Remove the app-stored {{ p|capitalize }} key?{{ ' Falls back to the .env key.' if ck.has_env else ' Translation with this provider will be refused until a key is set.' }}">Remove</button>
+            {% endif %}
+          </div>
+        </form>
+        {% endif %}
+        <button type="button" class="small ghost mt" data-busy-label="{{ t(request, 'busy.testing') }}" data-action="test-engine" data-provider="{{ p }}">Test</button>
+        <div class="testout muted small"></div>
+      </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="card" data-card="local" id="ai-local">
+  <div class="row-between">
+    <h2><span aria-hidden="true">🖥</span> Local / self-hosted engine</h2>
+    {{ m.status_badge('active' if local_reachable else 'needs_review', 'reachable' if local_reachable else ('configured' if local.base_url else 'not configured')) }}
+  </div>
+  <p class="muted">Point at any <strong>OpenAI-compatible</strong> server on your LAN
+  (<strong>LM Studio</strong>, Ollama, vLLM, llama.cpp) to run models locally. When it's the default
+  provider, <strong>no document leaves the network</strong>.</p>
+
+  <p class="help">Local engines are spend-exempt only on loopback or private network addresses.
+    A public or unresolved host is priced and counts against the spend cap, even with kind Local.</p>
+  {% if can_inspect_judges %}
+  <form method="post" action="/setup-ai/local" class="form">
+    {% call m.form_section('ai-local-fields', 'Local / self-hosted engine') %}
+    {% include "_csrf.html" %}
+    <div class="grid2">
+      <label>Server base URL
+        <input type="text" name="base_url" id="lbase" value="{{ local.base_url }}"
+               placeholder="http://your-server:1234" />
+      </label>
+      <label>API key <span class="muted">(LM Studio ignores it)</span>
+        <span class="badge">{{ local.key_status }}</span>
+        <input type="password" name="api_key" id="lkey" value="" autocomplete="new-password" placeholder="Blank retains saved key" />
+        <span class="muted small">Moving the base URL to another server clears the saved key unless you enter one.</span>
+        </label>
+        <label><input type="checkbox" name="clear_key" value="1" /> Clear key</label>
+    </div>
+    <label>Model
+      <span class="muted small">- pick from the models loaded on your server (fetched automatically; no need to type the exact id)</span>
+      <select name="local_model" id="lmodelSelect">
+        {% if local.model %}<option value="{{ local.model }}" selected>{{ local.model }}</option>{% endif %}
+        {% if not local.model %}<option value="" selected>- fetching your server's models… -</option>{% endif %}
+      </select>
+      <input aria-label="Model id" type="text" name="local_model" id="lmodelManual" value="{{ local.model }}"
+             placeholder="exact model id" disabled style="display:none" />
+    </label>
+    <input type="hidden" name="local_sampling_form" value="1" />
+    <label>Temperature
+      <input type="number" name="local_temperature" step="any" min="0" max="2"
+             value="{{ local.temperature }}" />
+      <span class="muted small">Sampling for translate / authoring / image calls; lower = more repeatable.</span>
+    </label>
+    <label>Judge temperature
+      <input type="number" name="local_judge_temperature" step="any" min="0" max="2"
+             value="{{ local.judge_temperature }}" />
+      <span class="muted small">Sampling for LQA / QE / verification calls; 0.0 keeps verdicts stable.</span>
+    </label>
+    <label>Seed
+      <input type="number" name="local_seed" step="1" min="0" value="{{ local.seed }}" />
+      <span class="muted small">Blank sends no seed (the server keeps its own behavior).</span>
+    </label>
+    <label><input type="checkbox" name="local_model_warmup" value="1"{% if local.model_warmup %} checked{% endif %} /> Warm models at run start
+      <span class="muted small">On a llama.cpp router-mode server, preload the local-engine models a workflow uses (at most 3, in the background).</span>
+    </label>
+    <div class="row-actions">
+      <button type="button" class="small ghost" data-busy-label="{{ t(request, 'busy.fetching_models') }}" data-csp-handler="csp-1"><span aria-hidden="true">↻</span> Fetch models</button>
+      <button type="button" class="small ghost" data-busy-label="{{ t(request, 'busy.testing') }}" data-csp-handler="csp-2"><span aria-hidden="true">⚡</span> Test connection</button>
+      <button type="button" class="small ghost" data-csp-handler="csp-3"><span id="manualToggleLabel"><span aria-hidden="true">✎</span> Type id manually</span></button>
+      <button type="submit" class="small">Save local engine</button>
+    </div>
+    <div id="localout" class="muted small"></div>
+    {% endcall %}
+  </form>
+  {% endif %}
+  <p class="help">Run start warms the local-engine models a workflow uses on a llama.cpp router-mode server
+  (at most 3, in the background, skipped on other servers). Turn it off with the checkbox above or
+  <code>config set local_model_warmup 0</code>.</p>
+  <p class="help">The path <code>/v1</code> is added automatically. Tip: in LM Studio, start
+  the local server and enable network access so other machines on the LAN can reach it.</p>
+</section>
+
+<section class="card" data-card="engines">
+  <div class="row-between">
+    <h2 id="engines"><span aria-hidden="true">🔌</span> Engines</h2>
+    <span class="badge muted-badge">{{ engines|length }} configured</span>
+  </div>
+  <p class="muted">Named <strong>MT/LLM engines</strong>: DeepL, Google, Microsoft, Amazon Translate
+  (neural MT), Cohere (LLM), Lara (adaptive MT, experimental), OpenAI-compatible hosts, or extra local
+  servers. Each becomes an <code>engine:&lt;id&gt;</code> option for
+  projects and workflow steps. Neural-MT engines can't run prompt-based steps.
+  <strong>Quality judges</strong> (Jev by TypeSafe, or a Jev-compatible server you run such as SemIf)
+  are engines too, but they only score: they appear only in a workflow step's QE judge engine picker.
+  <a href="/help#engine-parameters">Engine parameters <span aria-hidden="true">&rarr;</span></a></p>
+  {% if engine_saved %}<p class="ok">Engine saved.</p>{% endif %}
+  {% if engine_warning %}<p class="muted"><strong>Warning:</strong> {{ engine_warning }}</p>{% endif %}
+
+  {# Two groups: translation engines (LLM / NMT), then the Quality judges (Jev kinds),
+     which score segments for a step's QE gate and never translate. #}
+  {% set _tr_engines = engines | rejectattr('judge') | list %}
+  {% set _judge_engines = engines | selectattr('judge') | list %}
+  {% for _group_title, _group_rows, _group_judge in [('Translation engines', _tr_engines, false), ('Quality judges', _judge_engines, true)] %}
+  {% if _group_rows or _group_judge %}
+  <h3 class="mt" id="{{ 'quality-judges' if _group_judge else 'translation-engines' }}">{{ _group_title }}</h3>
+  {% if _group_judge %}
+  <p class="muted small">Typed quality judges (Jev by TypeSafe, or a Jev-compatible server you run
+    such as SemIf) that score each segment for a workflow step's <strong>QE routing gate</strong>.
+    They never translate: pick one as a step's <em>QE judge engine</em>. Hosted Jev is priced and
+    counts against the spend cap; a local server is free. <strong>Test</strong> (under a card's Edit)
+    lists the judge's models and asks one tiny question; <strong>Inspect</strong> shows what it is
+    asked, how it decides, and lets you <strong>Try it</strong> on one segment.
+    <a href="/help#quality-judges">Quality judges <span aria-hidden="true">&rarr;</span></a>
+    <a href="/help#jev-inspector">Inspect a judge <span aria-hidden="true">&rarr;</span></a>
+    <a href="/help#jev-compatible-server">Run your own (SemIf, Tailscale) <span aria-hidden="true">&rarr;</span></a>
+    <a href="/help#qe-autofix">Auto-fix failures <span aria-hidden="true">&rarr;</span></a></p>
+  {% if jev_env_import %}
+  {# Shown only when TYPESAFE_API_KEY is set on this install and no hosted Jev engine
+     exists yet. The key is moved into an encrypted engine and never shown. #}
+  <form method="post" action="/setup-ai/jev/import-env" class="form row-actions">
+    {% include "_csrf.html" %}
+    <button type="submit" class="small">Create a Jev engine from TYPESAFE_API_KEY</button>
+    <span class="muted small">Uses the key already set on this install; it is stored
+      encrypted and never shown.</span>
+  </form>
+  {% endif %}
+  {% endif %}
+  {% if _group_rows %}
+  <div class="tilegrid">
+    {% for e in _group_rows %}
+      <div class="tile" style="text-align:left">
+        <div class="tile-top">
+          <span class="tile-icon" aria-hidden="true">{{ '⚖' if e.judge else '🔌' }}</span>
+          {{ m.status_badge('active' if engine_live[e.provider_name] else 'needs_review', 'live' if engine_live[e.provider_name] else 'not live') }}
+        </div>
+        <strong>{{ e.name }}</strong>
+        <div class="help">{{ engine_kind_labels[e.kind] or e.kind }}</div>
+        {% if e.model %}<div class="help">model: {{ e.model }}</div>{% endif %}
+        <div class="help">key: {{ '(set)' if e.key_set else '(none)' }}
+          · {{ 'enabled' if e.enabled else 'disabled' }}
+          · <code>{{ e.provider_name }}</code></div>
+        {% if e.judge and can_inspect_judges %}
+        {# Jev Train C: what this judge is asked, how it decides, a live try, and the
+           prompt the post-editor would get. Admin-only, like the page behind it. #}
+        <div class="row-actions mt">
+          <a class="ghost small" href="/setup-ai/engines/{{ e.id }}/inspect">Inspect</a>
+        </div>
+        {% endif %}
+        {% if can_inspect_judges %}
+        <details class="mt">
+          <summary class="small">Edit</summary>
+          <form method="post" action="/setup-ai/engines/{{ e.id }}" class="form" data-eid="{{ e.id }}">
+            {% include "_csrf.html" %}
+            <label>Name <input type="text" name="name" value="{{ e.name }}" /></label>
+            {% if e.kind == 'jev' %}
+            {# Hosted Jev: the URL is pinned so the key only ever reaches TypeSafe. #}
+            <p class="help">Base URL: <code>{{ e.base_url }}</code> (fixed for hosted Jev)</p>
+            {% else %}
+            <label>Base URL <input type="text" name="base_url" id="eng-base-{{ e.id }}" value="{{ e.base_url }}"
+                   placeholder="{{ 'http://127.0.0.1:8077' if e.kind == 'jev_local' else '(kind default)' }}" /></label>
+            {% if e.url_credentials_stored %}
+            <p class="help">This URL has stored credentials; move them to the API key field. Saving without changing this URL keeps the stored connection.</p>
+            {% endif %}
+            {% endif %}
+            {% if e.kind == 'jev' %}
+            <input type="hidden" name="model" value="{{ e.model }}" />
+            {% elif e.kind == 'jev_local' %}
+            <label>Model <input type="text" name="model" autocomplete="off" value="{{ e.model }}" placeholder="jev-latest" /></label>
+            {% elif e.kind in ('local', 'openai_compatible') %}
+            {# Listable kinds: select+manual pair (same name="model"; only the enabled
+               one submits). Fetch lists this host's models from the base URL/key above. #}
+            <label>Model
+              <select name="model" class="engmodel-select" disabled style="display:none"></select>
+              <input aria-label="Model id" type="text" name="model" autocomplete="off" class="engmodel-manual" value="{{ e.model }}" placeholder="exact model id" />
+              <span class="row-actions">
+                <button type="button" class="small ghost" data-busy-label="{{ t(request, 'busy.fetching_models') }}" data-csp-handler="csp-4"><span aria-hidden="true">↻</span> Fetch models</button>
+                <button type="button" class="small ghost" data-csp-handler="csp-5"><span class="engmodel-toggle-label"><span aria-hidden="true">☰</span> Pick from list</span></button>
+              </span>
+              <span class="engmodel-out muted small"></span></label>
+            {% else %}
+            <label>Model <input type="text" name="model" autocomplete="off" value="{{ e.model }}" /></label>
+            {% endif %}
+            <label>API key <span class="muted">(blank = keep current; a saved key is cleared if the base URL moves to another server)</span>
+              <input type="password" autocomplete="new-password" name="api_key" value="" placeholder="{{ '••••••' if e.key_set else '' }}" /></label>
+            <details><summary>Remove key</summary>
+              <p>Removal takes effect when you Save. Hosted Jev will be disabled.</p>
+              <label class="checkbox"><input type="checkbox" name="clear_api_key" value="1" /> Confirm removal of the stored API key</label>
+              {% if e.kind in ('lara', 'amazon') %}
+              <label class="checkbox"><input type="checkbox" name="clear_access_key_secret" value="1" /> Confirm removal of the stored access key secret</label>
+              {% endif %}
+            </details>
+            {% if e.kind == 'deepl' %}
+            <label>Model type <input type="text" name="model_type" value="{{ e.config.model_type or '' }}"
+                   placeholder="latency_optimized | quality_optimized | prefer_quality_optimized" /></label>
+            <label>Formality <input type="text" name="formality" value="{{ e.config.formality or '' }}"
+                   placeholder="default | more | less | prefer_more | prefer_less" /></label>
+            <label>Context <span class="muted">(steering text; a next-gen model type is selected automatically when this is set and Model type is left blank)</span>
+              <input type="text" name="context" value="{{ e.config.context or '' }}"
+                   placeholder="e.g. a product help centre" /></label>
+            <label>Custom instructions <span class="muted">(one per line, ≤10; a next-gen model type is selected automatically when this is set and Model type is left blank)</span>
+              <textarea name="custom_instructions" rows="3"
+                   placeholder="Keep the tone formal.&#10;Do not translate product names.">{{ e.config.custom_instructions|join('\n') if e.config.custom_instructions else '' }}</textarea></label>
+            {% elif e.kind == 'microsoft' %}
+            <label>Region <input type="text" name="region" value="{{ e.config.region or '' }}"
+                   placeholder="eastus (regional resource)" /></label>
+            {% elif e.kind == 'lara' %}
+            {% if e.experimental %}
+            <p class="help">⚠ EXPERIMENTAL - Lara request signing needs live
+              verification before production use. Auth is a key PAIR.</p>
+            {% endif %}
+            <label>Access key secret <span class="muted">(blank = keep current)</span>
+              <input type="password" autocomplete="new-password" name="access_key_secret" value=""
+                     placeholder="{{ '••••••' if e.config.access_key_secret_set else '' }}" /></label>
+            <label>Style <input type="text" name="style" value="{{ e.config.style or '' }}"
+                   placeholder="fluid | faithful | creative" /></label>
+            <label>Instructions <span class="muted">(one per line)</span>
+              <textarea name="instructions" rows="3"
+                   placeholder="Keep the tone formal.">{{ e.config.instructions|join('\n') if e.config.instructions else '' }}</textarea></label>
+            <label>Adapt to (TM ids) <input type="text" name="adapt_to" value="{{ e.config.adapt_to or '' }}"
+                   placeholder="comma-separated TM ids" /></label>
+            <label>Glossaries (ids) <input type="text" name="glossaries" value="{{ e.config.glossaries or '' }}"
+                   placeholder="comma-separated glossary ids" /></label>
+            {% elif e.kind == 'amazon' %}
+            <label>Secret access key <span class="muted">(blank = keep current)</span>
+              <input type="password" autocomplete="new-password" name="access_key_secret" value=""
+                     placeholder="{{ '••••••' if e.config.access_key_secret_set else '' }}" /></label>
+            <label>Region <span class="muted">(required)</span>
+              <input type="text" name="region" value="{{ e.config.region or '' }}"
+                   placeholder="us-east-1" /></label>
+            <label>Formality <input type="text" name="formality" value="{{ e.config.formality or '' }}"
+                   placeholder="FORMAL | INFORMAL (supported languages only)" /></label>
+            {% elif e.kind == 'openai_compatible' %}
+            <p class="help">Base URL is required (e.g. <code>https://openrouter.ai/api</code>,
+              <code>https://api.deepseek.com</code>) and Model is the host's model id.</p>
+            {% elif e.kind == 'jev' %}
+            {# Hosted Jev takes the same floors + timeout as a local server (web/CLI parity with
+               `engine update --config`); only the timeout default differs (10 s hosted). #}
+            <p class="help">Blank floors use the install defaults.</p>
+            <label>Confidence floor <span class="muted">(0.5 to less than 1.0; blank = install default)</span>
+              <input type="text" name="confidence_floor" value="{{ e.config.confidence_floor if e.config.confidence_floor is not none else '' }}" placeholder="0.6" /></label>
+            <label>Meaning-changed floor <span class="muted">(0 to 1; blank = install default)</span>
+              <input type="text" name="meaning_floor" value="{{ e.config.meaning_floor if e.config.meaning_floor is not none else '' }}" placeholder="0.8" /></label>
+            <label>Timeout, seconds <span class="muted">(blank = 10)</span>
+              <input type="text" name="timeout_s" value="{{ e.config.timeout_s if e.config.timeout_s is not none else '' }}" placeholder="10" /></label>
+            {% elif e.kind == 'jev_local' %}
+            <p class="help">The API key is optional when the server runs on this machine; set one
+              on the server whenever it is reachable over the network. Blank floors use the
+              install defaults.</p>
+            <label>Confidence floor <span class="muted">(0.5 to less than 1.0; blank = install default)</span>
+              <input type="text" name="confidence_floor" value="{{ e.config.confidence_floor if e.config.confidence_floor is not none else '' }}" placeholder="0.6" /></label>
+            <label>Meaning-changed floor <span class="muted">(0 to 1; blank = install default)</span>
+              <input type="text" name="meaning_floor" value="{{ e.config.meaning_floor if e.config.meaning_floor is not none else '' }}" placeholder="0.8" /></label>
+            <label>Timeout, seconds <span class="muted">(blank = 30)</span>
+              <input type="text" name="timeout_s" value="{{ e.config.timeout_s if e.config.timeout_s is not none else '' }}" placeholder="30" /></label>
+            {% elif e.kind == 'local' %}
+            <label>Max parallel jobs <span class="muted">(1 to 64; blank = no per-engine limit)</span>
+              <input type="text" inputmode="numeric" name="max_parallel_jobs" value="{{ e.config.max_parallel_jobs if e.config.max_parallel_jobs is not none else '' }}" placeholder="4" /></label>
+            <p class="help">How many translate jobs run on this engine at once. Never more than the
+              server's job-worker cap (<code>LOC_TMS_JOB_WORKERS</code>, default 2); each running job adds CPU load here.</p>
+            {% endif %}
+            <label class="checkbox">
+              <input type="checkbox" name="enabled" value="1" {% if e.enabled %}checked{% endif %}
+                     style="width:auto" /> Enabled</label>
+            <div class="row-actions">
+              <button type="submit" class="small">Save</button>
+              <button type="button" class="small ghost" data-busy-label="{{ t(request, 'busy.testing') }}" data-action="test-engine-row" data-id="{{ e.id }}"><span aria-hidden="true">⚡</span> Test</button>
+            </div>
+            <div class="testout muted small"></div>
+          </form>
+          <form method="post" action="/setup-ai/engines/{{ e.id }}/delete" class="form"
+                data-action-confirm="Delete engine {{ e.name }}?">
+            {% include "_csrf.html" %}
+            <button type="submit" class="small ghost danger-btn">Delete engine</button>
+          </form>
+        </details>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+  {% elif _group_judge %}
+  {% set no_judges %}No quality judges yet. Add one below: kind <em>Jev (TypeSafe, hosted)</em> with
+    your TypeSafe key, or <em>Jev-compatible local server</em> with its URL.{% endset %}
+  {{ m.empty_state(no_judges) }}
+  {% endif %}
+  {% endif %}
+  {% endfor %}
+  {% if not engines %}
+  {{ m.empty_state('No engines yet - add one below.') }}
+  {% endif %}
+
+  {% if can_inspect_judges %}
+  <details class="mt">
+    <summary><strong>+ Add engine</strong></summary>
+    <form method="post" action="/setup-ai/engines" class="form" id="engineAddForm">
+      {% include "_csrf.html" %}
+      <div class="grid2">
+        <label>Name <input type="text" name="name" required placeholder="My DeepL" /></label>
+        <label>Kind
+          <select name="kind" id="engineKind" data-csp-handler="csp-6">
+            {% for k in engine_kinds if k not in engine_judge_kinds %}<option value="{{ k }}">{{ engine_kind_labels[k] or k }}</option>{% endfor %}
+            <optgroup label="Quality judges (QE gate only)">
+              {% for k in engine_kinds if k in engine_judge_kinds %}<option value="{{ k }}">{{ engine_kind_labels[k] or k }}</option>{% endfor %}
+            </optgroup>
+          </select>
+        </label>
+      </div>
+      <div class="grid2">
+        <label id="engBaseUrl">Base URL <span class="muted" id="engBaseUrlHint">(blank = default)</span>
+          <input type="text" name="base_url" id="eng-base-new" placeholder="https://api.deepl.com" /></label>
+        {# Model: a select+manual pair sharing name="model" (only the ENABLED one
+           submits). For local / openai_compatible kinds the Fetch tools list the
+           host's models; for other kinds the tools hide and the plain manual input
+           is used. The select stays disabled (won't submit) until a Fetch. #}
+        <label id="engModel">Model <span class="muted">(LLM/local; Jev: blank = jev-latest)</span>
+          <select name="model" class="engmodel-select" disabled style="display:none"></select>
+          <input aria-label="Model id" type="text" name="model" autocomplete="off" class="engmodel-manual" placeholder="command-r / qwen3" />
+          <span class="row-actions" id="engModelTools" style="display:none">
+            <button type="button" class="small ghost" data-busy-label="{{ t(request, 'busy.fetching_models') }}" data-csp-handler="csp-7"><span aria-hidden="true">↻</span> Fetch models</button>
+            <button type="button" class="small ghost" data-csp-handler="csp-8"><span class="engmodel-toggle-label"><span aria-hidden="true">☰</span> Pick from list</span></button>
+          </span>
+          <span class="engmodel-out muted small"></span></label>
+      </div>
+      <label>API key <input type="password" autocomplete="new-password" name="api_key" placeholder="paste the engine's key" /></label>
+      <label id="engModelType" style="display:none">Model type (DeepL)
+        <input type="text" name="model_type" placeholder="latency_optimized | quality_optimized | prefer_quality_optimized" /></label>
+      <label id="engFormality" style="display:none">Formality (DeepL)
+        <input type="text" name="formality" placeholder="default | more | less" /></label>
+      <label id="engContext" style="display:none">Context (DeepL) <span class="muted">(steering text;
+        a next-gen model type is selected automatically when this is set and Model type is left blank)</span>
+        <input type="text" name="context" placeholder="e.g. a product help centre" /></label>
+      <label id="engInstructions" style="display:none">Custom instructions (DeepL) <span class="muted">(one
+        per line, ≤10; a next-gen model type is selected automatically when this is set and Model type is left blank)</span>
+        <textarea name="custom_instructions" rows="3" placeholder="Keep the tone formal.&#10;Do not translate product names."></textarea></label>
+      <label id="engRegion" style="display:none">Region <span class="muted">(Microsoft / Amazon - Amazon requires it)</span>
+        <input type="text" name="region" placeholder="eastus / us-east-1" /></label>
+      <p id="engLaraExp" class="muted small" style="display:none">⚠ EXPERIMENTAL - Lara
+        request signing needs live verification before production use.</p>
+      <label id="engSecret" style="display:none">Access key secret <span class="muted">(Lara / Amazon - paired with the API key)</span>
+        <input type="password" autocomplete="new-password" name="access_key_secret" placeholder="the paired access-key secret" /></label>
+      <label id="engLaraStyle" style="display:none">Style (Lara)
+        <input type="text" name="style" placeholder="fluid | faithful | creative" /></label>
+      <label id="engLaraInstr" style="display:none">Instructions (Lara) <span class="muted">(one per line)</span>
+        <textarea name="instructions" rows="3" placeholder="Keep the tone formal."></textarea></label>
+      <label id="engLaraAdapt" style="display:none">Adapt to - TM ids (Lara)
+        <input type="text" name="adapt_to" placeholder="comma-separated TM ids" /></label>
+      <label id="engLaraGloss" style="display:none">Glossaries - ids (Lara)
+        <input type="text" name="glossaries" placeholder="comma-separated glossary ids" /></label>
+      <p id="engOaiHint" class="muted small" style="display:none">Base URL is required
+        (e.g. <code>https://openrouter.ai/api</code>, <code>https://api.deepseek.com</code>)
+        and Model is the host's model id.</p>
+      <p id="engJevHint" class="muted small" style="display:none">Quality judge. Paste your TypeSafe
+        API key; requests always go to <code>https://api.typesafe.ai</code>. Priced per call and
+        counted against the spend cap. Pick it as a workflow step's QE judge engine.</p>
+      <p id="engJevLocalHint" class="muted small" style="display:none">Quality judge on a server you
+        run (SemIf, Kev), e.g. <code>http://127.0.0.1:8077</code> or a Tailscale name such as
+        <code>http://gpu-box.tailnet.ts.net:8077</code>. The key is optional on this machine but set
+        one whenever the server is reachable over the network. Free, never counted against the
+        spend cap.</p>
+      <label id="engJudgeFloor" style="display:none">Confidence floor <span class="muted">(0.5 to less than 1.0;
+        blank = install default)</span>
+        <input type="text" name="confidence_floor" placeholder="0.6" /></label>
+      <label id="engJudgeMeaning" style="display:none">Meaning-changed floor <span class="muted">(0 to
+        1; blank = install default)</span>
+        <input type="text" name="meaning_floor" placeholder="0.8" /></label>
+      <label id="engJudgeTimeout" style="display:none">Timeout, seconds <span class="muted"
+        id="engJudgeTimeoutHint">(blank = 30)</span>
+        <input type="text" name="timeout_s" placeholder="30" /></label>
+      <label id="engMaxJobs" style="display:none">Max parallel jobs <span class="muted">(local engine; 1 to 64,
+        blank = no per-engine limit; never above the server's job-worker cap)</span>
+        <input type="text" inputmode="numeric" name="max_parallel_jobs" placeholder="4" /></label>
+      <button type="submit" class="small">Add engine</button>
+    </form>
+  </details>
+  {% endif %}
+</section>
+
+<section class="card" data-card="defaults" id="ai-defaults">
+  <h2>Defaults</h2>
+  <form method="post" action="/setup-ai" class="form">
+    {% call m.form_section('ai-default-fields', 'Defaults') %}
+    {% include "_csrf.html" %}
+    <label>Default provider
+      <select name="default_provider">
+        {% for p in providers %}<option value="{{ p }}" {% if p == default_provider %}selected{% endif %}>{{ p }}{% if p == 'local' %} (self-hosted){% endif %}</option>{% endfor %}
+        {% for e in engines %}{% if e.enabled and not e.judge %}<option value="{{ e.provider_name }}" {% if e.provider_name == default_provider %}selected{% endif %}>{{ e.name }} ({{ e.kind }})</option>{% endif %}{% endfor %}
+        {# Only an admin may turn the install-wide mock on; it stays listed while it is the default. #}
+        {% if default_provider == 'mock' or not app_meta().auth_on or (current_user(request).role if current_user(request) else '') == 'admin' %}<option value="mock" {% if default_provider == 'mock' %}selected{% endif %}>mock (offline demo, placeholder text)</option>{% endif %}
+      </select>
+    </label>
+    <p class="help">A provider with no key refuses to translate instead of faking output.
+      Choose <strong>mock</strong> only for an offline demo or a trial: it returns clearly
+      labelled placeholder text, shows a MOCK banner on every page, and is never real
+      translation.</p>
+    <p class="help">Pick each cloud model from the list of models your API key can
+      access (fetched automatically when a key is set - including any fine-tuned/custom
+      models). No key yet? Set it in <code>.env</code>, or use “Type id manually”.</p>
+    <div class="grid2">
+      <label>Claude model
+        <select name="model_claude" id="claudeSelect">
+          {% if models.claude %}<option value="{{ models.claude }}" selected>{{ models.claude }}</option>
+          {% else %}<option value="" selected>- fetch models -</option>{% endif %}
+        </select>
+        <input aria-label="Model id" type="text" name="model_claude" id="claudeManual" value="{{ models.claude }}"
+               placeholder="exact model id" disabled style="display:none" />
+        <span class="row-actions">
+          <button type="button" class="small ghost" data-busy-label="{{ t(request, 'busy.fetching_models') }}" data-csp-handler="csp-9"><span aria-hidden="true">↻</span> Fetch models</button>
+          <button type="button" class="small ghost" data-csp-handler="csp-10"><span id="claudeManualLabel"><span aria-hidden="true">✎</span> Type id manually</span></button>
+        </span>
+        <span id="claudeout" class="muted small"></span>
+      </label>
+      <label>Gemini model
+        <select name="model_gemini" id="geminiSelect">
+          {% if models.gemini %}<option value="{{ models.gemini }}" selected>{{ models.gemini }}</option>
+          {% else %}<option value="" selected>- fetch models -</option>{% endif %}
+        </select>
+        <input aria-label="Model id" type="text" name="model_gemini" id="geminiManual" value="{{ models.gemini }}"
+               placeholder="exact model id" disabled style="display:none" />
+        <span class="row-actions">
+          <button type="button" class="small ghost" data-busy-label="{{ t(request, 'busy.fetching_models') }}" data-csp-handler="csp-11"><span aria-hidden="true">↻</span> Fetch models</button>
+          <button type="button" class="small ghost" data-csp-handler="csp-12"><span id="geminiManualLabel"><span aria-hidden="true">✎</span> Type id manually</span></button>
+        </span>
+        <span id="geminiout" class="muted small"></span>
+      </label>
+    </div>
+    <label>OpenAI model
+      <select name="model_openai" id="openaiSelect">
+        {% if models.openai %}<option value="{{ models.openai }}" selected>{{ models.openai }}</option>
+        {% else %}<option value="" selected>- fetch models -</option>{% endif %}
+      </select>
+      <input aria-label="Model id" type="text" name="model_openai" id="openaiManual" value="{{ models.openai }}"
+             placeholder="exact model id" disabled style="display:none" />
+      <span class="row-actions">
+        <button type="button" class="small ghost" data-busy-label="{{ t(request, 'busy.fetching_models') }}" data-csp-handler="csp-13"><span aria-hidden="true">↻</span> Fetch models</button>
+        <button type="button" class="small ghost" data-csp-handler="csp-14"><span id="openaiManualLabel"><span aria-hidden="true">✎</span> Type id manually</span></button>
+      </span>
+      <span id="openaiout" class="muted small"></span>
+    </label>
+    <button type="submit">Save defaults</button>
+    {% endcall %}
+  </form>
+  <p class="help">Cloud keys: <a href="https://console.anthropic.com" target="_blank" rel="noopener">Anthropic</a> ·
+    <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Gemini</a> ·
+    <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">OpenAI</a></p>
+</section>
+
+{# 2026-08-19: the install-wide AI SPEND meter (spent / cap / pct_used) and the
+   spend-cap control are MANAGER+ only. The page stays linguist-accessible (can_tune_ai);
+   an under-ranked ident gets a neutral stub instead of the figures - the same
+   spend-disclosure asymmetry the cost report enforces. `spend` is None for them. #}
+{% if can_see_spend %}
+<section class="card" data-card="spend" id="ai-spend">
+  <h2><span aria-hidden="true">💳</span> Spend cap</h2>
+  <p class="help">A monthly ceiling on <strong>real</strong> AI spend. When this month's spend
+    reaches the cap, new AI translations are blocked with a clear error until you raise or clear it -
+    a safety brake against runaway cost. Set <code>0</code> to turn it off. The mock/offline engine,
+    private-network local engines and a Jev-compatible local server are exempt. Hosted Jev quality
+    judge calls count and stop at the cap, and a workflow's auto-fix loop that can cost money does
+    not start (or stops between rounds) once it is reached. Prices are estimated from token usage per a built-in per-model table.
+    Only an <strong>administrator</strong> can change the cap (the same rung as adding a cloud key or
+    disarming the mock-egress guard); the local operator can also set it with
+    <code>config set spend_cap_usd</code>. In multi-org mode only the host operator can change
+    this install-wide cap; organization administrators cannot change it over web or API.</p>
+  {# DESIGN.md §5 "Control Surfaces - Spend-cap meter": Label-role title, large
+     Data-role spend figure, a 9px meter with terracotta fill + an Amber Hold cap
+     tick at the auto-pause threshold. Honest states: uncapped shows the figure
+     alone (no track - there's no ceiling to meter against); under cap shows the
+     proportional terracotta fill with the tick at the cap; at/over cap flips the
+     fill to the existing danger/vermilion convention (same "harder stop than the
+     mock warning" rule the app-shell banner already uses) and reuses the exact
+     "cap reached" badge below. #}
+  <div class="spend-meter">
+    <p class="spend-meter-title">AI translation spend · {{ spend.period_label }}</p>
+    <p class="spend-meter-figure data-mono">
+      ${{ '%.2f'|format(spend.spent) }}{% if spend.cap > 0 %}
+      <span class="spend-meter-of">/ ${{ '%.2f'|format(spend.cap) }} cap</span>{% endif %}
+    </p>
+    {% if spend.cap > 0 %}
+    <div class="spend-meter-track">
+      <div class="prog">
+        <div class="prog-bar{% if spend.tripped %} spend-danger{% endif %}"
+             style="width:{{ spend.fill_pct }}%"></div>
+      </div>
+      <span class="spend-meter-tick" style="left:{{ spend.tick_pct }}%"
+            title="Cap: ${{ '%.2f'|format(spend.cap) }} - auto-pause threshold"></span>
+    </div>
+    <p class="spend-meter-legend small">
+      <span class="data-mono">{{ spend.pct_used }}% of cap used</span>
+      {% if spend.tripped %}<span class="badge warn">cap reached</span>
+      {% else %}<span class="badge exact">under cap</span>{% endif %}
+    </p>
+    {% else %}
+    <p class="spend-meter-legend small"><span class="badge muted-badge">cap off</span></p>
+    {% endif %}
+  </div>
+  <form method="post" action="/setup-ai/spend" class="form">
+    {% include "_csrf.html" %}
+    <label>Monthly spend cap (USD, 0 = off)
+      <input type="text" name="spend_cap_usd" id="spend-cap-input" value="{{ spend.cap_raw }}" inputmode="decimal"{{ fe.invalid_attrs(request, 'spend-cap-input', when=(true if spend_error else false)) }} />
+    </label>
+    <button type="submit">Save spend cap</button>
+  </form>
+</section>
+{% else %}
+<section class="card" data-card="spend" id="ai-spend">
+  <h2><span aria-hidden="true">💳</span> Spend cap</h2>
+  <p class="help">This month's AI spend and the monthly spend cap are visible to
+    <strong>managers</strong>. You can still configure engines, keys, models and prompts here.</p>
+</section>
+{% endif %}
+
+<section class="card" data-card="assist_limits" id="ai-assist_limits">
+  <h2>Ask and Draft allowance</h2>
+  <p class="help">Paid Ask and both Draft actions share a per-person allowance.
+    Defaults are 6 calls per minute and 60 per UTC day. Set 0 for unlimited in that window.
+    Failed calls and repair calls count. The host CLI has its own system bucket with the same
+    limits, separate from web users even when sign-in is off. Only administrators can edit;
+    in multi-org mode use the host CLI config settings.</p>
+  <form method="post" action="/setup-ai/assist-limits" class="form">
+    {% include "_csrf.html" %}
+    <label>Calls per minute (0 = unlimited)
+      <input type="number" min="0" step="1" name="assist_calls_per_minute"
+             value="{{ assist_limits.minute }}" required
+             {% if not assist_limits.editable %}disabled{% endif %} />
+    </label>
+    <label>Calls per UTC day (0 = unlimited)
+      <input type="number" min="0" step="1" name="assist_calls_per_day"
+             value="{{ assist_limits.day }}" required
+             {% if not assist_limits.editable %}disabled{% endif %} />
+    </label>
+    {% if assist_limits.editable %}<button type="submit">Save call limits</button>{% endif %}
+  </form>
+</section>
+
+<section class="card" data-card="egress" id="ai-egress">
+  <div class="row-between">
+    <h2><span aria-hidden="true">🛡️</span> Mock-egress guard</h2>
+    {{ m.status_badge('needs_review' if mock_egress.allowed else 'active', 'override on' if mock_egress.allowed else 'guard on') }}
+  </div>
+  <p class="help">Connector write-backs (Jira, Airtable, Zendesk, …) <strong>refuse</strong> to push
+    translations produced by the offline <strong>mock</strong> engine to a <strong>real</strong> external
+    system. Leave this OFF (the default) to keep the guard on; tick it only to deliberately write mock
+    output to a real system (e.g. a throwaway staging space).</p>
+  <form method="post" action="/setup-ai/mock-egress" class="form">
+    {% include "_csrf.html" %}
+    <label class="checkbox">
+      <input type="checkbox" name="allow_mock_egress" value="1" {% if mock_egress.allowed %}checked{% endif %}
+             style="width:auto" />
+      Allow mock/offline MT output to be written to real external systems
+    </label>
+    <button type="submit">Save</button>
+  </form>
+</section>
+
+<section class="card" data-card="tm_match" id="ai-tm_match">
+  <div class="row-between">
+    <h2>TM matching &amp; locks</h2>
+    <span class="badge exact" style="vertical-align:middle">policy</span>
+  </div>
+  <p class="muted">The policy the <strong>TM match</strong> workflow step applies when it fills a
+  100% translation-memory match and <em>locks</em> it so later steps skip it. These settings are
+  <strong>global</strong> for now (an interim - a per-TM grain is planned). The
+  <code>TM_LOCKS_ENABLED</code> kill switch is environment-only (needs a restart) and is not shown here.</p>
+
+  <form method="post" action="/setup-ai/tm" class="form">
+    {% include "_csrf.html" %}
+    <label class="checkbox">
+      <input type="checkbox" name="tm_hundreds_enter_lqa" value="1"
+             {% if tm_matching.hundreds_enter_lqa %}checked{% endif %} style="width:auto" />
+      100% matches enter LQA (soft lock) - unchecked = hard lock
+    </label>
+    <label class="checkbox">
+      <input type="checkbox" name="tm_lock_ice" value="1"
+             {% if tm_matching.lock_ice %}checked{% endif %} style="width:auto" />
+      Hard-lock in-context (ICE / 101) matches
+      <span class="muted">(inert until the context/ICE wave ships)</span>
+    </label>
+    <label>Context-attach floor
+      <input type="text" name="tm_context_floor" value="{{ tm_matching.context_floor }}" />
+      <span class="muted">(50&ndash;99; the context/context-band wave is deferred)</span>
+    </label>
+    <label class="checkbox">
+      <input type="checkbox" name="tm_empty_delivery_gate" value="1"
+             {% if tm_matching.empty_delivery_gate %}checked{% endif %} style="width:auto" />
+      Hold TM-only deliveries with empty targets for human approval
+      <span class="muted">(a document a TM-match workflow left partly untranslated is held
+      from delivery until a person approves shipping the empty strings)</span>
+    </label>
+    <button type="submit">Save TM matching settings</button>
+  </form>
+</section>
+</div>
+</div>
+</div>
+{% with layout_page = 'setup_ai' %}{% include "_page_layout.html" %}{% endwith %}
+
+<script nonce="{{ csp_nonce() }}">
+// Busy indicators: run a click-triggered probe under the shared busy state (spinner,
+// the button's translated data-busy-label, elapsed counter, top bar). LocBusy.wrap
+// always releases, so a network error or a non-JSON reply can never leave the button
+// stuck. `fn` receives the button. Falls back to a plain call if busy.js is absent.
+function busyClick(btn, fn) {
+  return window.LocBusy ? window.LocBusy.wrap(btn, function () { return fn(btn); }) : fn(btn);
+}
+async function testEngine(p, btn) {
+  const out = btn.parentElement.querySelector('.testout');
+  out.textContent = 'testing…';
+  return busyClick(btn, async function () {
+    try {
+      const r = await fetch('/setup-ai/test', { method: 'POST', headers: { 'X-CSRF-Token': window.CSRF_TOKEN }, body: new URLSearchParams({ provider: p }) });  // # pregate: allow-secret CSRF header name, value is the page session variable
+      const d = await r.json();
+      // Two-stage result: d.message carries the human summary (stage-1 key check vs
+      // stage-2 completion, incl. the "key valid but out of credit" distinction).
+      const icon = d.ok ? '✓' : (d.key_valid ? '⚠' : '✗');
+      out.textContent = `${icon} ${d.message || d.text || ''}`;
+    } catch (e) {
+      out.textContent = '✗ the test request failed. Reload the page and try again.';
+    }
+  });
+}
+function activeModelEl() {
+  const man = document.getElementById('lmodelManual');
+  return man.disabled ? document.getElementById('lmodelSelect') : man;
+}
+function localBody() {
+  return new URLSearchParams({
+    base_url: document.getElementById('lbase').value,
+    api_key: document.getElementById('lkey').value,
+    local_model: (activeModelEl().value || '').trim(),
+  });
+}
+// A model toggle's label: its icon glyph in an aria-hidden span (NVDA must not
+// read "pencil" / "trigram for heaven"), then the words.
+function setToggleLabel(lbl, glyph, text) {
+  const g = document.createElement('span');
+  g.setAttribute('aria-hidden', 'true');
+  g.textContent = glyph;
+  lbl.replaceChildren(g, ' ' + text);
+}
+function toggleManualModel() {
+  const sel = document.getElementById('lmodelSelect');
+  const man = document.getElementById('lmodelManual');
+  const lbl = document.getElementById('manualToggleLabel');
+  if (man.disabled) {  // list -> manual
+    man.value = sel.value || man.value; man.disabled = false; man.style.display = '';
+    sel.disabled = true; sel.style.display = 'none';
+    setToggleLabel(lbl, '☰', 'Pick from list');
+  } else {             // manual -> list
+    man.disabled = true; man.style.display = 'none';
+    sel.disabled = false; sel.style.display = '';
+    setToggleLabel(lbl, '✎', 'Type id manually');
+  }
+}
+async function fetchModels(silent) {
+  const out = document.getElementById('localout');
+  const sel = document.getElementById('lmodelSelect');
+  // a11y T7: an empty base URL is an error ON that field: LocA11y (form_errors.js)
+  // shows it next to the field with role=alert, marks it aria-invalid and ties the two
+  // with aria-describedby; the next try clears it. Self-contained on purpose
+  // (verify_lazy_model_probe runs this function on its own under Node).
+  const a11y = window.LocA11y;
+  const lbase = document.getElementById('lbase');
+  if (a11y && lbase.id) a11y.clearFieldError(lbase);
+  if (!lbase.value.trim()) {
+    if (!silent) {
+      const msg = 'Enter the server base URL first, then fetch the models again.';
+      if (a11y && lbase.id) { out.textContent = ''; a11y.fieldError(lbase, msg); }
+      else out.textContent = '⚠ ' + msg;
+    }
+    return;
+  }
+  out.textContent = silent ? 'Checking the local server for models (this can take a few seconds)…' : 'querying server…';
+  let d;
+  try {
+    const body = localBody();
+    if (silent) body.set('quick', '1');  // #564 m11: the on-load probe gives up fast on a dead server
+    const r = await fetch('/setup-ai/local/models', { method: 'POST', headers: { 'X-CSRF-Token': window.CSRF_TOKEN }, body });
+    if (r.status === 401 || r.status === 403) {  // #546: not an admin; the endpoint is admin-only
+      out.textContent = silent ? '' : '⚠ Only administrators can query the model server.';
+      return;
+    }
+    d = await r.json();
+  } catch (e) { out.textContent = '⚠ server unreachable - is LM Studio running?'; return; }
+  if (d.unreachable) { out.textContent = '⚠ the server did not answer. Check the base URL and that LM Studio is running, then Fetch again.'; return; }
+  if (d.blocked || d.error) { out.textContent = '⚠ ' + (d.error || 'Server address refused by the local-engine egress policy.'); return; }
+  if (!d.models || !d.models.length) { out.textContent = '⚠ no models found. Start LM Studio and load a model, then Fetch again.'; return; }
+  const cur = sel.value;
+  // rebuild options safely (no innerHTML) from the exact server ids
+  sel.textContent = '';
+  d.models.forEach(m => { const o = document.createElement('option'); o.value = m; o.textContent = m; sel.appendChild(o); });
+  if (cur && !d.models.includes(cur)) {           // keep a custom/saved id that isn't in the list
+    const o = document.createElement('option'); o.value = cur; o.textContent = cur + ' (current - not loaded on server)'; sel.insertBefore(o, sel.firstChild);
+  }
+  sel.value = cur || d.models[0];
+  out.textContent = `✓ ${d.models.length} model(s) available - pick one, then Save.`;
+}
+// auto-populate the dropdown on page load when a server URL is configured
+document.addEventListener('DOMContentLoaded', () => {
+  if (document.getElementById('lbase') && document.getElementById('lbase').value.trim()) fetchModels(true);
+});
+// --- cloud model dropdowns (claude/gemini/openai) --------------------------
+const CLOUD_LIVE = { claude: {{ 'true' if live.claude else 'false' }},
+                     gemini: {{ 'true' if live.gemini else 'false' }},
+                     openai: {{ 'true' if live.openai else 'false' }} };
+const CLOUD_ENVKEY = { claude: '{{ env_keys.claude }}', gemini: '{{ env_keys.gemini }}',
+                       openai: '{{ env_keys.openai }}' };
+function cloudEls(p) {
+  return { sel: document.getElementById(p + 'Select'), man: document.getElementById(p + 'Manual'),
+           out: document.getElementById(p + 'out'), lbl: document.getElementById(p + 'ManualLabel') };
+}
+function toggleCloudManual(p) {
+  const e = cloudEls(p);
+  if (e.man.disabled) {  // list -> manual
+    e.man.value = e.sel.value || e.man.value; e.man.disabled = false; e.man.style.display = '';
+    e.sel.disabled = true; e.sel.style.display = 'none';
+    setToggleLabel(e.lbl, '☰', 'Pick from list');
+  } else {               // manual -> list
+    e.man.disabled = true; e.man.style.display = 'none';
+    e.sel.disabled = false; e.sel.style.display = '';
+    setToggleLabel(e.lbl, '✎', 'Type id manually');
+  }
+}
+async function fetchCloud(p, silent) {
+  const e = cloudEls(p);
+  if (!CLOUD_LIVE[p]) {
+    if (!silent) e.out.textContent = '⚠ set the ' + CLOUD_ENVKEY[p] + ' API key to list models (or type an id manually).';
+    return;
+  }
+  if (!silent) e.out.textContent = 'querying provider…';
+  let d;
+  try {
+    const r = await fetch('/setup-ai/cloud/models', { method: 'POST', headers: { 'X-CSRF-Token': window.CSRF_TOKEN }, body: new URLSearchParams({ provider: p }) });
+    d = await r.json();
+  } catch (err) { e.out.textContent = '⚠ could not reach the provider.'; return; }
+  if (!d.models || !d.models.length) { e.out.textContent = '⚠ no models returned - check the ' + CLOUD_ENVKEY[p] + ' key.'; return; }
+  const cur = e.sel.value;
+  // rebuild options safely (no innerHTML) from the exact provider ids
+  e.sel.textContent = '';
+  d.models.forEach(m => { const o = document.createElement('option'); o.value = m; o.textContent = m; e.sel.appendChild(o); });
+  if (cur && !d.models.includes(cur)) {  // keep a saved/custom id not in the returned list
+    const o = document.createElement('option'); o.value = cur; o.textContent = cur + ' (current)'; e.sel.insertBefore(o, e.sel.firstChild);
+  }
+  e.sel.value = cur || d.models[0];
+  e.out.textContent = '✓ ' + d.models.length + ' model(s) available - pick one, then Save.';
+}
+// auto-populate each cloud dropdown on load when that provider's key is configured
+document.addEventListener('DOMContentLoaded', () => {
+  ['claude', 'gemini', 'openai'].forEach(p => {
+    const e = cloudEls(p);
+    if (!e.sel) return;
+    if (CLOUD_LIVE[p]) fetchCloud(p, true);
+    else if (e.out) e.out.textContent = 'Set the ' + CLOUD_ENVKEY[p] + ' API key to list models, or type an id manually.';
+  });
+});
+async function testLocal() {
+  const out = document.getElementById('localout');
+  // No client-side blank-model block: the server (setup_ai_local_test) now tries
+  // a REACHABLE server's first loaded model when the field is blank, and only
+  // falls back to the "pick a model" message when that's truly unresolvable - so
+  // this button must always reach the server to get the right answer.
+  out.textContent = 'translating a test phrase…';
+  try {
+    const r = await fetch('/setup-ai/local/test', { method: 'POST', headers: { 'X-CSRF-Token': window.CSRF_TOKEN }, body: localBody() });  // # pregate: allow-secret CSRF header name, value is the page session variable
+    const d = await r.json();
+    out.textContent = d.ok ? ('✓ ' + d.text) : ('✗ ' + d.error);
+  } catch (e) {
+    out.textContent = '✗ the test request failed. Reload the page and try again.';
+  }
+}
+async function testEngineRow(eid, btn) {
+  const out = btn.closest('form').querySelector('.testout');
+  out.textContent = 'testing…';
+  return busyClick(btn, async function () {
+    try {
+      const r = await fetch('/setup-ai/engines/' + eid + '/test', { method: 'POST', headers: { 'X-CSRF-Token': window.CSRF_TOKEN } });  // # pregate: allow-secret CSRF header name, value is the page session variable
+      const d = await r.json();
+      out.textContent = (d.ok ? '✓ ' : '✗ ') + (d.message || d.error || '');
+    } catch (e) {
+      out.textContent = '✗ the test request failed. Reload the page and try again.';
+    }
+  });
+}
+// --- engine-registry model pickers (local / openai_compatible) -------------
+// The Model field in the Add/Edit engine forms is a select+manual pair sharing the
+// same name="model" (only the ENABLED one submits). Fetch reads the base_url + api_key
+// typed into THAT SAME form and lists the host's /v1/models via /setup-ai/local/models
+// - legitimate here: the admin is configuring that very engine (same trust as the
+// local card). Non-listable kinds keep the plain manual input (tools hidden). All
+// helpers are form-relative (btn.closest('form')) so the Add form and every Edit form
+// reuse them. Options are built via createElement only (no innerHTML - XSS).
+function engModelEls(form) {
+  return { sel: form.querySelector('.engmodel-select'),
+           man: form.querySelector('.engmodel-manual'),
+           out: form.querySelector('.engmodel-out'),
+           lbl: form.querySelector('.engmodel-toggle-label') };
+}
+function engUseList(form) {   // manual -> list
+  const e = engModelEls(form);
+  if (!e.sel) return;
+  e.man.disabled = true; e.man.style.display = 'none';
+  e.sel.disabled = false; e.sel.style.display = '';
+  if (e.lbl) setToggleLabel(e.lbl, '✎', 'Type id manually');
+}
+function engUseManual(form) { // list -> manual
+  const e = engModelEls(form);
+  if (!e.sel) return;
+  e.sel.disabled = true; e.sel.style.display = 'none';
+  e.man.disabled = false; e.man.style.display = '';
+  if (e.lbl) setToggleLabel(e.lbl, '☰', 'Pick from list');
+}
+function toggleEngineManual(btn) {
+  const form = btn.closest('form');
+  const e = engModelEls(form);
+  if (e.man.disabled) { e.man.value = e.sel.value || e.man.value; engUseManual(form); }
+  else { engUseList(form); }
+}
+async function fetchEngineModels(btn) {
+  const form = btn.closest('form');
+  const e = engModelEls(form);
+  const baseEl = form.querySelector('[name=base_url]');
+  const keyEl = form.querySelector('[name=api_key]');
+  const base = baseEl ? baseEl.value : '';
+  const key = keyEl ? keyEl.value : '';
+  // a11y T7: an empty base URL is an error on that field (see fetchModels).
+  const a11y = window.LocA11y;
+  if (a11y && baseEl && baseEl.id) a11y.clearFieldError(baseEl);
+  if (!base.trim()) {
+    const msg = 'Enter the base URL first, then fetch the models again (or type the model id manually).';
+    if (a11y && baseEl && baseEl.id) { e.out.textContent = ''; a11y.fieldError(baseEl, msg); }
+    else e.out.textContent = '⚠ ' + msg;
+    return;
+  }
+  e.out.textContent = 'querying host…';
+  let d;
+  try {
+    // #346: an existing engine (Edit form) lists with its STORED key, server-side; the
+    // blank key field is never turned into the placeholder there. The Add form has no engine yet.
+    const eid = form.dataset && form.dataset.eid;
+    const url = eid ? '/setup-ai/engines/' + encodeURIComponent(eid) + '/models' : '/setup-ai/local/models';
+    const params = new URLSearchParams({ base_url: base, api_key: eid ? key : (key || 'lm-studio') });
+    const r = await fetch(url, { method: 'POST', headers: { 'X-CSRF-Token': window.CSRF_TOKEN }, body: params });
+    if (r.status === 401 || r.status === 403) {  // #546: not an admin; the endpoint is admin-only
+      e.out.textContent = '⚠ Only administrators can query the model server - type the id manually.';
+      return;
+    }
+    d = await r.json();
+  } catch (err) { e.out.textContent = '⚠ could not reach the host - type the id manually.'; return; }
+  if (d.blocked || d.error) { e.out.textContent = '⚠ ' + (d.error || 'Server address refused by the local-engine egress policy.'); return; }
+  if (d.unreachable) { e.out.textContent = '⚠ the server did not answer - check the base URL and that it is running, or type the id manually.'; return; }
+  if (d.auth_failed) { e.out.textContent = '⚠ the server refused the key - check the saved key (or type a new one), or type the model id manually.'; return; }
+  if (!d.models || !d.models.length) { e.out.textContent = '⚠ no models returned - check the base URL / key, or type the id manually.'; return; }
+  const cur = (e.man && e.man.value) || (e.sel && e.sel.value) || '';
+  e.sel.textContent = '';
+  d.models.forEach(m => { const o = document.createElement('option'); o.value = m; o.textContent = m; e.sel.appendChild(o); });
+  if (cur && !d.models.includes(cur)) { const o = document.createElement('option'); o.value = cur; o.textContent = cur + ' (current)'; e.sel.insertBefore(o, e.sel.firstChild); }
+  e.sel.value = cur || d.models[0];
+  engUseList(form);
+  e.out.textContent = '✓ ' + d.models.length + ' model(s) - pick one, then Save.';
+}
+function engineKindChanged() {
+  if (!document.getElementById('engineKind')) return;
+  const k = document.getElementById('engineKind').value;
+  const show = (id, on) => { document.getElementById(id).style.display = on ? '' : 'none'; };
+  const deepl = (k === 'deepl');
+  // Model-list tools only for the listable kinds; force manual mode otherwise so the
+  // (hidden) select never submits a stale value for a non-listable kind.
+  const listable = (k === 'local' || k === 'openai_compatible');
+  show('engModelTools', listable);
+  if (!listable) engUseManual(document.getElementById('engineAddForm'));
+  show('engModelType', deepl);
+  show('engContext', deepl);
+  show('engInstructions', deepl);
+  // Formality serves BOTH DeepL and Amazon (one shared field).
+  show('engFormality', deepl || k === 'amazon');
+  // Region serves BOTH Microsoft and Amazon (one shared field).
+  show('engRegion', k === 'microsoft' || k === 'amazon');
+  // The paired access-key secret serves BOTH Lara and Amazon (one shared field).
+  const lara = (k === 'lara');
+  show('engSecret', lara || k === 'amazon');
+  show('engLaraExp', lara);
+  show('engLaraStyle', lara);
+  show('engLaraInstr', lara);
+  show('engLaraAdapt', lara);
+  show('engLaraGloss', lara);
+  show('engOaiHint', k === 'openai_compatible');
+  // Quality judges. Hosted Jev needs the key (its URL is pinned server-side); a
+  // Jev-compatible local server takes a URL, an optional key and a model. Both take the
+  // optional floors + timeout (web/CLI parity); only the timeout default differs.
+  const jev = (k === 'jev'), jevLocal = (k === 'jev_local'), judge = jev || jevLocal;
+  show('engBaseUrl', !jev);
+  show('engModel', !jev);
+  show('engJevHint', jev);
+  show('engJevLocalHint', jevLocal);
+  show('engJudgeFloor', judge);
+  show('engJudgeMeaning', judge);
+  show('engJudgeTimeout', judge);
+  show('engMaxJobs', k === 'local');
+  const form = document.getElementById('engineAddForm');
+  const timeoutDefault = jev ? '10' : '30';
+  document.getElementById('engJudgeTimeoutHint').textContent = '(blank = ' + timeoutDefault + ')';
+  const timeoutInput = form.querySelector('[name=timeout_s]');
+  if (timeoutInput) timeoutInput.placeholder = timeoutDefault;
+  const baseInput = form.querySelector('[name=base_url]');
+  if (baseInput) {
+    baseInput.placeholder = jevLocal ? 'http://127.0.0.1:8077' : 'https://api.deepl.com';
+    if (jev) baseInput.value = '';  // hidden for hosted Jev; never submit a stale URL
+  }
+  document.getElementById('engBaseUrlHint').textContent = jevLocal ? '(required)' : '(blank = default)';
+}
+engineKindChanged();
+
+document.querySelectorAll('[data-csp-handler="csp-1"]').forEach(function (el) {
+  el.addEventListener('click', function () { busyClick(el, function () { return fetchModels(); }); });
+});
+document.querySelectorAll('[data-csp-handler="csp-2"]').forEach(function (el) {
+  el.addEventListener('click', function () { busyClick(el, testLocal); });
+});
+document.querySelectorAll('[data-csp-handler="csp-3"]').forEach(function (el) {
+  el.addEventListener('click', function () { toggleManualModel(); });
+});
+document.querySelectorAll('[data-csp-handler="csp-4"]').forEach(function (el) {
+  el.addEventListener('click', function () { busyClick(el, fetchEngineModels); });
+});
+document.querySelectorAll('[data-csp-handler="csp-5"]').forEach(function (el) {
+  el.addEventListener('click', function () { toggleEngineManual(el); });
+});
+document.querySelectorAll('[data-csp-handler="csp-6"]').forEach(function (el) {
+  el.addEventListener('change', function () { engineKindChanged(); });
+});
+document.querySelectorAll('[data-csp-handler="csp-7"]').forEach(function (el) {
+  el.addEventListener('click', function () { busyClick(el, fetchEngineModels); });
+});
+document.querySelectorAll('[data-csp-handler="csp-8"]').forEach(function (el) {
+  el.addEventListener('click', function () { toggleEngineManual(el); });
+});
+document.querySelectorAll('[data-csp-handler="csp-9"]').forEach(function (el) {
+  el.addEventListener('click', function () { busyClick(el, function () { return fetchCloud('claude'); }); });
+});
+document.querySelectorAll('[data-csp-handler="csp-10"]').forEach(function (el) {
+  el.addEventListener('click', function () { toggleCloudManual('claude'); });
+});
+document.querySelectorAll('[data-csp-handler="csp-11"]').forEach(function (el) {
+  el.addEventListener('click', function () { busyClick(el, function () { return fetchCloud('gemini'); }); });
+});
+document.querySelectorAll('[data-csp-handler="csp-12"]').forEach(function (el) {
+  el.addEventListener('click', function () { toggleCloudManual('gemini'); });
+});
+document.querySelectorAll('[data-csp-handler="csp-13"]').forEach(function (el) {
+  el.addEventListener('click', function () { busyClick(el, function () { return fetchCloud('openai'); }); });
+});
+document.querySelectorAll('[data-csp-handler="csp-14"]').forEach(function (el) {
+  el.addEventListener('click', function () { toggleCloudManual('openai'); });
+});
+</script>
+
+{# SPEC-ask-draft section 4: the grounded "Ask about this page" panel. This is the
+   ENGINES module's main page, so it carries the engines card's panel and the "?"
+   link above. Hidden (and its route 404s) when the assist_enabled kill switch is
+   off, and hidden for a caller who cannot POST. #}
+{% with assist_module = 'engines' %}{% include "_assist_panel.html" %}{% endwith %}
+
+{% endblock %}

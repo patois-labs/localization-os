@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Language sets{% endblock %}
+{% block content %}
+<div class="guidance-page">
+
+{% set guidance_actions_label %}<span class="sr-only">Actions</span>{% endset %}
+{% set guidance_title %}Language sets{% endset %}
+{% set guidance_meta %}<p>Reusable groups of target languages. Apply a set to a connection to fan one request out to every language in it.
+  {% if not can_manage %}<br><span class="badge warn">Read-only</span> Editing is limited to admins and linguists.{% endif %}</p>
+  {% if saved == '1' %}<p class="ok">Saved.</p>{% elif saved == 'deleted' %}<p class="ok">Deleted.</p>{% endif %}
+  {# a11y T7: a ?err= error renders once, as a sentence, in the summary at the top of
+     main (base.html + _form_errors.html), never as a raw code here. #}{% endset %}
+{% set guidance_status %}{% endset %}
+{% set guidance_actions %}{% endset %}
+{{ m.page_header(guidance_title, meta=guidance_meta, status=guidance_status, secondary=guidance_actions) }}
+<nav class="guidance-sections" aria-label="{{ guidance_title | striptags }}">
+<a href="#guidance-1">Your sets</a>
+{% if can_manage %}<a href="#guidance-2">New language set</a>{% endif %}
+</nav>
+
+<section class="card flat">
+  <h2 id="guidance-1">Your sets</h2>
+  {% if sets %}
+    {% call m.data_table('Your sets', [{'label': 'Name'}, {'label': 'Source'}, {'label': 'Targets'}, {'label': guidance_actions_label}]) %}
+        {% for ls in sets %}
+          <tr>
+            <td><span class="cell-primary">{{ ls.name }}</span></td>
+            <td class="muted small data-mono">{{ ls.source_locale }}</td>
+            <td>
+              {% for loc in ls.target_locales or [] %}<span class="chip">{{ loc }}</span> {% endfor %}
+              <span class="muted small data-mono">({{ (ls.target_locales or [])|length }})</span>
+            </td>
+            <td>
+              {% if can_manage %}
+              <details class="inline-edit">
+                <summary class="btnlink small">Edit</summary>
+                <div class="mt">
+                  <form method="post" action="/languages/{{ ls.id }}" class="form">
+                    {% include "_csrf.html" %}
+                    <label>Name <input type="text" name="name" value="{{ ls.name }}" required /></label>
+                    <label>Source locale <input type="text" name="source_locale" value="{{ ls.source_locale }}" /></label>
+                    <fieldset class="lp-fieldset">
+                      <legend>Target languages</legend>
+                      {# keep_unknown: a grandfathered out-of-catalog stored code stays
+                         visible/checked/submittable - the update seam keeps it verbatim,
+                         so a benign rename save can never silently drop a locale. #}
+                      {{ m.langpicker('target_locales', enabled_locales, all_locales, selected=ls.target_locales or [], keep_unknown=True) }}
+                    </fieldset>
+                    <button class="small" type="submit">Save</button>
+                  </form>
+                  <form method="post" action="/languages/{{ ls.id }}/delete" class="mt"
+                        data-action-confirm="Delete this language set?">
+                    {% include "_csrf.html" %}
+                    <button class="small ghost danger-btn" type="submit">Delete</button>
+                  </form>
+                </div>
+              </details>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+  {% else %}
+    {{ m.empty_state('No language sets yet. Create one below.') }}
+  {% endif %}
+</section>
+
+{% if can_manage %}
+<section class="card">
+  <h2 id="guidance-2">New language set</h2>
+  <form method="post" action="/languages" class="form">
+{% call m.form_section('guidance-fields-0', 'New language set') %}
+    {% include "_csrf.html" %}
+    <label>Name <input type="text" name="name" placeholder="EMEA Tier 1" required /></label>
+    <label>Source locale <input type="text" name="source_locale" value="en-US" /></label>
+    <fieldset class="lp-fieldset">
+      <legend>Target languages</legend>
+      <p class="help">Pick the languages this set fans out to. The enabled languages are
+        shown; use <em>Show all languages</em> to reach the full catalog.</p>
+      {{ m.langpicker('target_locales', enabled_locales, all_locales) }}
+    </fieldset>
+    <button type="submit">Create set</button>
+  {% endcall %}
+</form>
+</section>
+{% endif %}
+
+</div>
+{% endblock %}

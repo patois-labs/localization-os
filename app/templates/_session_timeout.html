@@ -1,0 +1,36 @@
+{# a11y T9 (WCAG 2.2.1): the session timeout warning. Included from base.html ONLY when
+   the login wall is on, a real user is signed in and a session limit is active; driven
+   by static/session_timeout.js (strings from window.I18N js.session_*; the text below is
+   the server-rendered default for the current locale). The countdown is deliberately NOT
+   a live region. Two polite regions carry the announcements (60 and 30 seconds left,
+   extended, signed out, draft restored): #session-dialog-announce INSIDE the dialog,
+   used while it is open (a modal dialog hides everything outside it from the
+   accessibility tree, so a region outside would be silent then; T11 gate round 1), and
+   #session-announce outside it, used while it is closed. announce() picks the one that
+   is exposed at that moment. #}
+{# No aria-modal in the markup: showModal() makes it modal, and a closed dialog carrying
+   aria-modal="true" would read as an OPEN modal to form_errors.js (it looks for
+   [aria-modal='true']:not([hidden])) and suppress the page error focus. #}
+<dialog class="modal session-dialog" id="session-dialog" role="alertdialog"{{ _ui_lang_attr }}
+        aria-labelledby="session-dialog-title" aria-describedby="session-dialog-desc">
+  <div class="card modal-card">
+    <h2 id="session-dialog-title">{{ t(request, 'js.session_title_idle') }}</h2>
+    <p id="session-dialog-desc">{{ t(request, 'js.session_desc_idle') }}</p>
+    <p class="session-countdown" id="session-countdown"></p>
+    <p class="sr-only" id="session-dialog-announce" role="status" aria-live="polite"></p>
+    <div class="session-actions">
+      <button type="button" id="session-stay" data-session-stay>{{ t(request, 'js.session_stay') }}</button>
+      {# #251: "Sign out now" posts the sign-out form (CSRF token included). #}
+      <form method="post" action="/auth/logout" class="session-sign-out-form">{% include "_csrf.html" %}<button type="submit" class="ghost" id="session-sign-out" data-session-sign-out>{{ t(request, 'js.session_sign_out') }}</button></form>
+      <a class="btn" id="session-sign-in" href="/auth/login" data-session-sign-in hidden>{{ t(request, 'js.session_sign_in') }}</a>
+    </div>
+  </div>
+</dialog>
+<p class="sr-only" id="session-announce" role="status" aria-live="polite"{{ _ui_lang_attr }}></p>
+<div class="notice session-draft" id="session-draft" role="region"{{ _ui_lang_attr }} aria-labelledby="session-draft-text" hidden>
+  <p id="session-draft-text">{{ t(request, 'js.session_draft_notice') }}</p>
+  <div class="session-actions">
+    <button type="button" id="session-draft-restore" data-session-draft-restore>{{ t(request, 'js.session_draft_restore') }}</button>
+    <button type="button" class="ghost" id="session-draft-discard" data-session-draft-discard>{{ t(request, 'js.session_draft_discard') }}</button>
+  </div>
+</div>

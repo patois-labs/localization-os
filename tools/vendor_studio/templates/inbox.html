@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Inbox - Vendor Studio{% endblock %}
+{% block body %}
+<h1>PM inbox</h1>
+{% if not rows %}
+<p class="muted">No projects have arrived yet. A signed dispatch to
+  <code>POST /intake/dispatch</code> creates one.</p>
+{% endif %}
+<table class="grid">
+  <thead>
+    <tr><th>#</th><th>Customer</th><th>Locales</th><th>Segments</th><th>Progress</th>
+      <th>Status</th><th>Expiry</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for row in rows %}
+    {% set p = row.p %}
+    <tr>
+      <td>{{ p.id }}</td>
+      <td>{{ p.customer_label or "(unlabelled)" }}</td>
+      <td>{{ p.source_locale }} &rarr; {{ p.target_locale }}</td>
+      <td>{{ row.seg_count }}</td>
+      <td><div class="bar"><span style="width:{{ row.progress.pct }}%"></span></div>
+        {{ row.progress.done }}/{{ row.progress.total }}</td>
+      <td><span class="status s-{{ p.status }}">{{ p.status }}</span>
+        {% if p.quote_requested %}
+          {% if p.quote_status == "requested" %}
+            <span class="flag qreq">QUOTE REQUESTED</span>
+          {% else %}
+            <span class="flag q-{{ p.quote_status }}">QUOTE: {{ p.quote_status }}</span>
+          {% endif %}
+        {% endif %}
+        {% if p.is_rework %}
+          <span class="flag rework">REWORK{% if p.rework and p.rework.get("round") %} (round {{ p.rework.get("round") }}){% endif %}</span>
+        {% endif %}
+      </td>
+      <td>{{ p.expiry_at.strftime("%Y-%m-%d") if p.expiry_at else "-" }}</td>
+      <td><a href="/projects/{{ p.id }}">Open</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

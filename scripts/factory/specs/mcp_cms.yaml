@@ -1,0 +1,68 @@
+# Factory spec for the PROTOTYPE "CMS through its own MCP server" connector (option 2).
+# Prototype only: new scope,
+# not merged to main until the maintainer decides. Localization OS is the MCP CLIENT here; the CMS's
+# MCP server is reached through the same egress guard as every REST connector.
+
+connector:
+  kind: mcp_cms
+  name: CMS via MCP
+  class_name: McpCmsConnector
+  module: mcp_cms
+  icon: "🔌"
+  cat: "Headless CMS"
+  blurb: >-
+    Translate content in any CMS that runs its own MCP server. You map four of the server's
+    tools (list items, get an item in a locale, write an item in a locale, optional publish)
+    and each translation is written back as that item's per-locale variant.
+  docs_url: "https://modelcontextprotocol.io/specification/2025-06-18"
+  supports_oauth: false
+  archived: false
+
+  topology: T2
+  auth: [api_key]
+  api_version: "2025-06-18"
+  rich_text: none
+  regions: base_url
+  change_signals:
+    webhook_sig: null
+    poll_field: updatedAt
+    stale_flag: null
+    thin_payload: false
+  anti_loop_label: false
+
+  retry_noun: item
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<item-id>"
+  api_docstring: >-
+    Translate CMS items through the CMS's own MCP server into one or more locales, writing
+    each back as the item's per-locale variant through the mapped write tool (T2).
+
+  article_noun_phrase: "a CMS (via MCP)"
+  cli_parser_help: >-
+    Translate CMS items through the CMS's own MCP server into the connection's locales as
+    per-locale item variants.
+
+  item_units:
+    scan: "the items your mapped MCP list tool returns"
+    becomes: "the item's per-locale variant, written only through the MCP write tool you mapped (draft unless you turn on publish)"
+
+  help_row_body: "Translate CMS items through the CMS's own MCP server as per-locale variants (prototype). Body: <code>article_ids</code>/<code>article_id</code> (item ids), <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Translate CMS items through the CMS's own MCP server into the connection's locales as per-locale item variants (T2, prototype). `--article-ids` are the item ids the mapped list tool returns."
+
+  cli_expected_desc: "translate CMS items through the CMS's own MCP server into per-locale item variants (T2 SubResourceStrategy over mapped MCP tools; POST /api/connectors/{cid}/mcp_cms/translate parity)"
+
+  config_fields:
+    - {name: mcp_url, label: "MCP server URL", help: "The CMS's streamable HTTP MCP endpoint.", placeholder: "https://cms.acme.com/mcp"}
+  secret_fields:
+    - {name: bearer_token, label: "Bearer token", help: "Sent as Authorization: Bearer.", secret: true, placeholder: "a long token"}
+  setup_steps:
+    - "Turn on the CMS's MCP server and create a token for it."
+    - "Pick a preset or map the list, get, write and publish tools."
+  other_side: >-
+    Change detection is poll-based: run on a schedule. Unchanged items are suppressed by
+    content hash.

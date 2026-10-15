@@ -1,0 +1,59 @@
+# Golden fixture spec for tests/verify_connector_factory.py.
+# Renders to tests/factory_golden/expected/* (byte-exact). If a template changes on
+# purpose, regenerate the golden:
+#   python scripts/factory/generate.py new tests/factory_golden/spec.yaml --root <fresh temp> --dry-run
+# then update the expected/* files from the rendered output (or use the regen helper in
+# the verify suite's docstring). This fixture is NOT a real connector.
+connector:
+  kind: widgetcms
+  name: WidgetCMS
+  class_name: WidgetCMSConnector
+  icon: "🧰"
+  cat: "Headless CMS"
+  blurb: >-
+    Translate WidgetCMS entries into any language. Fixture connector for the factory golden
+    test; not a real integration.
+  docs_url: "https://widgetcms.example/api"
+  supports_oauth: false
+  archived: false
+  topology: T2
+  auth: [api_key]
+  api_version: "v2"
+  rich_text: none
+  regions: base_url
+  change_signals:
+    webhook_sig: null
+    poll_field: updatedAt
+    stale_flag: null
+    thin_payload: false
+  anti_loop_label: false
+  retry_noun: entry
+  harvest_title_field: title
+  article_id_shape: "<type>:<id>"
+  api_docstring: >-
+    Translate WidgetCMS entry(ies) on the fly into one or more locales, writing each back
+    as the entry's per-locale variant (T2).
+  article_noun_phrase: "a WidgetCMS"
+  cli_parser_help: "Translate WidgetCMS entries into the connection's locales as per-locale variants."
+  item_units:
+    scan: "your WidgetCMS entries"
+    becomes: "the entry's per-locale variant (never overwriting the source entry)"
+  help_row_body: "Translate WidgetCMS entry(ies) as per-locale variants. Body: <code>article_ids</code>/<code>article_id</code>, <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+  docs_row_body: "Translate WidgetCMS entries into the connection's locales as per-locale entry variants (T2)."
+  cli_expected_desc: "translate WidgetCMS entries into per-locale entry variants (T2 SubResourceStrategy)"
+  bb_io:
+    repo: "bb-io/WidgetCMS"
+    url: "https://github.com/bb-io/WidgetCMS"
+    license_verified_date: "2026-08-09"
+    copyright_holder: "Blackbird"
+  config_fields:
+    - {name: base_url, label: "Base URL", help: "Your WidgetCMS root.", placeholder: "https://widgetcms.example"}
+    - {name: content_types, label: "Content type IDs", help: "Comma-separated type IDs.", placeholder: "articles, pages"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated locale codes.", required: false, placeholder: "fr, de"}
+  secret_fields:
+    - {name: api_token, label: "API token", help: "A read+write token, sent as Bearer.", secret: true, placeholder: "a long token"}
+  setup_steps:
+    - "Create an API token with read + write access."
+    - "Enable localization and add your target locales."
+  other_side: "Poll-based change detection; unchanged entries are suppressed by content hash."

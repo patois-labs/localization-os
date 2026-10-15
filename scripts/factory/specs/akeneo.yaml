@@ -1,0 +1,129 @@
+# Factory spec - Akeneo PIM connector (first GENERATED-TIER build, 2026-08-10).
+#
+# Source of truth for the parametric touchpoints. The SEMANTIC build (strategy, extract,
+# existence probe, held-back accounting, fake) is hand-written per the generated
+# BUILD-TODO-akeneo.md.
+#
+# ORCHESTRATOR-LOCKED DECISIONS (do not re-litigate; recorded in the campaign log):
+#   - AUTH = token-paste v1 (paste an Akeneo access token + instance URL), a deliberate,
+#     documented simplification of the reference's Connect-Apps OAuth flow. The digest §3
+#     confirms nothing branches on how the bearer token was obtained, so this is honest and
+#     matches the Contentful/WordPress "paste a token" precedent. auth=[api_key] +
+#     supports_oauth=false is the truthful capability (a pasted bearer token), NOT a claim
+#     that we built OAuth. The NOTICES entry must note the OAuth flow was studied but a
+#     token-paste UX shipped for v1 (Connect-Apps OAuth is a future enhancement).
+#   - TOPOLOGY = T1, but the stock FieldMapStrategy does NOT fit: Akeneo's product PATCH is
+#     an officially-documented partial merge per (attribute, locale, scope) triple, so the
+#     write is a minimal values-dict PATCH with NO read-before-write. Build a bespoke
+#     AkeneoProductStrategy(LocaleMappingStrategy) (digest §2). This is the 4th hand-build to
+#     need a bespoke strategy - reinforces inventory §7c-2.
+#   - SCOPE v1 = products (uuid-keyed) + product models (code-keyed). Attribute-option labels
+#     and category labels are a real but DEFERRED localization surface (the 3 req/s
+#     attribute-option write limit + the select-option question); name them as out-of-scope
+#     in the runbook + BUILD-TODO, do not build them in v1.
+#   - article_id_shape "<content-type>:<uuid-or-code>" is a taxonomy-A scope surface exactly
+#     like Strapi H1: the content-type half MUST be validated against a fixed allowlist
+#     {product, product_model}, fail-closed, and never escape the /api/rest/v1 path; the id
+#     half is scoped to the connection. Products carry a uuid, product models carry a code -
+#     the asymmetry is itself a validation surface. Test with "..", encoded traversal, a
+#     prefix-of-a-valid type, unicode, CR/LF (Strapi H1 attack table).
+#   - HELD-BACK invariant (taxonomy B): a withheld translation is OMITTED from the outgoing
+#     PATCH values dict entirely - NEVER written as a source/placeholder fallback over an
+#     existing human translation. Stated + tested, not incidental.
+#   - Existence probe (taxonomy C): CE has no draft/publish, GET reflects the last PATCH ->
+#     clean. EE/Serenity Workflow-Proposals is the MANDATORY-1 live check (may hold writes
+#     for review). Build for CE; name the EE risk in the runbook (no revert plan if the
+#     connecting user's role enforces proposals - HubSpot MANDATORY-5 framing).
+#   - Retry/backoff rides the shared base._request machinery (the reference has none).
+#   - NO alembic migration (coordination law). If a schema change seems needed, STOP.
+
+connector:
+  kind: akeneo
+  name: Akeneo
+  class_name: AkeneoConnector
+  icon: "🗂️"
+  cat: "PIM"
+  blurb: >-
+    Translate Akeneo PIM product and product-model attribute values into any language. Each
+    translation is written back as a per-locale attribute value on the same record (a partial
+    PATCH merge, so other locales, scopes, and untouched attributes are never overwritten).
+  docs_url: "https://api.akeneo.com/documentation/introduction.html"
+  supports_oauth: false
+  archived: false
+
+  # -> capability = Capability(...) block
+  topology: T1
+  auth: [api_key]
+  api_version: "v1"
+  rich_text: none
+  regions: base_url
+  change_signals:
+    webhook_sig: null
+    poll_field: updated
+    stale_flag: null
+    thin_payload: false
+  anti_loop_label: false
+
+  # -> store.py thin delegator + _TRANSLATE_KINDS + _RETRY_ARTICLE_KINDS
+  retry_noun: product
+  delegator_extra_guard: ""
+
+  # -> harvest.py mapper. Akeneo has no flat "title" field, but build_flow resolves the
+  # record's display title per catalog and always passes it under the standard "title" key,
+  # so the shipped _map_akeneo IS the stock one-liner f.get("title"). (This was once null to
+  # flag a hand-written mapper; str(null) generated f.get("None") and the loader now refuses
+  # null outright.)
+  harvest_title_field: title
+
+  # -> app/web/api.py route + docstring
+  article_id_shape: "<content-type>:<uuid-or-code>"
+  api_docstring: >-
+    Translate Akeneo product/product-model attribute values on the fly into one or more
+    locales, writing back only the touched (attribute, locale, scope) triples as a partial
+    PATCH merge (T1). The content-type half of each id is validated against {product,
+    product_model}.
+
+  # -> app/cli/cmd_connector.py leaf
+  article_noun_phrase: "an Akeneo product"
+  cli_parser_help: >-
+    Translate Akeneo product and product-model attribute values into the connection's
+    locales as per-locale attribute values on the same record.
+
+  # -> app/templates/connection.html item_units caption
+  item_units:
+    scan: "your Akeneo products and product models"
+    becomes: "the same record's per-locale attribute values (a partial PATCH merge, so other locales, scopes, and untouched attributes are never overwritten)"
+
+  # -> app/templates/help.html Part-2 table row body
+  help_row_body: "Translate Akeneo product/product-model attribute values as per-locale values on the same record (T1 partial-PATCH merge). Body: <code>article_ids</code>/<code>article_id</code> (<code>&lt;contentType&gt;:&lt;uuidOrCode&gt;</code>), <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  # -> docs/CLI.md capability table row body
+  docs_row_body: "Translate Akeneo product and product-model attribute values into the connection's locales as per-locale values on the same record (T1; partial-PATCH merge per attribute+locale+scope). `--article-ids` are `<contentType>:<uuidOrCode>` where contentType is `product` or `product_model`."
+
+  # -> tests/verify_cli_parity.py EXPECTED_COMMANDS value
+  cli_expected_desc: "translate Akeneo product and product-model attribute values into per-locale values on the same record (T1 partial-PATCH merge; POST /api/connectors/{cid}/akeneo/translate parity)"
+
+  # -> THIRD_PARTY_NOTICES.md entry (bb-io reference studied)
+  bb_io:
+    repo: "bb-io/Akeneo"
+    url: "https://github.com/bb-io/Akeneo"
+    license_verified_date: "2026-08-09"
+    copyright_holder: "Blackbird"
+
+  # config_fields / secret_fields / setup_steps drive `new` (module skeleton) only.
+  config_fields:
+    - {name: base_url, label: "Instance URL", help: "Your Akeneo PIM base URL, e.g. https://my-pim.cloud.akeneo.com. The connector appends /api/rest/v1.", placeholder: "https://my-pim.cloud.akeneo.com"}
+    - {name: content_types, label: "Content types", help: "Comma-separated: 'product' and/or 'product_model'.", required: false, placeholder: "product, product_model"}
+    - {name: channel, label: "Channel (scope)", help: "Optional Akeneo channel code to scope scopable attribute values.", required: false, placeholder: "ecommerce"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated Akeneo locale codes enabled on the instance.", required: false, placeholder: "fr_FR, de_DE"}
+  secret_fields:
+    - {name: access_token, label: "Access token", help: "An Akeneo API access token (Bearer). For v1, paste a token minted via your Akeneo connection; the OAuth Connect-Apps flow is not required.", secret: true, placeholder: "a long token"}
+  setup_steps:
+    - "In Akeneo, go to Connect -> Connection settings and create a connection to obtain API credentials."
+    - "Mint an access token for that connection (Connect Apps OAuth, or the API connection credentials) and paste the Bearer token here."
+    - "Ensure every target locale is enabled under Settings -> Locales, and note your channel code if you translate scopable attributes."
+  other_side: >-
+    Change detection is poll-based: run on a schedule. Akeneo's 'updated' search filter is
+    the content-changed signal, re-verified by content hash so unchanged records are
+    suppressed. Akeneo has no webhook receiver in scope for v1.

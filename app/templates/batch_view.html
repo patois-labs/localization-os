@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+{# Work surface: full width, not the centered list column (Console). #}
+{% set wide_page = true %}
+{% import "_macros.html" as m %}
+{% block title %}Batch monitor{% endblock %}
+{#
+  SPEC-workflows-redesign Phase 5b - the language matrix run monitor. Rows = the batch's
+  requested locales; columns = the pipeline steps; each cell = a member step's live status
+  (+ LQA/QE score, gate, visit count). Server-renders the FULL matrix so the page is a
+  correct static snapshot with JS disabled; a page-scoped poll then live-updates the cells
+  in place while the batch runs (no reload loops - a structural change from a re-run triggers
+  ONE bounded reload). Per-locale actions: re-run one locale, retry every failed locale, and
+  a drill-down link to each member run (a paused member links to its review/resume form).
+
+  Column-axis honesty: build_matrix keys a column on (order_index, step_type, name), taking
+  the ordered UNION across the requested workflow + every member's own resolved variant. A
+  structurally-diverged variant contributes its OWN columns, and a member's cell is placed
+  strictly under the column it exactly matches - never misaligned under a foreign step.
+#}
+{% macro stclass(s) -%}
+{%- if s in ('completed', 'passed') -%}bm-ok
+{%- elif s == 'failed' -%}bm-fail
+{%- elif s == 'running' -%}bm-run
+{%- elif s == 'paused' -%}bm-rev
+{%- elif s == 'skipped' -%}bm-skip
+{%- elif s == 'partial' -%}bm-part
+{%- elif s == 'unlaunched' -%}bm-na
+{%- else -%}bm-pending
+{%- endif -%}
+{%- endmacro %}
+{% macro cell(c) -%}
+{%- if c is none -%}
+  <span class="bm-dash" aria-label="not in this variant">-</span>
+{%- else -%}
+  <span class="chip {{ stclass(c.status) }}">{{ c.status }}</span>
+  {%- if c.score is not none %} <span class="bm-score data-mono">{{ c.score }}</span>{% endif -%}
+  {%- if c.visits and c.visits > 1 %} <span class="bm-visits data-mono">x{{ c.visits }}</span>{% endif -%}
+{%- endif -%}
+{%- endmacro %}
+{% block content %}
+<div class="review-runs-page">
+<p><a href="/documents/{{ doc.id }}" class="back"><span aria-hidden="true">←</span> {{ doc.filename }}</a></p>
+
+{% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
+
+<section class="card bm-monitor">
+  {{ m.page_header("Batch: " ~ (wf.name if wf else "workflow #" ~ batch.workflow_id)) }}
+  <p class="muted">
+    Document: {{ doc.filename }}
+    · Status: <span id="bm-status" class="chip {{ stclass(view.status) }}">{{ view.status }}</span>
+  </p>
+  {# The aggregate header: N of M locales completed · X failed · Y in review · Z running. #}
+  <p class="bm-agg">
+    <strong><span id="bm-completed">{{ view.counts.completed }}</span> of
+      <span id="bm-requested">{{ view.counts.requested }}</span></strong> locale(s) completed
+    · <span id="bm-failed">{{ view.counts.failed }}</span> failed
+    · <span id="bm-review">{{ view.counts.paused }}</span> in review
+    · <span id="bm-running">{{ view.counts.running - view.counts.paused }}</span> running
+    {% if view.counts.unlaunched %} · <span id="bm-unlaunched">{{ view.counts.unlaunched }}</span> not launched
+    {% else %}<span id="bm-unlaunched" hidden>0</span>{% endif %}
+    {% if view.spend_stopped %} · <span class="chip bm-part">spend-stopped</span>{% endif %}
+  </p>
+  <p class="muted small data-mono">
+    max_parallel {{ batch.max_parallel }}{% if batch.fail_fast %} · fail_fast{% endif %}
+  </p>
+  {% if batch.notes %}<p class="muted small">{{ batch.notes }}</p>{% endif %}
+  <p class="bm-actions">
+    {% if not batch.finished_at %}
+    <span class="muted small">{{ rerun_unavailable }}</span>
+    {% elif view.counts.failed %}
+    <form method="post" action="/batches/{{ batch.id }}/retry-failed" class="bm-inline">
+      {% include "_csrf.html" %}
+      <button type="submit" data-busy-label="{{ t(request, 'busy.starting_run') }}">Retry {{ view.counts.failed }} failed locale(s)</button>
+    </form>
+    {% endif %}
+    <a class="bm-refresh" href="/batches/{{ batch.id }}">Refresh</a>
+  </p>
+</section>
+
+<section class="card">
+  <h2>Locales × steps</h2>
+  {% if matrix.diverged %}
+  <p class="notice small">Variants differ structurally across locales - each step keeps its own
+    column, and a locale that lacks a step shows <span class="bm-dash">-</span> there. Divergent
+    rows are marked <span class="bm-div">◇</span>.</p>
+  {% endif %}
+  <div class="tablewrap" role="region" aria-label="{{ t(request, 'page.review_runs.matrix_region') }}" tabindex="0">
+    <table class="table data-table bm-matrix">
+      <thead>
+        <tr>
+          <th scope="col">Locale</th>
+          <th scope="col">Status</th>
+          {% for col in matrix.columns %}
+          <th scope="col" title="{{ col.step_type }} · order {{ col.order_index }}">{{ col.name or col.step_type }}</th>
+          {% endfor %}
+          <th scope="col">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in matrix.rows %}
+        <tr data-locale="{{ row.locale }}"{% if row.run_id %} data-run-id="{{ row.run_id }}"{% endif %}>
+          <td class="data-mono">
+            {% if row.run_id %}<a href="/runs/{{ row.run_id }}">{{ row.locale }}</a>{% else %}{{ row.locale }}{% endif %}
+            {% if row.rerun %}<span class="bm-visits data-mono" title="attempt {{ row.attempt }}">x{{ row.attempt }}</span>{% endif %}
+            {% if row.diverges %}<span class="bm-div" title="this variant's steps differ from the base pipeline"><span aria-hidden="true">◇</span><span class="sr-only"> (steps differ from the base pipeline)</span></span>{% endif %}
+          </td>
+          <td class="bm-statuscell">
+            {% if row.unlaunched %}
+              <span class="chip bm-na">not launched</span>
+            {% else %}
+              <span class="chip {{ stclass(row.status) }}">{{ row.status }}</span>
+            {% endif %}
+          </td>
+          {% for col in matrix.columns %}
+          {% set c = row.cells[col.key] %}
+          {# Heatmap tint (viz quick-win): the SAME status-family class the chip
+             inside already uses (stclass), just also on the cell so a light-alpha
+             CSS wash can key off it. Redundant reinforcement only - the chip label
+             stays the actual signal, this just helps the eye find hot cells. #}
+          <td class="bm-cell{% if c %} {{ stclass(c.status) }}{% endif %}"{% if c %} data-step-id="{{ c.step_id }}"{% endif %} data-col="{{ col.key }}">{{ cell(c) }}</td>
+          {% endfor %}
+          <td class="bm-rowaction">
+            {% if row.resume %}
+              <a href="/runs/{{ row.run_id }}">Review</a>
+            {% elif not batch.finished_at %}
+              <span class="muted small" title="{{ row.reason }}">-</span>
+            {% elif row.terminal %}
+              <form method="post" action="/batches/{{ batch.id }}/rerun" class="bm-inline">
+                {% include "_csrf.html" %}
+                <input type="hidden" name="locale" value="{{ row.locale }}" />
+                <button type="submit" class="mini" data-busy-keep-label>Re-run</button>
+              </form>
+            {% elif row.unlaunched %}
+              <form method="post" action="/batches/{{ batch.id }}/rerun" class="bm-inline">
+                {% include "_csrf.html" %}
+                <input type="hidden" name="locale" value="{{ row.locale }}" />
+                <button type="submit" class="mini" data-busy-keep-label title="{{ row.reason }}">Run now</button>
+              </form>
+            {% else %}
+              <span class="muted small">running…</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="muted small bm-legend">
+    <span class="chip bm-ok">passed</span>
+    <span class="chip bm-run">running</span>
+    <span class="chip bm-rev">paused</span>
+    <span class="chip bm-fail">failed</span>
+    <span class="chip bm-pending">pending</span>
+    <span class="bm-dash">-</span> not in this variant
+  </p>
+</section>
+
+{% if live %}
+<p id="bm-poll-stopped" class="muted small" style="display:none">
+  Live updates paused after a while. <a href="/batches/{{ batch.id }}">Refresh</a> to keep watching.
+</p>
+<script nonce="{{ csp_nonce() }}">
+(function () {
+  // Bounded live monitor. While the batch is RUNNING, poll the session-auth status endpoint
+  // and update the cells in place without a full-page reload loop. A STRUCTURAL change (a re-run
+  // gave a locale a new attempt / run id, which shifts the column axis) triggers exactly ONE
+  // bounded reload so the server rebuilds the grid; the per-batch counter caps that the way
+  // observe_run's max_seconds caps the single-run stream.
+  var BATCH_RELOAD_MAX = 1;               // hard cap on structural and terminal reloads
+  var POLL_MAX = 400;                      // ~400 * 2.5s ≈ 16 min, matching observe_run's ceiling
+  var POLL_MS = 2500;
+  var batchId = {{ batch.id }};
+  var polls = 0;
+  var url = '/batches/' + batchId + '/status.json?detail=steps';
+  var reloadKey = 'batch-reloads-' + batchId;
+
+  function stClass(s) {
+    if (s === 'completed' || s === 'passed') return 'bm-ok';
+    if (s === 'failed') return 'bm-fail';
+    if (s === 'running') return 'bm-run';
+    if (s === 'paused') return 'bm-rev';
+    if (s === 'skipped') return 'bm-skip';
+    if (s === 'partial') return 'bm-part';
+    if (s === 'unlaunched') return 'bm-na';
+    return 'bm-pending';
+  }
+{% include '_html_escape.js' %}
+  function cellHtml(c) {
+    var h = '<span class="chip ' + stClass(c.status) + '">' + esc(c.status) + '</span>';
+    if (c.score !== null && c.score !== undefined) h += ' <span class="bm-score data-mono">' + esc(c.score) + '</span>';
+    if (c.visits && c.visits > 1) h += ' <span class="bm-visits data-mono">x' + esc(c.visits) + '</span>';
+    return h;
+  }
+  function setText(id, val) { var e = document.getElementById(id); if (e) e.textContent = val; }
+  function boundedReload() {
+    var n = parseInt(sessionStorage.getItem(reloadKey) || '0', 10) + 1;
+    if (n <= BATCH_RELOAD_MAX) { sessionStorage.setItem(reloadKey, String(n)); window.location.reload(); return true; }
+    return false;
+  }
+  function showStopped() { var e = document.getElementById('bm-poll-stopped'); if (e) e.style.display = ''; }
+
+  function apply(v) {
+    var c = v.counts || {};
+    setText('bm-completed', c.completed);
+    setText('bm-requested', c.requested);
+    setText('bm-failed', c.failed);
+    setText('bm-review', c.paused);
+    setText('bm-running', Math.max(0, (c.running || 0) - (c.paused || 0)));
+    setText('bm-unlaunched', c.unlaunched);
+    var st = document.getElementById('bm-status');
+    if (st) { st.textContent = v.status; st.className = 'chip ' + stClass(v.status); }
+    var latest = {};
+    (v.members || []).forEach(function (m) { if (m.is_latest) latest[m.locale] = m; });
+    var changed = false;
+    document.querySelectorAll('tr[data-locale]').forEach(function (tr) {
+      var m = latest[tr.getAttribute('data-locale')];
+      if (!m) return;
+      if (String(m.run_id) !== (tr.getAttribute('data-run-id') || '')) { changed = true; return; }
+      var sc = tr.querySelector('.bm-statuscell .chip');
+      if (sc) { sc.textContent = m.status; sc.className = 'chip ' + stClass(m.status); }
+      (m.step_runs || []).forEach(function (sr) {
+        var td = tr.querySelector('td.bm-cell[data-step-id="' + sr.step_id + '"]');
+        // Heatmap tint (viz quick-win, VIZ-RESEARCH-2026-07-21): the server's
+        // stclass() macro and this file's stClass() are the SAME status->class
+        // mapping kept in two places on purpose (Jinja vs JS) - pairing every
+        // innerHTML write with a className write keeps them from drifting apart
+        // on a live-watched batch. Without this, a transitioning cell (e.g.
+        // running -> completed) showed the NEW chip over the STALE tint, since
+        // only the chip's own inline class was ever updated, never the <td>'s.
+        // Reassigning className unconditionally also covers a cell that had NO
+        // tint class at initial render (server tints only a populated `c`).
+        if (td) {
+          var html = cellHtml(sr);
+          if (td.bmHtml !== html) { td.bmHtml = html; td.innerHTML = html; }
+          td.className = 'bm-cell ' + stClass(sr.status);
+        }
+      });
+    });
+    return changed;
+  }
+  function tick() {
+    fetch(url, { headers: { 'Accept': 'application/json', 'X-Loc-Background': '1' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (v) {
+        if (!v) { if (polls < POLL_MAX) { polls++; setTimeout(tick, POLL_MS); } return; }
+        var changed = apply(v);
+        if (typeof window !== 'undefined' && window.locA11yEnhance) { window.locA11yEnhance(document.querySelector('main')); }
+        // Refresh server-rendered controls and the wait reason on finalization too.
+        if (changed || v.status !== 'running') { if (!boundedReload()) showStopped(); return; }
+        if (v.status === 'running') {
+          if (polls < POLL_MAX) { polls++; setTimeout(tick, POLL_MS); } else { showStopped(); }
+        }
+      })
+      .catch(function () { if (polls < POLL_MAX) { polls++; setTimeout(tick, POLL_MS); } });
+  }
+  setTimeout(tick, POLL_MS);
+})();
+</script>
+{% else %}
+<script nonce="{{ csp_nonce() }}">
+  // Terminal batch - clear this batch's structural-reload counter so a later re-run starts fresh.
+  try { sessionStorage.removeItem('batch-reloads-{{ batch.id }}'); } catch (e) {}
+</script>
+{% endif %}
+</div>
+{% endblock %}

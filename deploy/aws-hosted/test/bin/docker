@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Offline stand-in for docker, used ONLY by test/run-dry.sh (host/install-audit-alert.sh and
+# the locos-audit-alert check it installs). Logs every call to $SHIM_LOG.
+# SHIM_AUDIT: what `audit verify` in the container answers
+#   ok (default) | broken | down (container not running) | noisy (OK, then 12 log lines)
+#   flaky (fails once, then OK) | error (always fails, container running)
+printf 'docker %s\n' "$*" >> "${SHIM_LOG:-/dev/null}"
+case "${1:-} ${SHIM_AUDIT:-ok}" in
+  "inspect down") echo "Error response from daemon: No such object: locosapp" >&2; exit 1 ;;
+  "inspect "*) echo true; exit 0 ;;
+esac
+case "$*" in
+  "exec locosapp python -m app.cli audit verify")
+    case "${SHIM_AUDIT:-ok}" in
+      ok) echo "OK: audit chain verified (1234 row(s))."; exit 0 ;;
+      broken) echo "BROKEN: audit chain failed after 57 row(s) (first bad row id: 58)."
+              echo "error: audit chain verification failed." >&2; exit 1 ;;
+      down) echo "Error response from daemon: container locosapp is not running" >&2; exit 1 ;;
+      noisy) echo "OK: audit chain verified (1234 row(s))."
+             for n in 1 2 3 4 5 6 7 8 9 10 11 12; do echo "INFO shutdown log line $n"; done; exit 0 ;;
+      flaky) # fails the first time, works the second (a slow start)
+             m="${SHIM_STATE:-/tmp/shim-state}.flaky"
+             if [ -f "$m" ]; then echo "OK: audit chain verified (1234 row(s))."; exit 0; fi
+             : > "$m"; echo "error: database is locked" >&2; exit 1 ;;
+      error) echo "error: database is locked" >&2; exit 1 ;;
+    esac ;;
+esac
+echo "SHIM docker: unexpected call: $*" >&2
+exit 125

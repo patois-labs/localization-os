@@ -1,0 +1,54 @@
+{# a11y T11 (WCAG 3.1.1 / 3.1.2), mirroring base.html: this recovery shell's own copy is
+   English in every interface language, so the page declares English; the one translated
+   region it now carries (#408: the session-timeout dialog) is tagged with the interface
+   language through _ui_lang_attr. The `{{ _page_lang }}` token is what verify_a11y_static
+   C9 expects once the page includes localized text (the timeout dialog strings). #}
+{% set _ui_lang = ui_lang(request) %}
+{% set _page_lang = 'en' %}
+{% set _ui_lang_attr %}{% if _ui_lang != _page_lang %} lang="{{ _ui_lang }}"{% endif %}{% endset %}
+<!DOCTYPE html>
+{% import "_macros.html" as m %}
+<html lang="{{ _page_lang }}"{{ theme_attrs(request) }}>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <title>{{ compose_title('Save your recovery codes') }}</title>
+  <script nonce="{{ csp_nonce() }}">
+    (function () {
+      try {
+        var el = document.documentElement;
+        var p = el.getAttribute('data-theme-pref');  // ADR 0063: the signed-in account's choice
+        var t = (p === 'light' || p === 'dark' || p === 'system') ? p : localStorage.getItem('loc_theme');
+        if (t === 'light' || t === 'dark') el.setAttribute('data-theme', t);
+        else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) el.setAttribute('data-theme', 'light');  // #564 p1: no saved choice follows the OS
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/style.css?v={{ static_v('style.css') }}" />
+  {# #408: the forced-enrollment page signs the person IN, so it carries the same session
+     timeout metadata + dialog + script base.html loads (guard: session_timeout_config is
+     non-None only for a real signed-in user with the wall on and a limit). Without it the
+     already-rendered recovery codes stayed readable after the server session expired. #}
+  {% set _st = session_timeout_config(request) %}
+  {% if _st %}<meta name="loc-session-idle" content="{{ _st.idle }}" /><meta name="loc-session-max" content="{{ _st.max }}" /><meta name="loc-session-uid" content="{{ _st.uid }}" />{% endif %}
+  {% if _st %}<script nonce="{{ csp_nonce() }}">window.I18N = {{ i18n_js(request)|tojson }}; window.CSRF_TOKEN = {{ csrf_token(request)|tojson }};</script>{% endif %}
+</head>
+<body class="authbody auth-account">
+  {# TOTP train: shown once, right after the forced set-up signed the person in. #}
+  <main class="authcard">
+    <div class="brand-big"><span class="mark" aria-hidden="true">◐</span> {{ app_meta().org }}</div>
+    {% set auth_title %}Save your recovery codes{% endset %}
+    {{ m.page_header(auth_title) }}
+    <p class="muted">Signed in as <strong>{{ email }}</strong>.</p>
+    {% include "_mfa_codes_body.html" %}
+    <p class="mt"><a class="button" href="{{ continue_href }}">I saved my codes, continue</a></p>
+  </main>
+  {# #408: the shared warning dialog (a direct <body> child so session_timeout.js can hide
+     every other region with body.session-ended when the idle/absolute deadline passes) and
+     its script, mirroring base.html. At the deadline /auth/session answers signed_in=False
+     and the codes behind the modal are no longer readable. #}
+  {% if _st %}{% include "_session_timeout.html" %}
+<script src="/static/session_timeout.js?v={{ static_v('session_timeout.js') }}"></script>{% endif %}
+</body>
+</html>

@@ -1,0 +1,14 @@
+# Localization OS TMS - OPTIONAL LDAP / Active Directory auth (opt-in extra).
+#
+# The ldap3 library that powers search-then-bind directory authentication
+# (app/services/ldap_auth.py). Kept OUT of the default `requirements.txt` on
+# purpose: ldap3 is LGPL-licensed, and the default install must carry NO GPL-family
+# (AGPL/LGPL/GPL) dependency so an enterprise "zero-copyleft" procurement scan of the
+# base install passes (see tests/verify_licenses.py). ldap3 is imported lazily and
+# is only a hard requirement when the LDAP toggle is turned on; the Security page
+# refuses to enable LDAP while this package is absent. Install it on the host when
+# enabling LDAP:
+#     pip install -r requirements-ldap.txt
+#
+# Fully offline-testable via ldap3's built-in MOCK_SYNC strategy (tests/verify_ldap.py).
+ldap3==2.9.1

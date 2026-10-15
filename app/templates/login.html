@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+{% import "_form_errors.html" as fe %}
+{# TOTP train: an undefined `error` would be taken as an explicit value and hide ?err=, so
+   the GET page (no error in context) lets ?err=mfa_expired / mfa_locked through the resolver.
+   #248: only KNOWN codes get this far. app/web/page_guard.py removes every other ?err= /
+   ?error= value from /auth pages before they render, so the sign-in page never shows text
+   a link supplied (the a11y T6 guarantee). #}
+{% set error = error|default(none) %}
+{# a11y T11 (WCAG 3.1.1): every string on the sign-in page comes from the catalog (error
+   sentences carry their own lang), so it is declared in the interface language. #}
+<html lang="{{ ui_lang(request) }}"{{ theme_attrs(request) }}>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <title>{% if page_error(request, error) %}{{ t(request, 'errors.title_prefix') }} {% endif %}{{ compose_title(t(request, 'page.login.sign_in')) }}</title>
+  {# No-FOUC theme bootstrap: runs synchronously BEFORE the stylesheet so the
+     saved theme is applied before first paint (no flash). Absent/invalid value
+     or no-JS -> attribute stays off -> :root dark default, exactly today. #}
+  <script nonce="{{ csp_nonce() }}">
+    (function () {
+      try {
+        var el = document.documentElement;
+        var p = el.getAttribute('data-theme-pref');  // ADR 0063: the signed-in account's choice
+        var t = (p === 'light' || p === 'dark' || p === 'system') ? p : localStorage.getItem('loc_theme');
+        if (t === 'light' || t === 'dark') el.setAttribute('data-theme', t);
+        else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) el.setAttribute('data-theme', 'light');  // #564 p1: no saved choice follows the OS
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/style.css?v={{ static_v('style.css') }}" />
+  <script src="/static/busy.js?v={{ static_v('busy.js') }}"></script>
+</head>
+<body class="authbody auth-account">
+{% include "_busy.html" %}
+  <main class="authcard">
+    <div class="brand-big"><span class="mark" aria-hidden="true">◐</span> {{ app_meta().org }}</div>
+    <header class="page-header"><div class="page-header-copy"><div class="page-header-title"><h1>{{ t(request, 'page.login.sign_in') }}</h1></div></div></header>
+    <p class="muted">{{ t(request, 'page.login.subtitle') }}</p>
+    {% if request.query_params.get('accepted') %}<p class="ok">{{ t(request, 'page.login.accepted') }}</p>{% endif %}
+    {# a11y T9: a status message that says why the person was signed out (inactivity or
+       the maximum session length) and what happens next. #}
+    {% if request.query_params.get('expired') %}<p class="notice" role="status" id="login-expired">{{ t(request, 'page.login.expired_max' if request.query_params.get('reason') == 'max' else 'page.login.expired') }}</p>{% endif %}
+    {{ fe.error_summary(request, error) }}
+    <form method="post" action="/auth/login" class="form">
+      {% include "_csrf.html" %}
+      <input type="hidden" name="next" value="{{ next }}" />
+      <label>{{ t(request, 'page.login.username') }} <input type="text" name="email" id="login-username" autocomplete="username" value="{{ username|default('') }}" required autofocus{{ fe.invalid_attrs(request, 'login-username', when=credential_error|default(false)) }} /></label>
+      <label>{{ t(request, 'page.login.password') }} <input type="password" name="password" id="login-password" autocomplete="current-password" required{{ fe.invalid_attrs(request, 'login-password', when=credential_error|default(false)) }} /></label>
+      <button type="submit" data-busy-label="{{ t(request, 'busy.signing_in') }}">{{ t(request, 'page.login.sign_in') }}</button>
+    </form>
+    {% if sso_enabled %}
+      <a class="ghost button mt" href="/auth/oidc/login?{{ {'next': next}|urlencode }}">{{ t(request, 'page.login.sign_in_sso', provider=(sso_provider|upper)) }}</a>
+    {% endif %}
+    {% if saml_enabled %}
+      <a class="ghost button mt" href="/auth/saml/login">{{ t(request, 'page.login.sign_in_saml') }}</a>
+    {% endif %}
+    {% if ldap_enabled %}<p class="help mt">{{ t(request, 'page.login.ldap_configured') }}</p>{% endif %}
+  </main>
+<script src="/static/form_errors.js?v={{ static_v('form_errors.js') }}"></script>
+</body>
+</html>

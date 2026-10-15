@@ -1,0 +1,34 @@
+# Atlassian Forge manifest - Localization OS issue panel.
+# After `forge register`, replace the app.id below with the one the CLI assigns.
+modules:
+  jira:issuePanel:
+    - key: loc-studio-issue-panel
+      resource: main
+      resolver:
+        function: resolver
+      title: Localization OS
+      icon: https://developer.atlassian.com/platform/forge/images/icons/issue-panel-icon.svg
+
+  function:
+    - key: resolver
+      handler: index.handler
+
+resources:
+  - key: main
+    path: src/frontend/index.jsx
+
+permissions:
+  scopes:
+    # Needed for the invoking user's permission checks (GET /rest/api/3/mypermissions).
+    - read:jira-work
+  external:
+    fetch:
+      backend:
+        # Replace with your Localization OS host (Forge requires literal domains here).
+        - 'https://your-loc-studio-host.example.com'
+
+app:
+  # Replace after `forge register`.
+  id: ari:cloud:ecosystem::app/REPLACE-WITH-FORGE-APP-ID
+  runtime:
+    name: nodejs20.x

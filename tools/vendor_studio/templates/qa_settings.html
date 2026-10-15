@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}QA settings{% endblock %}
+{% block body %}
+<h1>QA check severities</h1>
+<p class="muted">Severity (warning or error) is an advisory label only - it colours the
+  finding. QA findings never block Complete or Deliver; any finding can be dismissed with a
+  reason for bookkeeping.</p>
+<table class="grid">
+  <thead><tr><th>Check</th><th>Severity</th><th></th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td>{{ r.key }}</td>
+      <td>{{ r.severity }}</td>
+      <td>
+        <form method="post" action="/settings/qa" class="inline">
+          <input type="hidden" name="check_key" value="{{ r.key }}">
+          <select name="severity">
+            <option value="warning" {% if r.severity == "warning" %}selected{% endif %}>warning</option>
+            <option value="error" {% if r.severity == "error" %}selected{% endif %}>error</option>
+          </select>
+          <button type="submit">Save</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

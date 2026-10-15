@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ t(request, 'page.connectors_manage.title') }}{% endblock %}
+{% block content %}
+<div class="connections-page">
+
+{% set header_meta %}{{ tl(request, 'page.connectors_manage.intro') }}{% endset %}
+{% set header_actions %}
+<p class="toolbar">
+    <a class="btnlink" href="/connectors"><span aria-hidden="true">←</span> {{ tl(request, 'nav.connectors') }}</a>
+    <a class="btnlink" href="/connectors/catalog">{{ tl(request, 'page.connectors_catalog.get_more') }}</a>
+  </p>{% endset %}
+{{ m.page_header(tl(request, 'page.connectors_manage.title'), meta=header_meta, secondary=header_actions) }}
+
+{% call m.card(flat=true) %}
+  <h2 class="sr-only">{{ tl(request, 'page.connectors_manage.kinds') }}</h2>
+  {% call m.data_table(tl(request, 'page.connectors_manage.kinds'), [{'label': tl(request, 'page.connectors_manage.col_connector')}, {'label': tl(request, 'page.connectors_manage.col_state')}, {'label': tl(request, 'page.connectors_manage.col_connections')}, {'label': '', 'actions': true}]) %}
+
+      {% for r in rows %}
+      <tr>
+        <td>
+          <span class="cell-primary"><span class="tile-icon" aria-hidden="true">{{ r.icon }}</span> {{ r.name }}
+          {% if r.archived %}{{ m.status_badge('new', tl(request, 'page.connectors_manage.badge_archived')) }}{% endif %}</span>
+          <span class="cell-secondary">{{ r.blurb }}</span>
+        </td>
+        <td>
+          {% if r.enabled %}{{ m.status_badge('active', tl(request, 'page.connectors_manage.on')) }}
+          {% else %}{{ m.status_badge('paused', tl(request, 'page.connectors_manage.off')) }}{% endif %}
+        </td>
+        <td class="numeric">{{ r.connections }}</td>
+        <td class="row-actions">
+          {% call m.row_menu('cnm-' ~ r.kind, 'More actions for ' ~ r.name) %}
+          <form method="post" action="/connectors/manage/{{ r.kind }}" class="rowform connector-toggle"
+                {% if r.enabled %}data-confirm="{{ t(request, 'page.connectors_manage.confirm_disable') | replace('{name}', r.name) | replace('{n}', r.connections | string) }}"{% endif %}>
+            {% include "_csrf.html" %}
+            <input type="hidden" name="enabled" value="{{ 0 if r.enabled else 1 }}" />
+            <button type="submit" role="menuitem" aria-label="{{ (tl(request, 'page.connectors_manage.disable') if r.enabled else tl(request, 'page.connectors_manage.enable'))|striptags }} {{ r.name }}">{{ tl(request, 'page.connectors_manage.disable') if r.enabled else tl(request, 'page.connectors_manage.enable') }}</button>
+          </form>
+          {% endcall %}
+        </td>
+      </tr>
+      {% endfor %}
+
+{% endcall %}
+{% endcall %}
+
+{# Confirm-on-disable via a data-attribute + listener, so an apostrophe in a name can
+   never break an inline onsubmit handler (the Settings feature-card idiom). #}
+<script nonce="{{ csp_nonce() }}">
+ document.querySelectorAll('form.connector-toggle[data-confirm]').forEach(function (f) {
+   f.addEventListener('submit', function (e) {
+     if (window.LocAsk && window.LocAsk.guard) { window.LocAsk.guard(e, f.getAttribute('data-confirm')); }
+      else { e.preventDefault(); }
+   });
+ });
+</script>
+
+</div>
+{% endblock %}

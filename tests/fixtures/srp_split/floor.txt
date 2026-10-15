@@ -1,0 +1,6 @@
+_DOCUMENTED_FLOOR = frozenset(
+    {
+        # sample (1)
+        "app/x/old.py",
+    }
+)

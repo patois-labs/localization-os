@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<txml locale="en_US" version="1.0" segtype="sentence" datatype="html" targetlocale="de_DE" createdby="hand-written fixture">
+<translatable blockId="1" datatype="html">
+<segment segmentId="1">
+<source>Open the <ut type="start" x="1">&lt;b class='ui'&gt;</ut>Settings<ut type="end" x="1">&lt;/b&gt;</ut> menu.</source>
+<ws> </ws>
+</segment>
+<segment segmentId="2" gtmt="false">
+<source>Press <ut x="2">&lt;br/&gt;</ut>Save &amp; close.</source>
+<target score="85">Druecken Sie Speichern.</target>
+</segment>
+</translatable>
+<translatable blockId="2" locked="true">
+<segment segmentId="3">
+<source>ACME-SKU-001</source>
+</segment>
+</translatable>
+<translatable blockId="3">
+<segment segmentId="4" locked="true">
+<source>Locked line.</source>
+<target>Gesperrte Zeile.</target>
+</segment>
+<segment segmentId="5" modified="true">
+<source>Confirmed line.</source>
+<target score="100">Bestaetigte Zeile.</target>
+</segment>
+<segment segmentId="6" gtmt="true">
+<source>Machine line.</source>
+<target>Maschinenzeile.</target>
+</segment>
+<segment segmentId="7">
+<source>Left untranslated.</source>
+<target/>
+</segment>
+<segment segmentId="8">
+<ws>  </ws><source>With a comment.</source><ws> </ws>
+<comments><comment creationid="pm" creationdate="20261010T120000Z" type="text">Keep it short &amp; plain</comment></comments>
+</segment>
+<segment segmentId="9">
+<source>Prefilled line.</source>
+<target>Vorbefuellte Zeile.</target>
+<revisions><revision creationid="tr"><source>Old source.</source><target>Alte Zeile.</target></revision></revisions>
+</segment>
+</translatable>
+<localizable blockId="4">
+<segment segmentId="10">
+<source>alt text</source>
+</segment>
+</localizable>
+</txml>

@@ -1,0 +1,373 @@
+#!/usr/bin/env bash
+# Offline stand-in for the AWS CLI, used ONLY by test/run-dry.sh.
+# It never contacts AWS. It returns canned text for the read calls the scripts make,
+# logs every call to $SHIM_LOG, and refuses any call that would change something
+# unless SHIM_ALLOW_WRITE=1. Security group revokes are remembered in $SHIM_STATE so a
+# re-read after a revoke sees the change (unless SHIM_REVOKE_NOOP=1, which imitates EC2
+# answering "UnknownIpPermissions" and changing nothing).
+#
+# SHIM_SCENARIO:
+#   fresh      nothing configured yet (no detector, no profile, no DLM policy, world-open 80/443)
+#   half       detector without runtime monitoring, instance has another profile without SSM,
+#              DLM policy exists, SSH open to the world
+#   done       everything configured, 80/443 open only to the current Cloudflare ranges
+#   alltraffic like fresh, but the web is open through ONE "All traffic, Anywhere" rule
+#   range      like fresh, but the web is open through ONE "tcp 80-443, Anywhere" rule
+#   stale      like done, plus an old Cloudflare-labelled range Cloudflare no longer publishes
+#   apierror   like done, but describe-instances and describe-security-groups fail
+# SHIM_NO_DLM_ROLE=1   the DLM default role does not exist
+# SHIM_INSPECTOR_FAIL=1 inspector2 enable returns a failedAccounts entry (exit 0)
+# SHIM_PROFILE_EMPTY=1 LocOS-Instance-SSM profile exists but has no role (half-finished run)
+# SHIM_SG_FAIL=1       every describe-security-groups call fails
+# SHIM_SG_FAIL_AFTER_REVOKE=1  describe-security-groups fails once a revoke has happened
+#
+# Alerting (aws-alerting-setup.sh, section 8 of aws-verify.sh, the on-box check), SHIM_ALERT:
+#   none       nothing exists yet (the default, except for done/stale/apierror: default done)
+#   done       both topics with a confirmed email, rule + target, the 3 alarms, a healthy
+#              health check, the inline policy scoped to the one topic
+#   pending    like done, but the email subscriptions are PendingConfirmation
+#   unhealthy  like done, but the health check fails and its alarm is in ALARM
+#   wide       like done, but the inline policy allows sns:Publish on "*"
+#   apierror   every sns / events / cloudwatch / route53 / iam get-role-policy call fails
+# Whatever the setup script creates is remembered in $SHIM_STATE ("alert ..." lines), so a
+# second run against the same state sees it. SHIM_TARGETS_FAIL=1: put-targets reports a
+# failed entry (exit 0). SHIM_PUBLISH_FAIL=1: sns publish fails. Every file:// argument must
+# be valid JSON and is copied to $SHIM_FILES.
+set -uo pipefail
+SCEN="${SHIM_SCENARIO:-fresh}"
+case "$SCEN" in done|stale|apierror) ALERT="${SHIM_ALERT:-done}" ;; *) ALERT="${SHIM_ALERT:-none}" ;; esac
+ACCT=123456789012
+AHOST="${SHIM_HOST:-tms.univ.test}"
+PATTERN='{"source":["aws.guardduty"],"detail-type":["GuardDuty Finding"],"detail":{"severity":[{"numeric":[">=",7]}]}}'
+HC_PRESET="abcdef12-3456-7890-abcd-ef1234567890"
+HC_NEW="11111111-2222-3333-4444-555555555555"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+STATE="${SHIM_STATE:-/dev/null}"
+svc="${1:-}"; op="${2:-}"
+QUERY=""; REGION=""; POLICY_DETAILS=""; IP_PERMS=""; FILTERS=""
+ALARM_NAME=""; ALARM_NAMES=""; POLICY_DOC=""
+args=("$@")
+# list_after FLAG: the values after FLAG up to the next --option, space separated
+list_after() {
+  local j out=""
+  for ((j = 0; j < ${#args[@]}; j++)); do
+    if [ "${args[$j]}" = "$1" ]; then
+      j=$((j + 1))
+      while [ "$j" -lt "${#args[@]}" ] && [ "${args[$j]#--}" = "${args[$j]}" ]; do
+        out="$out ${args[$j]}"; j=$((j + 1))
+      done
+      break
+    fi
+  done
+  printf '%s' "${out# }"
+}
+sorted_words() { tr ' ' '\n' | sed '/^$/d' | sort | tr '\n' ' ' | sed 's/ $//'; }
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case "${args[$i]}" in
+    --query) QUERY="${args[$((i + 1))]}" ;;
+    --region) REGION="${args[$((i + 1))]}" ;;
+    --policy-details) POLICY_DETAILS="${args[$((i + 1))]}" ;;
+    --ip-permissions) IP_PERMS="${args[$((i + 1))]}" ;;
+    --filters) FILTERS="${args[$((i + 1))]}" ;;
+    --alarm-name) ALARM_NAME="${args[$((i + 1))]}" ;;
+    --alarm-names) ALARM_NAMES="${args[$((i + 1))]}" ;;
+    --policy-document) POLICY_DOC="${args[$((i + 1))]}" ;;
+  esac
+done
+A_ACTIONS="$(list_after --alarm-actions | sorted_words)"
+O_ACTIONS="$(list_after --ok-actions | sorted_words)"
+DIMS="$(list_after --dimensions)"
+printf '%s %s | %s\n' "$svc" "$op" "$*" >> "${SHIM_LOG:-/dev/null}"
+# Every --query the scripts send, for test/jmespath_check.py (runs them through real jmespath).
+if [ -n "$QUERY" ]; then printf '%s %s\t%s\n' "$svc" "$op" "$QUERY" >> "${SHIM_QUERIES:-/dev/null}"; fi
+
+json_ok() {  # validate JSON when a python is available
+  local py; py="$(command -v python3 || command -v python || true)"
+  [ -z "$py" ] && return 0
+  "$py" -c 'import json,sys; json.loads(sys.argv[1])' "$1" 2>/dev/null
+}
+# Every file:// argument must exist and hold valid JSON; a copy goes to $SHIM_FILES.
+for a in "$@"; do
+  case "$a" in
+    file://*)
+      f="${a#file://}"
+      [ -f "$f" ] || { echo "SHIM: file missing: $f" >&2; exit 98; }
+      json_ok "$(cat "$f")" || { echo "SHIM: not JSON: $f" >&2; cat "$f" >&2; exit 97; }
+      { echo "== $svc $op $f"; cat "$f"; echo; } >> "${SHIM_FILES:-/dev/null}" ;;
+  esac
+done
+
+# --- alerting helpers ---------------------------------------------------------------
+st_has() { grep -qxF -- "$1" "$STATE" 2>/dev/null; }
+st_add() { st_has "$1" || echo "$1" >> "$STATE"; }
+st_drop() {  # remove the lines starting with $1
+  grep -vF -- "$1" "$STATE" > "$STATE.tmp" 2>/dev/null; cat "$STATE.tmp" > "$STATE"; rm -f "$STATE.tmp"
+}
+preset() { case "$ALERT" in done|pending|unhealthy|wide) return 0 ;; esac; return 1; }
+topic_exists() { preset || st_has "alert topic $1"; }
+if [ "$ALERT" = apierror ]; then
+  case "$svc $op" in
+    sns\ *|events\ *|cloudwatch\ *|route53\ *|"iam get-role-policy")
+      echo "An error occurred (AccessDenied) when calling the $op operation: not authorized" >&2; exit 254 ;;
+  esac
+fi
+
+# The security group, one rule source per line: proto from to cidr description
+rules() {
+  local cf
+  case "$SCEN" in
+    fresh|half) printf '%s\n' "tcp 80 80 0.0.0.0/0 -" "tcp 80 80 ::/0 -" "tcp 443 443 0.0.0.0/0 -" ;;
+    alltraffic) printf '%s\n' "-1 null null 0.0.0.0/0 -" ;;
+    range) printf '%s\n' "tcp 80 443 0.0.0.0/0 -" ;;
+    done|stale|apierror)
+      for p in 80 443; do
+        while read -r cf; do [ -n "$cf" ] && echo "tcp $p $p $cf Cloudflare"; done \
+          < <(cat "$HERE/cf-ips-v4.txt" "$HERE/cf-ips-v6.txt")
+      done
+      [ "$SCEN" = stale ] && echo "tcp 443 443 199.27.128.0/21 Cloudflare" ;;
+  esac
+  [ "$SCEN" = half ] && echo "tcp 22 22 0.0.0.0/0 -"
+  return 0
+}
+# live_rules: the canned rules minus anything revoked earlier in this test
+live_rules() {
+  rules | while read -r p f t c d; do
+    grep -qxF -- "$p $f $t $c" "$STATE" 2>/dev/null || echo "$p $f $t $c $d"
+  done
+}
+port_in_query() { printf '%s' "$QUERY" | grep -o 'FromPort<=`[0-9]*\|FromPort==`[0-9]*' | head -1 | grep -o '[0-9]*$'; }
+
+case "$op" in
+  enable*|create-*|update-*|modify-*|attach-*|associate-*|add-*|authorize-*|revoke-*|put-*|delete-*|subscribe|set-*|change-*|publish|archive-*)
+    if [ "${SHIM_ALLOW_WRITE:-0}" != "1" ]; then
+      echo "SHIM: MUTATING CALL IN READ-ONLY MODE: $svc $op" >&2; exit 99
+    fi
+    case "$svc $op" in
+      "sns create-topic") st_add "alert topic $REGION"; echo "arn:aws:sns:$REGION:$ACCT:locos-alerts"; exit 0 ;;
+      "sns subscribe") st_add "alert sub $REGION"; echo "pending confirmation"; exit 0 ;;
+      "sns set-topic-attributes") st_add "alert policy"; exit 0 ;;
+      "sns publish")
+        if [ "${SHIM_PUBLISH_FAIL:-0}" = 1 ]; then echo "An error occurred (AuthorizationError)" >&2; exit 254; fi
+        echo "11111111-aaaa-bbbb-cccc-000000000000"; exit 0 ;;
+      "events put-rule") st_add "alert rule"; echo "arn:aws:events:$REGION:$ACCT:rule/locos-guardduty-high"; exit 0 ;;
+      "events put-targets")
+        if [ "${SHIM_TARGETS_FAIL:-0}" = 1 ]; then echo 1; exit 0; fi
+        st_add "alert target"; echo 0; exit 0 ;;
+      "cloudwatch put-metric-alarm")
+        d="-"; case "$DIMS" in Name=HealthCheckId,Value=*) d="${DIMS#Name=HealthCheckId,Value=}" ;; esac
+        st_drop "alert alarm $ALARM_NAME|"
+        m="$(list_after --metric-name) $(list_after --statistic) $(list_after --comparison-operator) $(list_after --threshold).0"
+        echo "alert alarm $ALARM_NAME|$A_ACTIONS|$O_ACTIONS|$d|$m" >> "$STATE"; exit 0 ;;
+      "route53 create-health-check") st_add "alert hc $HC_NEW"; echo "$HC_NEW"; exit 0 ;;
+      "iam put-role-policy")
+        f="${POLICY_DOC#file://}"
+        [ "$(grep -o '"Resource"' "$f" | wc -l | tr -d ' ')" = 1 ] || { echo "SHIM: policy must have ONE Resource" >&2; exit 93; }
+        [ "$(grep -o '"Action"' "$f" | wc -l | tr -d ' ')" = 1 ] || { echo "SHIM: policy must have ONE Action" >&2; exit 93; }
+        grep -q '"Action":"sns:Publish"' "$f" || { echo "SHIM: policy Action must be sns:Publish" >&2; exit 93; }
+        res="$(sed -n 's/.*"Resource":"\([^"]*\)".*/\1/p' "$f")"
+        case "$res" in *'*'*|'') echo "SHIM: policy Resource must be one exact ARN" >&2; exit 93 ;; esac
+        st_drop "alert rolepolicy "
+        echo "alert rolepolicy $res" >> "$STATE"; exit 0 ;;
+    esac
+    if [ -n "$POLICY_DETAILS" ]; then
+      f="${POLICY_DETAILS#file://}"
+      [ -f "$f" ] || { echo "SHIM: policy file missing: $f" >&2; exit 98; }
+      json_ok "$(cat "$f")" || { echo "SHIM: policy file is not JSON" >&2; exit 97; }
+      grep -q '"Target": "us-west-2"' "$f" || { echo "SHIM: no us-west-2 target" >&2; exit 96; }
+    fi
+    if [ -n "$IP_PERMS" ]; then json_ok "$IP_PERMS" || { echo "SHIM: bad ip-permissions JSON" >&2; exit 95; }; fi
+    if [ "$op" = "revoke-security-group-ingress" ]; then
+      case "$*" in *" --protocol "*|*" --cidr "*) echo "SHIM: use --ip-permissions for revokes" >&2; exit 94 ;; esac
+      if [ "${SHIM_REVOKE_NOOP:-0}" != 1 ]; then
+        p="$(printf '%s' "$IP_PERMS" | sed -n 's/.*"IpProtocol":"\([^"]*\)".*/\1/p')"
+        f="$(printf '%s' "$IP_PERMS" | sed -n 's/.*"FromPort":\([0-9]*\).*/\1/p')"; f="${f:-null}"
+        t="$(printf '%s' "$IP_PERMS" | sed -n 's/.*"ToPort":\([0-9]*\).*/\1/p')"; t="${t:-null}"
+        for c in $(printf '%s' "$IP_PERMS" | grep -o '"CidrIp\(v6\)\{0,1\}":"[^"]*"' | cut -d'"' -f4); do
+          echo "$p $f $t $c" >> "$STATE"
+        done
+      fi
+    fi
+    if [ "$op" = "enable" ] && [ "$svc" = "inspector2" ] && [ "${SHIM_INSPECTOR_FAIL:-0}" = 1 ]; then
+      printf '123456789012\tACCESS_DENIED\tnot allowed\n'; exit 0
+    fi
+    [ "$op" = "enable" ] && [ "$svc" = "inspector2" ] && { echo None; exit 0; }
+    echo "OK"; exit 0 ;;
+esac
+
+case "$svc $op" in
+  "sts get-caller-identity")
+    case "$QUERY" in Account) echo 123456789012 ;; *) echo "arn:aws:iam::123456789012:user/operator" ;; esac ;;
+  "ec2 get-ebs-encryption-by-default")
+    case "$SCEN" in done|stale|apierror) echo True ;; *) echo False ;; esac ;;
+  "guardduty list-detectors")
+    [ "$SCEN" = fresh ] && echo None || echo 12abc34d567e8fa901bc2d34e56789f0 ;;
+  "guardduty get-detector")
+    case "$QUERY" in
+      Status) echo ENABLED ;;
+      *) case "$SCEN" in done|stale|apierror) echo ENABLED ;; *) echo DISABLED ;; esac ;;
+    esac ;;
+  "guardduty list-coverage") echo HEALTHY ;;
+  "inspector2 batch-get-account-status")
+    case "$SCEN" in done|stale|apierror) echo ENABLED ;; *) echo DISABLED ;; esac ;;
+  "inspector2 list-coverage") case "$SCEN" in done|stale|apierror) echo ACTIVE ;; *) echo None ;; esac ;;
+  "iam get-role")
+    # The DLM default role is missing only when SHIM_NO_DLM_ROLE=1 (the baseline creates it);
+    # the instance role LocOS-Instance-SSM is missing in the fresh scenario.
+    case "$*" in
+      *AWSDataLifecycleManagerDefaultRole*)
+        if [ "${SHIM_NO_DLM_ROLE:-0}" = 1 ]; then echo "An error occurred (NoSuchEntity)" >&2; exit 254; fi
+        echo "arn:aws:iam::123456789012:role/AWSDataLifecycleManagerDefaultRole" ;;
+      *)
+        if [ "$SCEN" = fresh ] && [ "${SHIM_PROFILE_EMPTY:-0}" != 1 ]; then echo "An error occurred (NoSuchEntity)" >&2; exit 254; fi
+        echo "arn:aws:iam::123456789012:role/LocOS-Instance-SSM" ;;
+    esac ;;
+  "iam get-instance-profile")
+    if [ "${SHIM_PROFILE_EMPTY:-0}" = 1 ]; then echo None; exit 0; fi
+    if [ "$SCEN" = fresh ]; then echo "An error occurred (NoSuchEntity)" >&2; exit 254; fi
+    echo ExistingAppRole ;;
+  "iam list-attached-role-policies")
+    case "$SCEN" in done|stale|apierror) echo "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore" ;; esac ;;
+  "ec2 describe-instances")
+    [ "$SCEN" = apierror ] && { echo "An error occurred (RequestLimitExceeded)" >&2; exit 254; }
+    case "$QUERY" in
+      *HttpTokens) case "$SCEN" in done|stale) echo required ;; *) echo optional ;; esac ;;
+      *HttpPutResponseHopLimit) echo "${SHIM_HOP_LIMIT:-1}" ;;
+      *HttpEndpoint) echo enabled ;;
+      *MetadataOptions.State) echo applied ;;
+      *IamInstanceProfile.Arn)
+        case "$SCEN" in fresh|alltraffic|range) echo None ;;
+          *) echo "arn:aws:iam::123456789012:instance-profile/ExistingProfile" ;; esac ;;
+      *BlockDeviceMappings*) printf 'vol-0aaa1111bbbb2222c\n' ;;
+      *SecurityGroups*) echo sg-0123abcd ;;
+      Reservations\[\].Instances\[\]*) printf 'i-0123456789abcdef0\tlocos-univ\ni-0fedcba9876543210\tdemo\n' ;;
+      *) echo "SHIM: unexpected describe-instances query: $QUERY" >&2; exit 90 ;;
+    esac ;;
+  "ec2 describe-volumes")
+    case "$QUERY" in
+      *Tags*) case "$SCEN" in fresh|alltraffic|range) echo None ;; *) echo daily ;; esac ;;
+      *Attachments*) # volumes tagged Backup=daily
+        case "$SCEN" in fresh|alltraffic|range) : ;;
+          stale) printf 'vol-0aaa1111bbbb2222c\ti-0123456789abcdef0\nvol-0demo000000000000\ti-0fedcba9876543210\n' ;;
+          *) printf 'vol-0aaa1111bbbb2222c\ti-0123456789abcdef0\n' ;; esac ;;
+      *) case "$SCEN" in done|stale|apierror) printf 'vol-0aaa1111bbbb2222c\tTrue\n' ;;
+           *) printf 'vol-0aaa1111bbbb2222c\tFalse\n' ;; esac ;;
+    esac ;;
+  "dlm get-lifecycle-policies")
+    case "$SCEN" in fresh|alltraffic|range) echo None ;; *) echo policy-0123456789abcdef0 ;; esac ;;
+  "dlm get-lifecycle-policy")
+    case "$QUERY" in
+      *State) echo ENABLED ;;
+      *TargetTags*) echo daily ;;
+      *Count) echo 35 ;;
+      *CrossRegionCopyRules*) printf 'us-west-2\tTrue\t35\tDAYS\n' ;;
+    esac ;;
+  "ec2 describe-snapshots")
+    case "$SCEN" in
+      done|stale|apierror)
+        if [ "$REGION" = us-west-2 ]; then date -u -d "-${SHIM_COPY_AGE_H:-20} hours -30 minutes" '+%Y-%m-%dT%H:%M:%S.000000+00:00'
+        else
+          printf 'snap-0123456789abcdef0\t'
+          date -u -d '-2 hours -30 minutes' '+%Y-%m-%dT%H:%M:%S.000000+00:00'
+        fi ;;
+      *) echo None ;;
+    esac ;;
+  "ssm describe-instance-information")
+    case "$SCEN" in done|stale|apierror) echo Online ;; *) echo None ;; esac ;;
+  "ec2 describe-security-groups")
+    [ "$SCEN" = apierror ] && { echo "An error occurred (UnauthorizedOperation)" >&2; exit 254; }
+    [ "${SHIM_SG_FAIL:-0}" = 1 ] && { echo "An error occurred (UnauthorizedOperation)" >&2; exit 254; }
+    if [ "${SHIM_SG_FAIL_AFTER_REVOKE:-0}" = 1 ] && [ -s "$STATE" ]; then
+      echo "An error occurred (RequestLimitExceeded)" >&2; exit 254
+    fi
+    port="$(port_in_query)"
+    if printf '%s' "$QUERY" | grep -q 'join('; then
+      # rules letting tcp PORT in, grouped like EC2 does (one permission per protocol+ports,
+      # holding all its IPv4 and IPv6 sources): "proto|from|to|v4,v4|v6,v6", tab separated
+      live_rules | awk -v port="$port" '
+        $1 == "-1" || ($1 == "tcp" && $2 + 0 <= port && $3 + 0 >= port) {
+          k = $1 "|" $2 "|" $3
+          if (!(k in seen)) { seen[k] = 1; order[++n] = k }
+          if ($4 ~ /:/) v6[k] = (v6[k] == "" ? $4 : v6[k] "," $4)
+          else v4[k] = (v4[k] == "" ? $4 : v4[k] "," $4)
+        }
+        END { s = ""; for (i = 1; i <= n; i++) { k = order[i]; s = s (i > 1 ? "\t" : "") k "|" v4[k] "|" v6[k] }; print s }'
+    elif printf '%s' "$QUERY" | grep -q 'Description'; then
+      live_rules | awk -v p="$port" '$1=="tcp" && $2==p && $3==p && $5=="Cloudflare" {print $4}' | tr '\n' '\t'; echo
+    else
+      live_rules | awk -v p="$port" '$1=="tcp" && $2==p && $3==p {print $4}' | tr '\n' '\t'; echo
+    fi ;;
+  "sns get-topic-attributes")
+    topic_exists "$REGION" || { echo "An error occurred (NotFound) when calling the GetTopicAttributes operation: Topic does not exist" >&2; exit 254; }
+    case "$QUERY" in
+      Attributes.Policy)
+        if preset || st_has "alert policy"; then
+          echo '{"Version":"2012-10-17","Id":"locos-alerts-policy","Statement":[{"Sid":"OwnerAccount"},{"Sid":"LocOSEventBridgeGuardDuty","Principal":{"Service":"events.amazonaws.com"},"Condition":{"ArnEquals":{"aws:SourceArn":"arn:aws:events:us-east-2:123456789012:rule/locos-guardduty-high"}}},{"Sid":"LocOSCloudWatchAlarms"}]}'
+        else
+          echo '{"Version":"2008-10-17","Id":"__default_policy_ID","Statement":[{"Sid":"__default_statement_ID"}]}'
+        fi ;;
+      *) echo "arn:aws:sns:$REGION:$ACCT:locos-alerts" ;;
+    esac ;;
+  "sns list-subscriptions-by-topic")
+    topic_exists "$REGION" || { echo "An error occurred (NotFound) when calling the ListSubscriptionsByTopic operation: Topic does not exist" >&2; exit 254; }
+    sub=""
+    case "$ALERT" in
+      done|unhealthy|wide) sub="arn:aws:sns:$REGION:$ACCT:locos-alerts:0b1c2d3e-aaaa-bbbb-cccc-1234567890ab" ;;
+      pending) sub="PendingConfirmation" ;;
+      *) if st_has "alert sub $REGION"; then sub="PendingConfirmation"; fi ;;
+    esac
+    if [ -n "$sub" ]; then
+      case "$QUERY" in *"[Endpoint,SubscriptionArn]"*) printf 'ops@example.com\t%s\n' "$sub" ;; *) echo "$sub" ;; esac
+    fi ;;
+  "sns get-subscription-attributes") echo "${SHIM_CONFIRM_AUTH:-true}" ;;
+  "events describe-rule")
+    if preset || st_has "alert rule"; then
+      case "$QUERY" in "") echo "locos-guardduty-high" ;; *) printf 'ENABLED\t%s\n' "$PATTERN" ;; esac
+    else
+      echo "An error occurred (ResourceNotFoundException) when calling the DescribeRule operation: Rule locos-guardduty-high does not exist." >&2; exit 254
+    fi ;;
+  "events list-targets-by-rule")
+    if preset || st_has "alert target"; then echo "locos-alerts-email"; else echo; fi ;;
+  "cloudwatch describe-alarms")
+    n="$ALARM_NAMES"; t2="arn:aws:sns:us-east-2:$ACCT:locos-alerts"; t1="arn:aws:sns:us-east-1:$ACCT:locos-alerts"
+    line="$(grep -F "alert alarm $n|" "$STATE" 2>/dev/null | tail -1)"
+    # One line joined with | : alarm actions|OK actions|health check id or -|state|actions
+    # enabled|metric|statistic|comparison|threshold (as the scripts' JMESPath join builds it).
+    # SHIM_ALARMS_DISABLED=1: preset alarms have their actions switched off.
+    # SHIM_ALARM_NO_OK=1: preset alarms have no OK action. SHIM_ALARM_AVG=1: statistic Average.
+    en=true; [ "${SHIM_ALARMS_DISABLED:-0}" = 1 ] && en=false
+    ok2="$t2"; ok1="$t1"; [ "${SHIM_ALARM_NO_OK:-0}" = 1 ] && { ok2=""; ok1=""; }
+    mx=Maximum; mn=Minimum; [ "${SHIM_ALARM_AVG:-0}" = 1 ] && { mx=Average; mn=Average; }
+    if [ -n "$line" ]; then
+      IFS='|' read -r _ a o d m <<< "${line#alert alarm }"
+      printf '%s|%s|%s|INSUFFICIENT_DATA|true|%s\n' "$a" "$o" "$d" "$(printf '%s' "$m" | tr ' ' '|')"
+    elif preset; then
+      state=OK
+      case "$n" in
+        locos-ec2-system-check-*) printf '%s|%s|-|%s|%s|StatusCheckFailed_System|%s|GreaterThanOrEqualToThreshold|1.0\n' "arn:aws:automate:us-east-2:ec2:recover $t2" "$ok2" "$state" "$en" "$mx" ;;
+        locos-ec2-instance-check-*) printf '%s|%s|-|%s|%s|StatusCheckFailed_Instance|%s|GreaterThanOrEqualToThreshold|1.0\n' "arn:aws:automate:us-east-2:ec2:reboot $t2" "$ok2" "$state" "$en" "$mx" ;;
+        locos-ready-healthcheck)
+          if [ "$ALERT" = unhealthy ]; then state=ALARM; fi
+          printf '%s|%s|%s|%s|%s|HealthCheckStatus|%s|LessThanThreshold|1.0\n' "$t1" "$ok1" "$HC_PRESET" "$state" "$en" "$mn" ;;
+        *) echo None ;;
+      esac
+    else
+      echo None
+    fi ;;
+  "route53 list-health-checks")
+    if preset; then printf '%s\t%s\t/ready\tHTTPS\t443\t30\t3\ttrue\n' "$HC_PRESET" "$AHOST"
+    elif st_has "alert hc $HC_NEW"; then printf '%s\t%s\t/ready\tHTTPS\t443\t30\t3\ttrue\n' "$HC_NEW" "$AHOST"
+    else echo; fi ;;
+  "route53 get-health-check-status")
+    if [ "$ALERT" = unhealthy ]; then s="Failure: HTTP Status Code 503, Service Unavailable"
+    else s="Success: HTTP Status Code 200, OK"; fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$s" "$s" "$s" "$s" "$s" "$s" "$s" "$s" ;;
+  "iam get-role-policy")
+    res=""
+    case "$ALERT" in done|pending|unhealthy) res="arn:aws:sns:us-east-2:$ACCT:locos-alerts" ;; wide) res="*" ;; esac
+    line="$(grep '^alert rolepolicy ' "$STATE" 2>/dev/null | tail -1)"
+    if [ -n "$line" ]; then res="${line#alert rolepolicy }"; fi
+    [ -n "$res" ] || { echo "An error occurred (NoSuchEntity) when calling the GetRolePolicy operation: The role policy with name LocOS-Alerts-Publish cannot be found." >&2; exit 254; }
+    printf 'Allow\tsns:Publish\t%s\n' "$res" ;;
+  *) echo "SHIM: unhandled call: $svc $op" >&2; exit 91 ;;
+esac
+exit 0

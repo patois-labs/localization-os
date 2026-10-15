@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Connectors{% endblock %}
+{% block content %}
+<div class="connections-page">
+
+{% set header_meta %}<p>Connect this TMS to the tools your teams use: pull content in for translation and push results back.
+  {% if not can_manage %}{{ m.status_badge('paused', 'Read-only') }} Managing connectors is limited to admins and linguists.{% endif %}</p>{% endset %}
+{% set header_actions %}
+<button type="button" class="ghost layout-edit-btn" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+{% if is_admin %}<a class="btnlink" href="/connectors/manage">{{ tl(request, 'page.connectors_manage.link') }}</a>{% endif %}{% endset %}
+{% set header_primary %}<a class="btn-primary" href="/connectors/catalog">{{ tl(request, 'page.connectors_catalog.get_more') }}</a>{% endset %}
+{{ m.page_header('Connectors', meta=header_meta, primary=header_primary, secondary=header_actions) }}
+
+<div id="page-layout" class="page-layout" data-layout-page="connectors">
+{% call m.card(layout_key='integrations', flat=true) %}
+  <h2>Integrations</h2>
+  <div class="tilegrid">
+    {% for s in specs %}
+      <a class="tile tile-link" href="/connectors/{{ s.kind }}">
+        <div class="tile-top"><span class="tile-icon" aria-hidden="true">{{ s.icon }}</span>
+          {{ m.status_badge('active', 'Available') }}</div>
+        <strong>{{ s.name }}</strong>
+        <div class="help">{{ s.cat }}</div>
+        <p class="help">{{ s.blurb }}</p>
+        <div class="tile-foot">
+          {% set conns = by_kind.get(s.kind, []) %}
+          <span class="chip">{{ conns|length }} connection{{ '' if conns|length == 1 else 's' }}</span>
+          <span class="btnlink small mt">Manage <span aria-hidden="true">→</span></span>
+        </div>
+      </a>
+    {% endfor %}
+  </div>
+{% endcall %}
+
+{% if archived_specs %}
+{% call m.card(layout_key='archived', flat=true) %}
+  <h2>Archived</h2>
+  <p class="muted">These connectors are retired from new connections while they await a rebuild.
+  You can't add a new one, but any existing connection keeps syncing and translating as before -
+  open one to manage it.</p>
+  <div class="tilegrid">
+    {% for s in archived_specs %}
+      {% set conns = by_kind.get(s.kind, []) %}
+      <a class="tile tile-link" href="/connectors/{{ s.kind }}">
+        <div class="tile-top"><span class="tile-icon" aria-hidden="true">{{ s.icon }}</span>
+          {{ m.status_badge('archived', 'Archived') }}</div>
+        <strong>{{ s.name }}</strong>
+        <div class="help">{{ s.cat }}</div>
+        <p class="help">{{ s.blurb }}</p>
+        <div class="tile-foot">
+          <span class="chip">{{ conns|length }} connection{{ '' if conns|length == 1 else 's' }}</span>
+          <span class="btnlink small mt">{{ 'Manage' if conns else 'View' }}{% if conns %} <span aria-hidden="true">→</span>{% endif %}</span>
+        </div>
+      </a>
+    {% endfor %}
+  </div>
+{% endcall %}
+{% endif %}
+
+{% call m.card(layout_key='engines', flat=true) %}
+  <h2>MT engines</h2>
+  <div class="tilegrid tilegrid-static">
+    {% for name, live in providers_live.items() %}
+      <div class="tile">
+        <div class="tile-top"><span class="tile-icon" aria-hidden="true">✨</span>
+          {{ m.status_badge('active' if live else 'paused', 'live' if live else 'mock') }}</div>
+        <strong>{{ name|capitalize }}</strong>
+        <div class="help">{{ models.get(name, '') }}</div>
+        <a class="btnlink small mt" href="/setup-ai">Configure</a>
+      </div>
+    {% endfor %}
+  </div>
+{% endcall %}
+</div>
+{% with layout_page = 'connectors' %}{% include "_page_layout.html" %}{% endwith %}
+
+</div>
+{% endblock %}

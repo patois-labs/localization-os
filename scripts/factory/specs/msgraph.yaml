@@ -1,0 +1,106 @@
+# Factory spec - Microsoft 365 Files connector (SharePoint document libraries + OneDrive), connector parity.
+#
+# Source of truth for the parametric touchpoints. The SEMANTIC build (the file round trip, the
+# T3 id map over translated copies, the held-back rule, the fake tenant) is hand-written.
+#
+# DESIGN:
+#   - ONE connector for SharePoint document libraries and OneDrive / Microsoft 365 files; both are
+#     Microsoft Graph "drives". Folder-based round trip: every translatable file under the SOURCE
+#     folder is parsed with our existing file filters (DOCX, XLSX, HTML, Markdown, text, JSON, PO,
+#     SRT), translated, rebuilt by the same filter and uploaded as a COPY into a per-locale folder
+#     under the TARGET root (mirroring the sub-folder structure). Source files are never written.
+#     No new file formats: PowerPoint, PDF and images are reported as skipped, never guessed.
+#   - TOPOLOGY = T3 (document per locale; we own the id map). The stock DocPerLocaleStrategy is
+#     subclassed only to refuse the placeholder create when nothing is translated (a withheld file
+#     never creates an empty copy).
+#   - AUTH = app-only client credentials (Entra app), the secret pasted; auth=[api_key] is the
+#     truthful capability (a pasted client secret), supports_oauth=false. Least privilege is
+#     Sites.Selected plus a per-site grant; OneDrive for a named user needs Files.ReadWrite.All
+#     (tenant-wide) and the runbook says so.
+#   - NO bb-io code was read (MicrosoftSharePoint has no licence; MicrosoftOneDrive is MIT but the
+#     Graph drive calls here come from the vendor docs), so there is no bb_io block and no
+#     THIRD_PARTY_NOTICES entry.
+#   - NO alembic migration. If a schema change seems needed, STOP.
+
+connector:
+  kind: msgraph
+  name: Microsoft 365 Files
+  class_name: MsGraphConnector
+  icon: "📁"
+  cat: "Files / documents"
+  blurb: >-
+    Translate the Word, Excel, HTML, Markdown and text files in a SharePoint document library
+    folder or a OneDrive folder. Each translation is uploaded as a copy into a per-locale folder
+    (the folder tree is mirrored), and the source files are never changed.
+  docs_url: "https://learn.microsoft.com/en-us/graph/api/resources/onedrive"
+  supports_oauth: false
+  archived: false
+
+  topology: T3
+  auth: [api_key]
+  api_version: "v1.0"
+  rich_text: none
+  regions: fixed url
+  change_signals:
+    webhook_sig: null
+    poll_field: cTag
+    stale_flag: null
+    thin_payload: false
+  anti_loop_label: false
+
+  retry_noun: file
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<drive-item-id>"
+  api_docstring: >-
+    Translate files in the connection's source folder (SharePoint library or OneDrive) into one
+    or more locales, uploading each translation as a copy in the locale's folder under the target
+    root (T3 document per locale). Each id must be the id of a file inside the configured source
+    folder.
+
+  article_noun_phrase: "a SharePoint or OneDrive file"
+  cli_parser_help: >-
+    Translate SharePoint or OneDrive files from the connection's source folder into the
+    connection's locales as translated copies in per-locale folders.
+
+  item_units:
+    scan: "the supported files (Word, Excel, HTML, Markdown, text, JSON, PO, SRT) in your source folder"
+    becomes: "a translated copy of the file in the locale's folder under the target root (the source file is never changed, and a copy you edited by hand is never overwritten)"
+
+  help_row_body: "Translate SharePoint library or OneDrive files as translated copies in per-locale folders (T3). Body: <code>article_ids</code>/<code>article_id</code> (drive item ids of files in the source folder), <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Translate SharePoint library or OneDrive files from the connection's source folder into per-locale copies under the target root (T3 document per locale; the source is never written). `--article-ids` are drive item ids of files inside the source folder."
+
+  cli_expected_desc: "translate SharePoint or OneDrive files into translated copies in per-locale folders (T3 document per locale; POST /api/connectors/{cid}/msgraph/translate parity)"
+
+  config_fields:
+    - {name: tenant_id, label: "Directory (tenant) ID", help: "The Entra directory (tenant) ID of the app registration: a GUID or your tenant domain.", placeholder: "00000000-0000-0000-0000-000000000000"}
+    - {name: client_id, label: "Application (client) ID", help: "The Entra app registration's application (client) ID.", placeholder: "00000000-0000-0000-0000-000000000000"}
+    - {name: site_url, label: "SharePoint site URL", help: "The site that holds the library, e.g. https://contoso.sharepoint.com/sites/Localization. Use exactly one of Site URL, Site ID, Drive ID or OneDrive user.", required: false, placeholder: "https://contoso.sharepoint.com/sites/Localization"}
+    - {name: site_id, label: "SharePoint site ID", help: "Alternative to the Site URL: the Graph site id (host,collection-guid,web-guid). Use when the app may not look a site up by URL.", required: false, placeholder: "contoso.sharepoint.com,guid,guid"}
+    - {name: library, label: "Document library", help: "The library's display name on that site. Blank = the site's default Documents library.", required: false, placeholder: "Documents"}
+    - {name: drive_id, label: "Drive ID", help: "Alternative: a Graph drive id (a library or a OneDrive).", required: false, placeholder: "b!abc..."}
+    - {name: onedrive_user, label: "OneDrive user", help: "Alternative: the user principal name whose OneDrive to use. Needs the tenant-wide Files.ReadWrite.All app permission.", required: false, placeholder: "alex@contoso.com"}
+    - {name: source_folder, label: "Source folder", help: "Folder path inside the drive that holds the files to translate, e.g. Source. Never the drive root. Must not contain the target root.", placeholder: "Source"}
+    - {name: target_root, label: "Target root folder", help: "Folder path inside the same drive that receives one sub-folder per locale. Blank = Translations. Must not be inside the source folder.", required: false, placeholder: "Translations"}
+    - {name: source_locale, label: "Source locale", help: "The language of the source files, e.g. en-US.", placeholder: "en-US"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated locale codes; each becomes a folder name under the target root.", required: false, placeholder: "fr-FR, de-DE"}
+    - {name: extensions, label: "File types", help: "Optional comma-separated subset of docx, xlsx, html, md, txt, json, po, srt. Blank = all of them.", required: false, placeholder: "docx, xlsx"}
+    - {name: include_subfolders, label: "Include subfolders", help: "1 to translate files in sub-folders too (the tree is mirrored), 0 for the top level only.", required: false, placeholder: "1"}
+    - {name: max_files, label: "Max files", help: "Most files translated per run (default 50, at most 500). A source tree with more than 500 folders or 5000 files is refused: narrow the Source folder.", required: false, placeholder: "50"}
+    - {name: max_file_mb, label: "Max file size (MB)", help: "Files larger than this are skipped and reported. Default 20.", required: false, placeholder: "20"}
+  secret_fields:
+    - {name: client_secret, label: "Client secret", help: "A client secret value of the app registration (Certificates and secrets). Used for app-only sign-in; never logged.", secret: true, placeholder: "the secret VALUE, not the secret ID"}
+  setup_steps:
+    - "In the Entra admin center, register an app (App registrations, New registration) and note its Application (client) ID and Directory (tenant) ID."
+    - "Under Certificates and secrets create a client secret and paste its VALUE here."
+    - "Under API permissions add the Microsoft Graph APPLICATION permission Sites.Selected and grant admin consent, then grant the app write access to your one site (the runbook has the Graph Explorer call). For a OneDrive use Files.ReadWrite.All instead."
+    - "Create the source folder in the library, put the files in it, and enter the folder path above. Translations appear in the target root, one folder per locale."
+  other_side: >-
+    Change detection is poll-based: run on a schedule. A file's content tag (cTag) changes only
+    when its content changes, and each (file, locale) copy is re-checked against a stored content
+    hash, so unchanged files are neither downloaded nor re-translated. A copy that someone edited
+    in SharePoint after our last write is never overwritten. No webhook receiver in scope.

@@ -1,0 +1,426 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+
+{% set header_action %}
+  <button type="button" class="ghost layout-edit-btn layout-edit-inline" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+{% endset %}
+{% set header_meta %}
+  <p>Workspace defaults, languages, segmentation, retention and feature switches.</p>
+  {% if saved %}<p class="ok">Settings saved.</p>{% endif %}
+{% endset %}
+{{ m.page_header("Settings", meta=header_meta, secondary=header_action) }}
+
+<div class="settings-frame">
+<nav class="settings-index" aria-label="Settings">
+  <a href="#settings-workspace">Workspace</a>
+  <a href="#settings-context">Default translation context</a>
+  <a href="#settings-languages">Languages</a>
+  <a href="#settings-srx">Segmentation (SRX)</a>
+  <a href="#settings-retention">Data retention</a>
+  <a href="#features">Features</a>
+  <a href="#settings-system">System</a>
+</nav>
+<div id="page-layout" class="page-layout" data-layout-page="settings">
+<section class="card" data-card="workspace" id="settings-workspace">
+  <h2>Workspace</h2>
+  <form method="post" action="/settings" class="form">
+    {% include "_csrf.html" %}
+    <label>Product name (white-label) <input type="text" name="brand_name" value="{{ values.brand_name }}" maxlength="64" placeholder="{{ brand }}" /></label>
+    {% if feature_installed('llmemory') %}
+    <label>Memory feature name <input type="text" name="brand_llmemory" value="{{ values.brand_llmemory }}" maxlength="64" placeholder="{{ names.llmemory }}" /></label>
+    {% endif %}
+    <label>Ledger feature name <input type="text" name="brand_ledger" value="{{ values.brand_ledger }}" maxlength="64" placeholder="{{ names.ledger }}" /></label>
+    <label>Organization / instance name <input type="text" name="org_name" value="{{ values.org_name }}" placeholder="{{ brand }}" /></label>
+    <label>Default source locale <input type="text" name="default_source_locale" value="{{ values.default_source_locale }}" size="10" /></label>
+    <label>Default MT provider
+      <select name="default_provider">
+        {% for p in providers %}<option value="{{ p }}" {% if p == values.default_provider %}selected{% endif %}>{{ p }}</option>{% endfor %}
+        <option value="mock" {% if values.default_provider == 'mock' %}selected{% endif %}>mock (offline demo, placeholder text)</option>
+      </select>
+    </label>
+    <label>Glossary prompt token cap
+      <input type="number" name="glossary_prompt_token_cap" min="0" value="{{ values.glossary_prompt_token_cap }}" size="6" />
+      <span class="help">Default token ceiling for a workflow step's rendered concept-glossary block when its concept-glossary renderer is on and its own token cap is 0 (inherit). Set this install cap to 0 for no token limit (unlimited). Two levels, both using 0: a step's <code>glossary_token_cap</code> 0 = inherit this install cap; this install cap 0 = unlimited.</span></label>
+    <button type="submit">Save</button>
+  </form>
+</section>
+
+{# SPEC-context-metadata phase 1: the org-default context card. #}
+{% set oc = (org_context_card.context if org_context_card else {}) or {} %}
+<section class="card" data-card="context" id="settings-context">
+  <h2>Default translation context</h2>
+  <p class="help">The org-wide baseline context package. It is the LAST layer
+    in resolution - customer, content-type and per-request context all override it.</p>
+  <form method="post" action="/settings/context-default" class="form">
+    {% include "_csrf.html" %}
+    <label>Domain <input type="text" name="domain" value="{{ oc.domain or '' }}" placeholder="software UI" /></label>
+    <label>Content kind <input type="text" name="content_kind" value="{{ oc.content_kind or '' }}" placeholder="help article" /></label>
+    <label>Audience <input type="text" name="audience" value="{{ oc.audience or '' }}" placeholder="end customers" /></label>
+    <label>Formality
+      <select name="formality">
+        <option value="" {% if not oc.formality %}selected{% endif %}>-</option>
+        {% for f in ["formal", "informal", "neutral"] %}
+          <option value="{{ f }}" {% if oc.formality == f %}selected{% endif %}>{{ f }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Tone <input type="text" name="tone" value="{{ (oc.tone or []) | join(', ') }}" placeholder="friendly, concise" /></label>
+    <label>Char limit <input type="text" name="char_limit" value="{{ oc.char_limit or '' }}" placeholder="(optional)" /></label>
+    <label>Notes <input type="text" name="notes" value="{{ oc.notes or '' }}" placeholder="Product names stay in English." /></label>
+    <button type="submit">Save</button>
+  </form>
+</section>
+
+<section class="card flat" data-card="languages" id="settings-languages">
+  <h2>Languages</h2>
+  <p class="muted">Choose which of the full BCP-47 catalog appear in the project and
+    language-set pickers (default: the top 30). Hiding a language never affects
+    projects already using it.</p>
+  <p><a class="btnlink" href="/settings/languages">Manage enabled languages <span aria-hidden="true">→</span></a></p>
+</section>
+
+<section class="card flat" data-card="notifications" id="settings-notifications">
+  <h2>Notifications</h2>
+  <p class="muted">Post project updates to Slack, Microsoft Teams, a signed webhook or email.
+    Managers and admins add the channels and choose which projects use them.</p>
+  <p><a class="btnlink" href="/settings/notifications">Manage notification channels <span aria-hidden="true">&rarr;</span></a></p>
+</section>
+
+<section class="card" data-card="srx" id="settings-srx">
+  <h2>Segmentation (SRX)</h2>
+  <p class="muted">How paragraphs are split into sentence-level TM segments.
+    <strong>Off by default</strong> uses the built-in regex splitter; turn on
+    <em>SRX rules</em> to use an <a href="/help#segmentation">SRX 2.0</a> ruleset (the shipped default
+    reproduces the built-in splitter) or upload a custom <code>.srx</code>.</p>
+  {% if srx_msg %}<p class="ok">{{ srx_msg }}</p>{% endif %}
+  {# a11y T6: ?srx_error= is the /settings page alias; it renders in the page error
+     summary at the top of main. #}
+  {% if srx_host_only %}
+  <p class="muted">Active ruleset:
+    {% if values.srx_file %}<strong>custom upload</strong>{% else %}<strong>shipped default</strong>{% endif %},
+    SRX rules {% if values.srx_enabled == "1" %}on{% else %}off{% endif %}.
+    This ruleset applies to every organization on this install, so only the host operator can
+    change it (<code>admin srx</code> on the host). Use a segmentation profile below for rules of
+    your own.</p>
+  {% else %}
+  <form method="post" action="/settings/segmentation" class="form" enctype="multipart/form-data">
+    {% include "_csrf.html" %}
+    <label class="checkbox"><input type="checkbox" name="srx_enabled" value="1" {% if values.srx_enabled == "1" %}checked{% endif %} /> Use SRX segmentation rules</label>
+    <p class="muted">Active ruleset:
+      {% if values.srx_file %}<strong>custom upload</strong> (<code>segmentation.srx</code>){% else %}<strong>shipped default</strong>{% endif %}</p>
+    {% if custom_srx_present %}
+    <label class="checkbox"><input type="checkbox" name="srx_use_custom" value="1" {% if values.srx_file %}checked{% endif %} /> Keep using the uploaded custom ruleset (uncheck to revert to the shipped default)</label>
+    {% endif %}
+    <label>Upload a custom SRX ruleset (optional, max 1MB - validated before it is accepted)
+      <input type="file" name="srx_file" accept=".srx,.xml,application/xml,text/xml" /></label>
+    <button type="submit">Save segmentation settings</button>
+  </form>
+  {% endif %}
+
+  <h3 id="segprofiles">Segmentation profiles</h3>
+  <p class="muted">Named rulesets attachable per customer or project (project → customer → system
+    default → active ruleset). Rulesets are immutable - clone to change rules. Existing documents keep
+    the segmentation they were ingested with, so switching never scrambles TM.</p>
+  {% if seg_profiles %}
+  {% call m.data_table("Segmentation profiles", [{"label": "Name"}, {"label": "Scope"}, {"label": "Rules"}, {"label": "System default"}, {"label": "In use"}, {"label": "", "actions": true}]) %}
+    {% for item in seg_profiles %}{% set p = item.row %}
+    <tr>
+      <td><span class="cell-primary"><span class="trunc" style="max-width:26ch">{{ p.name }}</span></span>{% if p.description %}<span class="cell-secondary">{{ p.description }}</span>{% endif %}</td>
+      <td>{% if p.customer_id %}customer #{{ p.customer_id }}{% else %}global{% endif %}</td>
+      <td>{% if p.srx_blob %}custom SRX{% else %}built-in default{% endif %}</td>
+      <td>{% if p.is_system_default %}{{ m.status_badge('active', 'Yes') }}{% else %}<span class="muted">No</span>{% endif %}</td>
+      <td>{{ item.use.projects }} project(s), {{ item.use.customers }} customer(s)</td>
+      <td class="row-actions">
+        <details class="inline-edit">
+          <summary class="btnlink small">Rename or clone</summary>
+          <form method="post" action="/settings/segprofiles/{{ p.id }}/rename" class="rowform">
+            {% include "_csrf.html" %}
+            <input type="text" name="name" aria-label="New name for {{ p.name }}" placeholder="rename to…" required style="width:8em" />
+            <button type="submit" class="btn-small">Rename</button>
+          </form>
+          <form method="post" action="/settings/segprofiles/{{ p.id }}/clone" class="rowform">
+            {% include "_csrf.html" %}
+            <input type="text" name="new_name" aria-label="Clone name for {{ p.name }}" placeholder="clone as…" required style="width:8em" />
+            <button type="submit" class="btn-small">Clone</button>
+          </form>
+        </details>
+        {% call m.row_menu('spm-' ~ p.id, 'More actions for profile ' ~ p.name) %}
+        <form method="post" action="/settings/segprofiles/{{ p.id }}/default" class="rowform">
+          {% include "_csrf.html" %}
+          {% if p.is_system_default %}
+            <input type="hidden" name="make_default" value="0" />
+            <button type="submit" role="menuitem">Clear system default</button>
+          {% else %}
+            <input type="hidden" name="make_default" value="1" />
+            <button type="submit" role="menuitem">Make system default</button>
+          {% endif %}
+        </form>
+        {% if not item.use.total %}
+        <form method="post" action="/settings/segprofiles/{{ p.id }}/delete" class="rowform"
+              data-action-confirm="Delete profile {{ p.name }}?">
+          {% include "_csrf.html" %}
+          <button type="submit" role="menuitem" class="rm-danger">Delete profile</button>
+        </form>
+        {% endif %}
+        {% endcall %}
+      </td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+  {% else %}
+  {{ m.empty_state("No profiles yet - projects segment with the active ruleset above.") }}
+  {% endif %}
+  <details class="inline-edit">
+    <summary class="btnlink small">Add a segmentation profile</summary>
+    <form method="post" action="/settings/segprofiles" class="form mt" enctype="multipart/form-data">
+      {% include "_csrf.html" %}
+      <label>Name <input type="text" name="name" required /></label>
+      <label>Description <input type="text" name="description" /></label>
+      <label>Scope
+        <select name="customer_id">
+          <option value="">Global (all customers)</option>
+          {% for c in seg_customers %}<option value="{{ c.id }}">{{ customer_label(c) }}</option>{% endfor %}
+        </select></label>
+      <label>SRX ruleset (optional - leave empty to use the built-in default rules)
+        <input type="file" name="srx_upload" accept=".srx,.xml,application/xml,text/xml" /></label>
+      <label class="checkbox"><input type="checkbox" name="is_system_default" value="1" /> Make this the system default (rung 3 of the chain)</label>
+      <button type="submit">Create profile</button>
+    </form>
+  </details>
+</section>
+
+<section class="card" data-card="retention" id="settings-retention">
+  <h2>Data retention</h2>
+  <p class="muted">Automatically delete aged uploads, documents, and finished jobs after a
+    retention window. <strong>Destructive and irreversible</strong> - off by default. A window
+    of 0 days never deletes anything.</p>
+  <p class="muted">Deleting an aged document takes <strong>everything hanging off it</strong>:
+    its segments and upload file, its full workflow-run history (runs, step traces, fan-out
+    batches), its LQA results, post-edit episodes and query threads, and any vendor dispatch
+    leg anchored to those runs - including a frozen operator-delivery package it holds.</p>
+  <p class="muted">Translation memory also ages out row by row.
+    TM recently approved, updated or used, and TM matching surviving document segments, is kept.
+    Internal key-project catalogues and their TM are exempt. Other TM older than the window,
+    including imported reference TM, is deleted. Ordinary uploads in key projects
+    follow the same retention rules as other uploads.
+    The same TM aging rules apply when a project has no documents left.</p>
+  <p class="muted">Kept, with only their link to the deleted rows cleared:
+    term candidates (document/segment/run provenance stripped), and delivery-empty approvals
+    that are not the deleted document's (their run link cleared, the approval itself intact).
+    One effect reaches <strong>outside</strong> the deleted set: a surviving document's
+    QA findings or post-edit episodes lose their vendor-leg attribution if they reference a
+    dispatch leg the sweep erases.</p>
+  <form method="post" action="/settings/retention" class="form">
+    {% include "_csrf.html" %}
+    <label class="checkbox"><input type="checkbox" name="retention_enabled" value="1" {% if values.retention_enabled == "1" %}checked{% endif %} /> Enable automated purge</label>
+    <label>Retention window (days, 0 = disabled)
+      <input type="number" name="retention_days" min="0" value="{{ values.retention_days }}" size="6" /></label>
+    <button type="submit">Save retention policy</button>
+  </form>
+</section>
+
+<section class="card" data-card="features" id="features">
+  {# Open-core edition: a paid feature whose add-on code is not installed has no row to show. #}
+  {% set feature_cards = feature_cards | selectattr('installed') | list %}
+  {% set _on_count = feature_cards | selectattr('enabled') | list | length %}
+  <div class="feat-head">
+    <h2>Features</h2>
+    <span class="feat-count muted" data-feat-count data-total="{{ feature_cards | length }}">
+      <strong data-feat-on>{{ _on_count }}</strong> of {{ feature_cards | length }} on
+    </span>
+  </div>
+  <p class="muted">Switch non-core features on or off. Changes apply immediately and are audited;
+    existing data is always kept and comes back when a feature is switched on again.</p>
+  {# The semantics legend: three ways a feature behaves when OFF. Each card carries the
+     matching chip, whose title holds the feature's own honest sentence. #}
+  <ul class="feat-legend">
+    <li><span class="feat-sem" data-sem="removed">Removed when off</span>
+      <span class="muted small">pages and API routes answer <em>not found</em>; its CLI verbs and MCP tool refuse.</span></li>
+    <li><span class="feat-sem" data-sem="writes_off">Keeps records when off</span>
+      <span class="muted small">stops new work; what already exists stays readable.</span></li>
+    <li><span class="feat-sem" data-sem="opt_in">Opt-in</span>
+      <span class="muted small">ships off; turning it on starts it, turning it off stops new activity.</span></li>
+  </ul>
+  <details class="adv feat-more">
+    <summary>How switching a feature off works, in full</summary>
+    <p class="muted">For the removal-semantics majority, disabling a feature <strong>removes</strong> it
+      rather than hiding it: its pages and API routes answer <em>not found</em> (indistinguishable
+      from a route that was never built, so they can't be discovered by probing), its
+      <strong>CLI verbs refuse</strong> naming the switch, and its <strong>MCP tool stays listed but
+      refuses when called</strong>. A few modules ship off by default as opt-ins (each card says which). Existing data is always kept
+      and returns when you switch a feature back on.</p>
+    <p class="muted">The enterprise turn-on features - <strong>SAML SSO</strong>,
+      <strong>SCIM provisioning</strong>, OpenTelemetry, Prometheus <code>/metrics</code>,
+      PII named-entity redaction, the durable job queue and S3 storage - are managed on the
+      dedicated <a href="/settings/enterprise">Enterprise features</a> panel (with a preflight
+      and an operator-key step-up), not here.</p>
+  </details>
+
+  <div class="feat-grid">
+  {% for fc in feature_cards %}
+  {% set _moved = fc.slug in ('scim', 'saml') %}
+  <article class="feature-row feat-card {{ 'is-on' if fc.enabled else 'is-off' }}{{ ' is-moved' if _moved }}"
+           id="feature-{{ fc.slug }}" data-slug="{{ fc.slug }}" data-title="{{ fc.title }}">
+    <div class="feat-top">
+      <div class="feat-title">
+        <strong>{{ fc.title }}</strong>
+      </div>
+      {% if _moved %}
+      {# MOVED: SCIM + SAML are enabled ONLY on the Enterprise features panel (one door, one
+         auth story). The registry entry stays (route/CLI gating is unchanged); only the WRITE
+         surface moved, so there is no dead toggle-post here. #}
+      <a class="btnlink small feat-moved-link" href="/settings/enterprise#feature-{{ fc.slug }}">Manage in Enterprise features <span aria-hidden="true">→</span></a>
+      {% else %}
+      {# The switch IS the submit button: without JS the form posts and the page reloads on
+         the #features anchor exactly as before; with JS the scoped script below intercepts,
+         asks inline before switching OFF, and PATCHes the card in place via fetch. #}
+      <form method="post" action="/settings/features/{{ fc.slug }}" class="rowform feature-toggle"
+            {% if fc.enabled %}data-confirm="Disable {{ fc.title }}? {{ fc.semantics_sentence }}"{% endif %}>
+        {% include "_csrf.html" %}
+        <input type="hidden" name="enabled" value="{{ 0 if fc.enabled else 1 }}" />
+        <button type="submit" class="feat-switch" role="switch"
+                aria-checked="{{ 'true' if fc.enabled else 'false' }}"
+                aria-label="{{ 'Disable' if fc.enabled else 'Enable' }} {{ fc.title }}"
+                title="{{ 'Switch off' if fc.enabled else 'Switch on' }}">
+          <span class="feat-knob" aria-hidden="true"></span>
+        </button>
+      </form>
+      {% endif %}
+    </div>
+    <p class="feat-desc muted">{{ fc.description }}</p>
+    <div class="feat-foot">
+      <span class="feat-state" data-feat-state>{{ 'On' if fc.enabled else 'Off' }}</span>
+      <span class="feat-sem" data-sem="{{ fc.semantics }}" title="{{ fc.semantics_sentence }}">
+        {%- if fc.semantics == 'removed' %}Removed when off
+        {%- elif fc.semantics == 'writes_off' %}Keeps records when off
+        {%- else %}Opt-in{% endif -%}
+      </span>
+      <span class="help feat-sentence">{{ fc.semantics_sentence }}</span>
+    </div>
+    {% if not _moved %}
+    <div class="feat-confirm" hidden>
+      <p><strong>Switch off {{ fc.title }}?</strong> {{ fc.semantics_sentence }}</p>
+      <div class="row-actions">
+        <button type="button" class="small feat-confirm-yes">Switch off</button>
+        <button type="button" class="small ghost feat-confirm-no">Keep on</button>
+      </div>
+    </div>
+    <p class="feat-error error" id="feat-error-{{ fc.slug }}" hidden></p>
+    {% endif %}
+  </article>
+  {% endfor %}
+  </div>
+
+  {# Enhancement layer (scoped to #features). Without JS: every switch is a plain submit
+     (server confirm-less, page reload on #features, unchanged). With JS: switching OFF
+     opens the inline confirm; the flip is a fetch POST to the SAME route carrying
+     X-Requested-With: fetch, which answers JSON instead of a redirect; the card updates in
+     place (state, switch, count) and the page never scrolls. Any failure falls back to a
+     normal submit so nothing is ever less capable than the no-JS path. #}
+  <script nonce="{{ csp_nonce() }}">
+  (function () {
+    var root = document.getElementById('features');
+    if (!root || !window.fetch) return;
+    var onEl = root.querySelector('[data-feat-on]');
+
+    function setState(card, enabled) {
+      card.classList.toggle('is-on', enabled);
+      card.classList.toggle('is-off', !enabled);
+      var form = card.querySelector('form.feature-toggle');
+      var sw = card.querySelector('.feat-switch');
+      var hid = form.querySelector('input[name="enabled"]');
+      var title = card.getAttribute('data-title') || '';
+      hid.value = enabled ? '0' : '1';
+      sw.setAttribute('aria-checked', enabled ? 'true' : 'false');
+      sw.setAttribute('aria-label', (enabled ? 'Disable ' : 'Enable ') + title);
+      sw.title = enabled ? 'Switch off' : 'Switch on';
+      var st = card.querySelector('[data-feat-state]');
+      if (st) st.textContent = enabled ? 'On' : 'Off';
+      if (onEl) onEl.textContent = root.querySelectorAll('.feat-card.is-on').length;
+      card.classList.remove('feat-flash'); void card.offsetWidth; card.classList.add('feat-flash');
+      setTimeout(function () { card.classList.remove('feat-flash'); }, 1000);
+    }
+
+    // a11y T7: a failed flip is an error on the card's switch: LocA11y (form_errors.js)
+    // gives the message role=alert, marks the switch aria-invalid and ties the message
+    // to it through aria-describedby; clearError undoes that on the next try.
+    function showError(card, msg) {
+      var e = card.querySelector('.feat-error');
+      if (!e) return;
+      var sw = card.querySelector('.feat-switch');
+      if (sw && window.LocA11y) { window.LocA11y.fieldError(sw, msg, e); }
+      else { e.textContent = msg; e.hidden = false; }
+    }
+
+    function clearError(card) {
+      var e = card.querySelector('.feat-error');
+      if (!e) return;
+      var sw = card.querySelector('.feat-switch');
+      if (sw && window.LocA11y) { window.LocA11y.clearFieldError(sw, e); }
+      else { e.hidden = true; }
+    }
+
+    function flip(card, form, enabled) {
+      var body = new URLSearchParams(new FormData(form));
+      body.set('enabled', enabled ? '1' : '0');
+      card.classList.add('is-busy');
+      // Busy indicators: the card keeps its own dimmed .is-busy look; the shared top
+      // bar (no button label swap: the switch is an icon control) shows it is saving.
+      var busyDone = window.LocBusy ? window.LocBusy.start(null) : function () {};
+      clearError(card);
+      fetch(form.getAttribute('action'), {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': window.CSRF_TOKEN || '', 'X-Requested-With': 'fetch' },
+        body: body,
+        credentials: 'same-origin'
+      }).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      }).then(function (d) {
+        if (!d || d.ok !== true) throw new Error('unexpected reply');
+        setState(card, !!d.enabled);
+      }).catch(function (e) {
+        showError(card, 'Could not save that change (' + e.message + '). Reload the page and try again.');
+      }).then(function () { card.classList.remove('is-busy'); busyDone(); });
+    }
+
+    root.addEventListener('submit', function (ev) {
+      var form = ev.target.closest ? ev.target.closest('form.feature-toggle') : null;
+      if (!form) return;
+      var card = form.closest('.feat-card');
+      if (!card) return;
+      ev.preventDefault();
+      var turningOn = form.querySelector('input[name="enabled"]').value === '1';
+      if (turningOn) { flip(card, form, true); return; }
+      var c = card.querySelector('.feat-confirm');
+      if (c) { c.hidden = false; var y = c.querySelector('.feat-confirm-yes'); if (y) y.focus(); }
+    });
+    root.addEventListener('click', function (ev) {
+      var t = ev.target;
+      if (!t.closest) return;
+      var card = t.closest('.feat-card');
+      if (!card) return;
+      if (t.closest('.feat-confirm-yes')) {
+        card.querySelector('.feat-confirm').hidden = true;
+        flip(card, card.querySelector('form.feature-toggle'), false);
+      } else if (t.closest('.feat-confirm-no')) {
+        card.querySelector('.feat-confirm').hidden = true;
+        var sw = card.querySelector('.feat-switch'); if (sw) sw.focus();
+      }
+    });
+  })();
+  </script>
+</section>
+
+<section class="card" data-card="system" id="settings-system">
+  <h2>System</h2>
+  <p class="muted">Database: <code>{{ db_path }}</code></p>
+  <p class="muted">AI engine defaults live on <a href="/setup-ai">Setup AI</a>.</p>
+</section>
+</div>
+</div>
+{% with layout_page = 'settings' %}{% include "_page_layout.html" %}{% endwith %}
+
+{% endblock %}

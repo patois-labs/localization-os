@@ -1,0 +1,52 @@
+    <nav class="side-nav" aria-label="{{ t(request, 'chrome.main_nav') }}">
+      <div class="nav-group" data-nav-key="workspace">{{ t(request, 'nav.group_workspace') }}</div>
+      <a href="/" class="{{ 'on' if p == '/' }}"><span class="nav-glyph" aria-hidden="true">▦</span> {{ t(request, 'nav.dashboard') }}</a>
+      <a href="/projects" class="{{ 'on' if p.startswith('/projects') or p.startswith('/documents') }}"><span class="nav-glyph" aria-hidden="true">📁</span> {{ t(request, 'nav.projects') }}</a>
+      <a href="/customers" class="{{ 'on' if p.startswith('/customers') }}"><span class="nav-glyph" aria-hidden="true">🏢</span> {{ t(request, 'nav.customers') }}</a>
+      {% if feature_enabled('queries') %}<a href="/queries" class="{{ 'on' if p.startswith('/queries') }}"><span class="nav-glyph" aria-hidden="true">💬</span> {{ t(request, 'nav.queries') }}</a>{% endif %}
+      {% if feature_enabled('worklist') %}<a href="/my-work" class="{{ 'on' if p.startswith('/my-work') }}"><span class="nav-glyph" aria-hidden="true">🗂</span> {{ t(request, 'nav.my_work') }}</a>{% endif %}
+
+      <div class="nav-group" data-nav-key="automation">{{ t(request, 'nav.group_automation') }}</div>
+      <a href="/workflows" class="{{ 'on' if p.startswith('/workflows') or p.startswith('/runs') }}"><span class="nav-glyph" aria-hidden="true">🛠</span> {{ t(request, 'nav.workflows') }}</a>
+      <a href="/glossaries" class="{{ 'on' if p.startswith('/glossaries') }}"><span class="nav-glyph" aria-hidden="true">📖</span> {{ t(request, 'nav.glossaries') }}</a>
+      <a href="/style-guides" class="{{ 'on' if p.startswith('/style-guides') }}"><span class="nav-glyph" aria-hidden="true">📐</span> {{ t(request, 'nav.style_guides') }}</a>
+      <a href="/content-types" class="{{ 'on' if p.startswith('/content-types') }}"><span class="nav-glyph" aria-hidden="true">🏷</span> {{ t(request, 'nav.content_types') }}</a>
+      <a href="/tm" class="{{ 'on' if p == '/tm' or p.startswith('/tm/') }}"><span class="nav-glyph" aria-hidden="true">🧠</span> {{ t(request, 'nav.translation_memory') }}</a>
+      {# SPEC Workflow Studio Wave C: the top-level "Templates" nav item is RETIRED — its
+         page folded into the Workflows area as the "Building blocks" tab
+         (/workflows/building-blocks). /templates 302s there so no bookmark dies. #}
+      <a href="/connectors" class="{{ 'on' if p.startswith('/connectors') }}"><span class="nav-glyph" aria-hidden="true">🔌</span> {{ t(request, 'nav.connectors') }}</a>
+      {% if feature_enabled('vendors') %}<a href="/vendors" class="{{ 'on' if p.startswith('/vendors') }}"><span class="nav-glyph" aria-hidden="true">🏭</span> {{ t(request, 'nav.vendors') }}</a>{% endif %}
+      {% if feature_enabled('images') %}<a href="/images" class="{{ 'on' if p.startswith('/images') }}"><span class="nav-glyph" aria-hidden="true">🖼</span> {{ t(request, 'nav.images') }}</a>{% endif %}
+      <a href="/languages" class="{{ 'on' if p.startswith('/languages') }}"><span class="nav-glyph" aria-hidden="true">🌐</span> {{ t(request, 'nav.language_sets') }}</a>
+      <a href="/jobs" class="{{ 'on' if p.startswith('/jobs') }}"><span class="nav-glyph" aria-hidden="true">⏱</span> {{ t(request, 'nav.jobs') }}</a>
+      {% if feature_enabled('data_export') %}<a href="/exports" class="{{ 'on' if p.startswith('/exports') }}"><span class="nav-glyph" aria-hidden="true">📦</span> {{ t(request, 'nav.data_export') }}</a>{% endif %}
+
+      <div class="nav-group" data-nav-key="intelligence">{{ t(request, 'nav.group_intelligence') }}</div>
+      {% if can_tune_ai(me) %}<a href="/setup-ai" class="{{ 'on' if p.startswith('/setup-ai') }}"><span class="nav-glyph" aria-hidden="true">✨</span> {{ t(request, 'nav.setup_ai') }}</a>{% endif %}
+      {# ADMIN-ONLY: the tap is a raw-content firehose across all customers (a bound
+         linguist must not reach it). English literal, matching the setup_ai convention. #}
+      {% if me and me.role == 'admin' %}<a href="/prompt-tap" class="{{ 'on' if p.startswith('/prompt-tap') }}"><span class="nav-glyph" aria-hidden="true">🔎</span> {{ names.ledger }}</a>{% endif %}
+      {# The memory + ledger feature names are COINED (admin-renameable) brand names,
+         so they render from the branding registry ({{ names.llmemory }} / {{ names.ledger }};
+         app/branding.py, SPEC-brand-as-config §D8) rather than a per-locale i18n entry:
+         a proper name is deliberately identical in every locale. #}
+      {% if feature_enabled('reports') %}<a href="/reports" class="{{ 'on' if p.startswith('/reports') }}"><span class="nav-glyph" aria-hidden="true">📊</span> {{ t(request, 'nav.reports') }}</a>{% endif %}
+      {# R2-3: a customer-bound (non-admin) user gets a read-only, customer-scoped
+         audit view here (admins reach the fuller /audit under Administration). #}
+      {% if me and me.role != 'admin' and me.customer_id %}<a href="/audit" class="{{ 'on' if p.startswith('/audit') }}"><span class="nav-glyph" aria-hidden="true">📜</span> {{ t(request, 'nav.audit_log') }}</a>{% endif %}
+
+      {% if me and me.role == 'admin' %}
+      <div class="nav-group" data-nav-key="administration">{{ t(request, 'nav.group_administration') }}</div>
+      <a href="/users" class="{{ 'on' if p.startswith('/users') }}"><span class="nav-glyph" aria-hidden="true">👥</span> {{ t(request, 'nav.users') }}</a>
+      {% if feature_enabled('routing') %}<a href="/routing" class="{{ 'on' if p.startswith('/routing') }}"><span class="nav-glyph" aria-hidden="true">🧭</span> {{ t(request, 'nav.routing') }}</a>{% endif %}
+      <a href="/security" class="{{ 'on' if p.startswith('/security') }}"><span class="nav-glyph" aria-hidden="true">🛡</span> {{ t(request, 'nav.security') }}</a>
+      <a href="/audit" class="{{ 'on' if p.startswith('/audit') }}"><span class="nav-glyph" aria-hidden="true">📜</span> {{ t(request, 'nav.audit_log') }}</a>
+      {% endif %}
+
+      <div class="nav-group" data-nav-key="system">{{ t(request, 'nav.group_system') }}</div>
+      <a href="/account" class="{{ 'on' if p.startswith('/account') }}"><span class="nav-glyph" aria-hidden="true">👤</span> {{ t(request, 'nav.my_account') }}</a>
+      {% if me and me.role == 'admin' %}<a href="/settings" class="{{ 'on' if p == '/settings' or (p.startswith('/settings/') and not p.startswith('/settings/enterprise')) }}"><span class="nav-glyph" aria-hidden="true">⚙</span> {{ t(request, 'nav.settings') }}</a>{% endif %}
+      {% if me and me.role == 'admin' %}<a href="/settings/enterprise" class="{{ 'on' if p.startswith('/settings/enterprise') }}"><span class="nav-glyph" aria-hidden="true">🏛</span> {{ t(request, 'nav.enterprise') }}</a>{% endif %}
+      <a href="/help" class="{{ 'on' if p.startswith('/help') }}"><span class="nav-glyph" aria-hidden="true">❔</span> {{ t(request, 'nav.help') }}</a>
+    </nav>

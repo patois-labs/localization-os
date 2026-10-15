@@ -1,0 +1,49 @@
+# Line-ending policy. THE INCIDENT THIS FILE EXISTS FOR (2026-07-20): git's
+# autocrlf checked docker-entrypoint.sh out with CRLF on Windows, a Docker build
+# ships the WORKING TREE (not the committed blob), and the image's kernel then
+# failed to exec a "#!/bin/sh\r" shebang -- ENOENT crash-loop in the container
+# until the file was re-written LF and redeployed. Shell scripts and anything
+# a Linux container executes MUST stay LF in every checkout.
+*.sh text eol=lf
+Dockerfile text eol=lf
+.dockerignore text eol=lf
+docker-entrypoint.sh text eol=lf
+alembic.ini text eol=lf
+
+# SECOND INCIDENT, 2026-07-31 (LLMemory merge train). Python is indifferent to
+# CRLF, but some suites assert on RAW BYTES: verify_lqa_adjudication's mutation
+# probe greps app/services/lqa.py for an anchor containing "\n", so a CRLF
+# checkout fails it with "mutation anchor drifted" -- a red suite with no code
+# defect. It cost three separate agents time in fresh worktrees before the
+# cause was found, because `git status` is CLEAN while the bytes on disk differ
+# from the committed blob. Pinning LF makes every checkout (and every
+# a Docker build, which ships the working tree) byte-identical to the commit.
+*.py text eol=lf
+
+# THIRD, 2026-08-25 (G-08 dep-scanning train). CI YAML had no eol rule, so a new
+# workflow authored on Windows was committed CRLF while the existing ci.yml was LF -
+# a noisy whole-file diff and a CRLF-vs-LF skew in files GitHub Actions parses. Pin
+# all workflow/config YAML (and the pip-audit ignore list) to LF like the rest.
+*.yml text eol=lf
+*.yaml text eol=lf
+.github/pip-audit-ignores.txt text eol=lf
+
+# Lock refreshes must preserve LF on Windows as well as Linux.
+requirements*.lock text eol=lf
+
+# Vendored axe-core (a11y train T0, test-only). Its size and sha256 are pinned by
+# tests/verify_a11y_static.py (check AXE, normal sweep, no browser needed), so every
+# checkout must be byte-exact (no autocrlf rewrite). `binary` also keeps the 580 KB
+# minified line out of text diffs and out of the pregate secret heuristic, which
+# misreads the autocomplete token table inside axe as credential assignments. Any
+# change to this file therefore fails the AXE pin, not a text review.
+tests/fixtures/axe/axe.min.js binary
+# Hosted-instance launch kit: everything here runs in bash or a Linux container (CloudShell, Caddy).
+deploy/aws-hosted/** text eol=lf
+
+# Format batch 7: XML/DITA/DocBook round-trip fixtures are compared byte for byte.
+tests/fixtures/formats/xmlits/** -text
+tests/fixtures/formats/mulixml/** -text
+
+# POSIX CLI wrapper must stay LF (a CRLF shebang cannot exec).
+loc-tms text eol=lf

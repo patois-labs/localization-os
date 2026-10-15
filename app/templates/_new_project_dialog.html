@@ -1,0 +1,725 @@
+{# GLOBAL new-project popout (rendered from base.html on every page, so the
+   sidebar button opens it in place instead of redirecting - R2 follow-up).
+   Context comes from the new_project_ctx(request) template global; the create
+   error only renders on /projects (other pages use ?err= for their own errors,
+   and a failed create always redirects back to /projects?err=...#new). #}
+{% import "_macros.html" as m %}
+{% import "_form_errors.html" as fe %}
+{% set np = new_project_ctx(request) %}
+<link rel="stylesheet" href="/static/projects_create.css?v={{ static_v('projects_create.css') }}" />
+{% if request.url.path == '/projects' or request.url.path.startswith('/customers/') %}<noscript><style>#new-project-dialog:not([open]) { display:block; position:static; width:auto; max-height:none; } #new-project-dialog [data-np-close] { display:none; }</style></noscript>{% endif %}
+<dialog id="new-project-dialog" class="modal" aria-labelledby="np-title">
+<section class="card modal-card" id="new">
+  <div class="modal-head">
+    <h2 id="np-title">New project</h2>
+    <button type="button" class="btn-small ghost" data-np-close aria-label="Close">Close</button>
+  </div>
+  {# a11y T7: the same page error as the summary in main (base.html), rendered here too
+     so it is visible inside the dialog that #new reopens; without JS the dialog stays
+     closed and the main summary still shows it. Only one is focused: openDialog()
+     below focuses this one, and form_errors.js skips the main one while a modal is open. #}
+  {% if request.url.path == '/projects' %}{{ fe.error_summary(request, scope='np') }}{% endif %}
+  {# Template prefill (feature: "start from a template"): a compact picker at the
+     very TOP of the dialog. Applying FETCHES /projects/templates/{id}/prefill.json
+     (GET, read-only, no CSRF needed) and drops the validated result into the
+     SAME form controls the promptable-setup draft uses, via the SAME applyDraft()/
+     renderWarnings() JS below - no parallel fill path. Visible to anyone who can
+     open this dialog (template APPLICATION isn't can_tune_ai-gated either - see
+     the projects-page "Create from template" card); omitted entirely when no
+     template is visible to this caller (np.templates is already scoped exactly
+     like that card's list - see new_project_ctx). #}
+  {% if np.templates %}
+  <div class="np-template-pick" data-np-tpl-pick>
+    <label>Start from a template
+      <select data-np-tpl-select>
+        {% for t in np.templates %}
+        <option value="{{ t.id }}">{{ t.name }}{% if t.customer_name %} ({{ t.customer_name }}){% elif t.customer_id %} (customer #{{ t.customer_id }}){% else %} (global){% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="button" class="btn-small" data-np-tpl-apply>Apply</button>
+    <span class="muted small" data-np-tpl-status aria-live="polite"></span>
+    <ul class="np-describe-warnings" data-np-tpl-warnings hidden></ul>
+  </div>
+  {% endif %}
+  {# Promptable setup (SPEC-promptable-setup A2): a collapsible "Describe it"
+     section that drafts the form below from a plain-language description. The LLM
+     PROPOSES; POST /projects/author.json validates every reference server-side;
+     the prefill drops the validated values into the EXISTING controls and the
+     human submits the normal form. Only admins/linguists (can_tune_ai) see it. #}
+  {% if (not app_meta().auth_on) or can_tune_ai(current_user(request)) %}
+  <details class="np-describe" id="np-describe">
+    <summary>Describe it instead of clicking</summary>
+    <div class="np-describe-body" data-np-describe>
+      <label>Describe the project
+        <textarea data-np-desc rows="3" spellcheck="false"
+          placeholder="English to Spanish and French for Acme, marketing content, due next Friday"></textarea>
+      </label>
+      <label>Authoring provider
+        <select data-np-desc-provider>
+          {% for p in np.providers %}<option value="{{ p }}" {% if p == np.default_provider %}selected{% endif %}>{{ p }}</option>{% endfor %}
+          {% for value, label in engine_options(request) %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+        </select>
+      </label>
+      {# Authoring MODEL: fetch-driven from the provider (POST /workflows/models --
+         reachable + _ai_block-gated, same seam Add-a-step uses). Blank = the
+         provider's default (a keyed cloud provider resolves one server-side, so the
+         empty-model failure never reaches the operator). The draft fetch below reads
+         whichever control (list OR manual) is active. #}
+      <label>Authoring model <span class="muted small">(blank = default)</span>
+        <span class="npmodel" data-np-desc-model>
+          <select data-np-desc-model-select disabled hidden></select>
+          <input aria-label="Model id" type="text" data-np-desc-model-manual placeholder="(default)" />
+          <button type="button" class="btn-small" data-np-desc-model-fetch data-busy-label="{{ t(request, 'busy.fetching_models') }}">Fetch models</button>
+          <span class="muted small" data-np-desc-model-out></span>
+        </span>
+      </label>
+      <div class="np-describe-actions">
+        <button type="button" class="btn-small" data-np-draft data-busy-label="{{ t(request, 'busy.drafting') }}">Draft the setup</button>
+        <span class="muted small" data-np-desc-status aria-live="polite"></span>
+      </div>
+      {# BUG 4: the model's own explanation (model_notes / notes_for_reviewer, e.g.
+         why a due date came back blank) rendered under the status line as inert muted
+         text -- textContent only, never innerHTML. #}
+      <p class="muted small np-describe-notes" data-np-desc-notes hidden></p>
+      <ul class="np-describe-warnings" data-np-desc-warnings hidden></ul>
+    </div>
+  </details>
+  {% endif %}
+  <form method="post" action="/projects" class="form" enctype="multipart/form-data" data-preserve-draft="new-project">
+    {% include "_csrf.html" %}
+    <div class="np-fields">
+      <label>Project name <input type="text" name="name" placeholder="Spring Campaign Loc" required /></label>
+      <label>Customer
+        {# 2026-07-14: a project REQUIRES a customer - no "- none -" option, and
+           the field is required (hard client-side gate; POST /projects re-enforces it
+           server-side) whenever any customer exists. With exactly one visible customer
+           it is preselected. A zero-customer install isn't gated (nothing to pick). #}
+        <select name="customer_id" data-np-customer {% if np.customers %}required{% endif %}>
+          {% if np.customers|length != 1 %}<option value="">- pick a customer -</option>{% endif %}
+          {% for c in np.customers %}<option value="{{ c.id }}"{% if np.customers|length == 1 %} selected{% endif %}>{{ customer_label(c) }}</option>{% endfor %}
+        </select>
+        {% if not np.customers %}<span class="help">No customers yet - create one under Customers to organize this project.</span>{% endif %}
+      </label>
+      <label>Content type <span class="muted small">(optional)</span>
+        {# Options carry data-customer so the JS below shows only the chosen
+           customer's types + globals (data-customer=""). SPEC-content-types. #}
+        <select name="content_type_id" data-np-content-type>
+          <option value="" data-customer="">- General -</option>
+          {% for ct in np.content_types %}
+            <option value="{{ ct.id }}" data-customer="{{ ct.customer_id if ct.customer_id is not none else '' }}">{{ ct.name }}{% if ct.customer_id is none %} (global){% endif %}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {#- Custom project fields (SPEC-project-automation part C): the inputs of every field the
+          caller may use; the script below shows the chosen customer's fields + the global ones
+          and serializes the filled ones into the hidden custom_fields_json. -#}
+      {% if np.custom_fields %}
+      {% import "_custom_fields.html" as cfm %}
+      <fieldset class="cf-group" data-np-cf>
+        <legend>Project fields</legend>
+        {% for f in np.custom_fields %}{{ cfm.cf_input(f, none, false) }}{% endfor %}
+        <input type="hidden" name="custom_fields_json" value="" data-np-cf-json />
+      </fieldset>
+      {% endif %}
+      {# Batch 13: start from a Trados project package. Its .sdlproj sets the source and
+         target languages (the fields below are then ignored) and each target SDLXLIFF
+         becomes a document of the new project. #}
+      <label data-np-upload-only>Trados package <span class="muted small">(optional .sdlppx: takes its languages and files)</span>
+        <input type="file" name="sdl_package" accept=".sdlppx" />
+      </label>
+      <label>Source locale <input type="text" name="source_locale" value="{{ np.default_source }}" size="8" /></label>
+      {#- SPEC-key-based-projects section 6: the project TYPE selector. Rendered only
+          while the `key_projects_enabled` kill switch is on (with it off there is one
+          type, so a radio pair would be a lie); with it off the field is absent and
+          POST /projects falls back to "document" exactly as it always did. The
+          service (`content.project_create`) re-checks the switch, so a forged POST
+          cannot create a key project while the feature is off. -#}
+      {% if feature_enabled('keys') or np.connected_enabled %}
+      <fieldset class="lp-fieldset" data-np-type>
+        <legend>Project type</legend>
+        <label class="checkbox"><input type="radio" name="project_type" value="document" checked />
+          <strong>Documents</strong> - upload files, translate, export them back
+          in their original format.</label>
+        {% if feature_enabled('keys') %}
+        <label class="checkbox"><input type="radio" name="project_type" value="key_based" />
+          <strong>Keys</strong> - continuous
+          localization: key/value strings in, one file per locale out. Needs at least
+          one target language.</label>
+        {% endif %}
+        {% if np.connected_enabled %}
+        <label class="checkbox"><input type="radio" name="project_type" value="connected" data-np-connected />
+          <strong>Connected</strong> - content comes from a connected system (a help center, a CMS,
+          a repository). You connect it on the project page right after creating the project; there is
+          no upload step.</label>
+        {% endif %}
+        <p class="help">A project's type is fixed once it has content.</p>
+      </fieldset>
+      {% endif %}
+      <label>Due date <span class="muted small">(optional)</span>
+        <input type="date" name="due_date" />
+      </label>
+      <label>MT provider
+        <select name="default_provider">
+          {% for p in np.providers %}<option value="{{ p }}" {% if p == np.default_provider %}selected{% endif %}>{{ p }}</option>{% endfor %}
+          {% for value, label in engine_options(request) %}<option value="{{ value }}" {% if value == np.default_provider %}selected{% endif %}>{{ label }}</option>{% endfor %}
+          {% if np.default_provider == 'mock' or not app_meta().auth_on or (current_user(request).role if current_user(request) else '') == 'admin' %}<option value="mock" {% if np.default_provider == 'mock' %}selected{% endif %}>mock (offline demo, placeholder text)</option>{% endif %}
+        </select>
+      </label>
+      {% if np.seg_profiles %}
+      <label>Segmentation
+        <select name="segmentation_profile_id">
+          <option value="">Default (inherited)</option>
+          {% for p in np.seg_profiles %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+        </select>
+      </label>
+      {% endif %}
+    </div>
+    <fieldset class="lp-fieldset" data-np-lang>
+      <legend>Target languages</legend>
+      <p class="help">Pick target languages. Use <em>Show all languages</em> for the full catalog.</p>
+      {# Active-pairs confinement (the maintainer's P2): when the chosen customer has active
+         pairs, the JS below narrows this picker to that customer's pair targets
+         (the rest stays behind "Show all languages"). This note is filled + shown by
+         that JS; it is empty (hidden) with no JS or no pairs - the picker then offers
+         the full enabled subset, unchanged. #}
+      <p class="help np-lang-note" data-np-lang-note hidden></p>
+      {{ m.langpicker('target_locales', np.enabled_locales, np.all_locales) }}
+    </fieldset>
+    <details class="adv">
+      <summary>Provider selection <span class="muted">(optional - choose an engine per language pair)</span></summary>
+      <fieldset class="lp-fieldset" id="np-provider-mode">
+      <label class="inline">
+        <input type="radio" name="provider_mode" value="uniform" checked
+               data-pp-mode /> One provider for every language pair
+        <span class="muted small">(uses the MT provider above)</span>
+      </label>
+      <label class="inline">
+        <input type="radio" name="provider_mode" value="per_pair"
+               data-pp-mode /> Choose a provider per language pair
+        <span class="muted small">(e.g. a cheaper engine for some pairs)</span>
+      </label>
+      {# Per-pair matrix: one provider dropdown per SELECTED target locale, built
+         in JS from the langpicker checkboxes. The template renders the provider
+         option list once (data-pp-options) so the JS can clone it per row. #}
+      <div id="np-pair-matrix" data-pp-matrix hidden>
+        <p class="help">Leave a pair on <em>Default</em> to use the project
+          provider for it.</p>
+        <table class="pp-matrix"><thead><tr><th scope="col">Language pair</th><th scope="col">Provider</th></tr></thead><tbody data-pp-rows></tbody></table>
+      </div>
+      <select data-pp-options hidden aria-hidden="true">
+        <option value="">Default (project provider)</option>
+        {% for p in np.providers %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+        {% for value, label in engine_options(request) %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+      </select>
+      </fieldset>
+    </details>
+    <button type="submit">Create project</button>
+  </form>
+  {# Save-as-template-instead (SPEC-promptable-setup A2): posts the SAME field
+     values to /projects/templates/from-draft (server re-validates + skip+warns
+     dangling refs), so "template creation by prompt" works without a project ever
+     existing. The hidden inputs are filled from the main form at submit time. #}
+  {% if (not app_meta().auth_on) or can_tune_ai(current_user(request)) %}
+  <form method="post" action="/projects/templates/from-draft" class="form np-tpl-form"
+        data-np-tpl-form>
+    {% include "_csrf.html" %}
+    <label>Template name <input type="text" name="name" placeholder="Marketing ES/FR"
+      data-np-tpl-name /></label>
+    <input type="hidden" name="source_locale" data-np-tpl-src />
+    <input type="hidden" name="default_provider" data-np-tpl-provider />
+    <input type="hidden" name="customer_id" data-np-tpl-customer />
+    <input type="hidden" name="scope" data-np-tpl-scope value="global" />
+    <div data-np-tpl-targets></div>
+    <button type="submit" class="btn-small">Save as template</button>
+  </form>
+  {% endif %}
+</section>
+</dialog>
+<script src="/static/langpicker.js?v={{ static_v('langpicker.js') }}"></script>
+{# Active-pairs confinement map ({customer_id: [target codes]}), read by the JS
+   below to narrow the Target-languages picker to the chosen customer's pairs. A
+   customer with no pairs is absent -> the picker stays on the full enabled subset. #}
+<script nonce="{{ csp_nonce() }}" type="application/json" data-np-customer-targets>{{ np.customer_targets | tojson }}</script>
+<script nonce="{{ csp_nonce() }}">
+(function () {
+  var dlg = document.getElementById('new-project-dialog');
+  if (!dlg) return;
+  var fetchModelsOnOpen = function () {};
+  function openDialog() {
+    if (!dlg.open) dlg.showModal();
+    fetchModelsOnOpen();
+  }
+  // a11y T7: a failed create lands on /projects?err=...#new; the dialog's own error
+  // summary takes focus so a screen reader reads it first.
+  function focusDialogError() {
+    var npErr = document.getElementById('np-error');
+    if (npErr && dlg.open) npErr.focus();
+  }
+
+  // --- active-pairs confinement of the Target-languages picker (the maintainer's P2) ---
+  // On customer change, re-tier the langpicker options: the chosen customer's active-
+  // pair targets become the always-visible (enabled) subset; everything else drops
+  // behind the picker's existing "Show all languages" toggle (the soft escape hatch).
+  // A customer with no pairs restores the original enabled subset (the no-pairs
+  // fallback). We only flip each option's data-disabled + re-run the picker's own
+  // filter (via an input event on its search box) - never touch its internal state.
+  (function () {
+    var custSel = dlg.querySelector('[data-np-customer]');
+    var langField = dlg.querySelector('[data-np-lang]');
+    var note = dlg.querySelector('[data-np-lang-note]');
+    var mapEl = dlg.querySelector('[data-np-customer-targets]');
+    if (!custSel || !langField || !mapEl) return;
+    var targetsByCust = {};
+    try { targetsByCust = JSON.parse(mapEl.textContent || '{}') || {}; } catch (e) { targetsByCust = {}; }
+    var picker = langField.querySelector('[data-langpicker]');
+    var search = picker ? picker.querySelector('[data-lp-search]') : null;
+    var opts = picker ? Array.prototype.slice.call(picker.querySelectorAll('[data-lp-opt]')) : [];
+    function norm(c) { return String(c || '').trim().toLowerCase().replace(/_/g, '-'); }
+    var custName = {};
+    Array.prototype.forEach.call(custSel.options, function (o) { custName[o.value] = o.textContent; });
+    function applyConfine() {
+      if (!opts.length) return;
+      var codes = targetsByCust[custSel.value] || null;
+      var allowed = null;
+      if (codes && codes.length) {
+        allowed = {};
+        codes.forEach(function (c) { allowed[norm(c)] = true; });
+      }
+      opts.forEach(function (o) {
+        // Cache each option's server-rendered tier once, so clearing the filter
+        // restores the exact enabled/disabled split the macro emitted.
+        if (o.dataset.origDisabled == null) {
+          o.dataset.origDisabled = o.getAttribute('data-disabled') || '0';
+        }
+        if (allowed) {
+          o.setAttribute('data-disabled', allowed[norm(o.getAttribute('data-code'))] ? '0' : '1');
+        } else {
+          o.setAttribute('data-disabled', o.dataset.origDisabled);
+        }
+      });
+      if (note) {
+        if (allowed) {
+          var nm = custName[custSel.value] || 'this customer';
+          note.textContent = 'Showing ' + nm + "'s active language pairs - use Show all languages for the full catalog.";
+          note.hidden = false;
+        } else {
+          note.textContent = '';
+          note.hidden = true;
+        }
+      }
+      // Re-run the langpicker's own applyFilter (it reads data-disabled live). An
+      // input event on its search box is the public trigger; no search box = no-op
+      // enhancement (the boxes still submit).
+      if (search) { search.dispatchEvent(new Event('input', { bubbles: true })); }
+    }
+    custSel.addEventListener('change', applyConfine);
+    applyConfine();
+  })();
+  document.querySelectorAll('[data-np-open]').forEach(function (b) {
+    b.addEventListener('click', function (e) {
+      e.preventDefault();  // sidebar button is an <a href="/projects#new"> fallback
+      openDialog();
+    });
+  });
+  dlg.querySelectorAll('[data-np-close]').forEach(function (b) {
+    b.addEventListener('click', function () { dlg.close(); });
+  });
+  // Click on the backdrop (outside the card) closes.
+  dlg.addEventListener('click', function (e) {
+    if (e.target === dlg) dlg.close();
+  });
+  // A failed create redirects back to /projects?err=...#new - reopen with the
+  // error (and the no-JS fallback lands here too).
+  if (window.location.hash === '#new') { openDialog(); focusDialogError(); }
+
+  // --- per-pair provider matrix (Phase 2) ---
+  // Show the matrix only in PER_PAIR mode; rebuild its rows from the currently
+  // checked target-locale checkboxes so each selected pair gets a provider
+  // dropdown (posted as parallel pair_target[]/pair_provider[] arrays the route
+  // zips into SRC:TGT=PROVIDER). Blank dropdown = use the project default.
+  var matrix = dlg.querySelector('[data-pp-matrix]');
+  var rowsBody = dlg.querySelector('[data-pp-rows]');
+  var optTemplate = dlg.querySelector('[data-pp-options]');
+  function perPairOn() {
+    var r = dlg.querySelector('[data-pp-mode][value="per_pair"]');
+    return r && r.checked;
+  }
+  function rebuildMatrix() {
+    if (!matrix || !rowsBody || !optTemplate) return;
+    if (!perPairOn()) { matrix.hidden = true; return; }
+    matrix.hidden = false;
+    // Preserve any already-chosen provider per target across a rebuild.
+    var chosen = {};
+    rowsBody.querySelectorAll('select[name="pair_provider"]').forEach(function (s) {
+      chosen[s.getAttribute('data-tgt')] = s.value;
+    });
+    rowsBody.innerHTML = '';
+    var sourceLocale = dlg.querySelector('input[name="source_locale"]').value;
+    var checked = dlg.querySelectorAll('input[name="target_locales"]:checked');
+    checked.forEach(function (cb) {
+      var code = cb.value;
+      var tr = document.createElement('tr');
+      var td1 = document.createElement('td');
+      td1.textContent = sourceLocale + ' to ' + code;
+      var td2 = document.createElement('td');
+      var hid = document.createElement('input');
+      hid.type = 'hidden'; hid.name = 'pair_target'; hid.value = code;
+      var sel = optTemplate.cloneNode(true);
+      sel.hidden = false; sel.removeAttribute('aria-hidden');
+      sel.removeAttribute('data-pp-options');
+      sel.name = 'pair_provider';
+      sel.setAttribute('aria-label', 'Provider for ' + sourceLocale + ' to ' + code);
+      sel.setAttribute('data-tgt', code);
+      if (chosen[code]) sel.value = chosen[code];
+      td2.appendChild(hid); td2.appendChild(sel);
+      tr.appendChild(td1); tr.appendChild(td2);
+      rowsBody.appendChild(tr);
+    });
+  }
+  dlg.querySelectorAll('[data-pp-mode]').forEach(function (r) {
+    r.addEventListener('change', rebuildMatrix);
+  });
+  // Rebuild when the target-locale selection changes (checkboxes + langpicker
+  // chips both mutate the same checkboxes, so a change listener on the fieldset
+  // catches every path).
+  var lpField = dlg.querySelector('.lp-fieldset');
+  if (lpField) lpField.addEventListener('change', rebuildMatrix);
+  var sourceField = dlg.querySelector('input[name="source_locale"]');
+  if (sourceField) sourceField.addEventListener('input', rebuildMatrix);
+  rebuildMatrix();
+
+  // --- Connected type: no upload step ---
+  // A connected project takes its content from a connected system, so the Trados package
+  // upload is hidden (and cleared) while Connected is chosen. The server refuses the
+  // combination too.
+  var typeRadios = dlg.querySelectorAll('input[name="project_type"]');
+  function syncConnectedType() {
+    var conn = false;
+    Array.prototype.forEach.call(typeRadios, function (r) {
+      if (r.checked && r.value === 'connected') conn = true;
+    });
+    Array.prototype.forEach.call(dlg.querySelectorAll('[data-np-upload-only]'), function (el) {
+      el.hidden = conn;
+      if (conn) {
+        var f = el.querySelector('input[type="file"]');
+        if (f) f.value = '';
+      }
+    });
+  }
+  Array.prototype.forEach.call(typeRadios, function (r) {
+    r.addEventListener('change', syncConnectedType);
+  });
+  syncConnectedType();
+
+  // --- content-type filter (SPEC-content-types) ---
+  // Show only the chosen customer's content types + globals (data-customer="").
+  // A type scoped to a different customer is hidden AND, if it was selected, the
+  // select falls back to "General" so a foreign type can never be posted.
+  var custSel = dlg.querySelector('[data-np-customer]');
+  var ctSel = dlg.querySelector('[data-np-content-type]');
+  function filterContentTypes() {
+    if (!ctSel) return;
+    var chosen = custSel ? custSel.value : '';
+    var current = ctSel.value;
+    Array.prototype.forEach.call(ctSel.options, function (opt) {
+      var owner = opt.getAttribute('data-customer') || '';
+      // A global (owner "") or matching-customer type is offered; else hidden.
+      var ok = (owner === '' || owner === chosen);
+      opt.hidden = !ok;
+      opt.disabled = !ok;
+    });
+    // If the currently-selected option is now hidden, reset to General.
+    var sel = ctSel.options[ctSel.selectedIndex];
+    if (sel && sel.disabled) ctSel.value = '';
+    void current;
+  }
+  if (custSel) custSel.addEventListener('change', filterContentTypes);
+  filterContentTypes();
+
+  // --- custom project fields: show the chosen customer's + global fields, and
+  // serialize the visible ones into the hidden JSON the POST validates server-side.
+  var cfGroup = dlg.querySelector('[data-np-cf]');
+  function cfSync() {
+    if (!cfGroup) return;
+    var chosen = custSel ? custSel.value : '';
+    Array.prototype.forEach.call(cfGroup.querySelectorAll('[data-cf-wrap]'), function (w) {
+      var owner = w.getAttribute('data-customer') || '';
+      w.hidden = !(owner === '' || owner === chosen);
+    });
+  }
+  function cfSerialize() {
+    if (!cfGroup) return;
+    var out = {};
+    Array.prototype.forEach.call(cfGroup.querySelectorAll('[data-cf-key]'), function (el) {
+      var wrap = el.closest('[data-cf-wrap]');
+      if (wrap && wrap.hidden) return;
+      var key = el.getAttribute('data-cf-key');
+      var part = el.getAttribute('data-cf-part');
+      var val = (el.value || '').trim();
+      if (part === 'value') { if (val) out[key] = val; }
+      else if (val) { out[key] = out[key] || {}; out[key][part] = val; }
+    });
+    var hid = cfGroup.querySelector('[data-np-cf-json]');
+    if (hid) hid.value = Object.keys(out).length ? JSON.stringify(out) : '';
+  }
+  if (custSel) custSel.addEventListener('change', cfSync);
+  cfSync();
+  var cfForm = dlg.querySelector('form.form[action="/projects"]');
+  if (cfForm) cfForm.addEventListener('submit', cfSerialize);
+
+  // --- promptable setup: "Describe it" draft + prefill (SPEC-promptable-setup) ---
+  // POST /projects/author.json validates every reference server-side; here we only
+  // drop the returned values into the EXISTING controls via .value/.checked +
+  // change-event dispatch (never innerHTML, never hand-poking the langpicker's DOM)
+  // and let the form's own handlers (content-type filter, langpicker, pair matrix)
+  // react. The user then submits the normal, untouched POST /projects form.
+  var describe = dlg.querySelector('[data-np-describe]');
+  var form = dlg.querySelector('form.form[action="/projects"]');
+  function setField(sel, value) {
+    var el = dlg.querySelector(sel);
+    if (!el) return;
+    el.value = value == null ? '' : String(value);
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  function applyDraft(d) {
+    if (!d) return;
+    // Template prefill: the draft never carries a "name" (a template is applied
+    // MANY times under different project names, same as the projects-page "Create
+    // from template" card's separate name field) -- only set it when the draft
+    // actually supplies one (the promptable-setup draft usually does), so a name
+    // the human already typed is never silently wiped.
+    if (d.name) setField('input[name="name"]', d.name);
+    // Customer FIRST (its change re-runs the content-type filter), then the type.
+    setField('select[name="customer_id"]', d.customer_id == null ? '' : d.customer_id);
+    setField('select[name="content_type_id"]',
+             d.content_type_id == null ? '' : d.content_type_id);
+    setField('input[name="source_locale"]', d.source_locale);
+    setField('input[name="due_date"]', d.due_date);
+    // BUG 2: the draft OMITS default_provider when the description named none -- leave
+    // the form's pre-selected provider untouched then, never forcing an arbitrary one.
+    if (d.default_provider) setField('select[name="default_provider"]', d.default_provider);
+    // Template prefill: a GLOBAL segmentation profile (the only kind this dialog's
+    // picker offers -- see the server-side prefill_draft docstring). Omitted by the
+    // promptable-setup draft today, so this is a no-op for that path.
+    if (d.segmentation_profile_id != null) {
+      setField('select[name="segmentation_profile_id"]', d.segmentation_profile_id);
+    }
+    // Target locales: check the matching boxes + fire change so the langpicker
+    // refreshes its chips/count and the pair matrix rebuilds (its own listeners).
+    var want = {};
+    (d.target_locales || []).forEach(function (c) { want[c] = true; });
+    dlg.querySelectorAll('input[name="target_locales"]').forEach(function (cb) {
+      var next = !!want[cb.value];
+      if (cb.checked !== next) {
+        cb.checked = next;
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+    // Provider mode radio (its change rebuilds the pair matrix).
+    var mode = (d.provider_mode === 'per_pair') ? 'per_pair' : 'uniform';
+    var radio = dlg.querySelector('[data-pp-mode][value="' + mode + '"]');
+    if (radio) { radio.checked = true; radio.dispatchEvent(new Event('change', { bubbles: true })); }
+    // Per-pair provider selects exist only after the matrix rebuilt above.
+    var pairs = d.pair_providers || {};
+    Object.keys(pairs).forEach(function (tgt) {
+      var sel = dlg.querySelector('select[name="pair_provider"][data-tgt="' + tgt + '"]');
+      if (sel) sel.value = pairs[tgt];
+    });
+  }
+  // `box` defaults to the "Describe it" warnings list (every existing call site
+  // passes one arg); the template-prefill flow below passes its OWN box so the
+  // two features never clobber each other's warning list.
+  function renderWarnings(list, box) {
+    box = box || dlg.querySelector('[data-np-desc-warnings]');
+    if (!box) return;
+    box.innerHTML = '';
+    if (!list || !list.length) { box.hidden = true; return; }
+    list.forEach(function (w) {
+      var li = document.createElement('li');
+      li.textContent = w;
+      box.appendChild(li);
+    });
+    box.hidden = false;
+  }
+  // BUG 4: surface the model's own note (model_notes / notes_for_reviewer) under the
+  // status line so the reason a field came back empty is visible. Inert: textContent
+  // only, never innerHTML (the note is untrusted model output).
+  function renderNotes(note) {
+    var box = dlg.querySelector('[data-np-desc-notes]');
+    if (!box) return;
+    var text = (note == null) ? '' : String(note).trim();
+    box.textContent = text ? ('Model note: ' + text) : '';
+    box.hidden = !text;
+  }
+  if (describe) {
+    var draftBtn = describe.querySelector('[data-np-draft]');
+    var statusEl = describe.querySelector('[data-np-desc-status]');
+    var descEl = describe.querySelector('[data-np-desc]');
+    var provEl = describe.querySelector('[data-np-desc-provider]');
+    // --- authoring model picker (fetch-driven from the provider) ---
+    var mSel = describe.querySelector('[data-np-desc-model-select]');
+    var mMan = describe.querySelector('[data-np-desc-model-manual]');
+    var mOut = describe.querySelector('[data-np-desc-model-out]');
+    var mFetch = describe.querySelector('[data-np-desc-model-fetch]');
+    var modelFetchGeneration = 0;
+    function modelUseList() { if (!mSel) return;
+      mMan.disabled = true; mMan.hidden = true; mSel.disabled = false; mSel.hidden = false; }
+    function modelUseManual() { if (!mSel) return;
+      mSel.disabled = true; mSel.hidden = true; mMan.disabled = false; mMan.hidden = false; }
+    function currentModel() {
+      // Whichever control is enabled holds the chosen model ('' = provider default).
+      if (mSel && !mSel.disabled) return (mSel.value || '').trim();
+      return (mMan && mMan.value || '').trim();
+    }
+    function modelRequestIsCurrent(ref, generation) {
+      return generation === modelFetchGeneration &&
+        (((provEl && provEl.value) || '') === ref);
+    }
+    async function fetchModels(silent, refresh) {
+      var generation = ++modelFetchGeneration;
+      var ref = (provEl && provEl.value) || '';
+      if (!ref) { if (mOut && !silent) mOut.textContent = 'provider default -- leave blank or type an id.'; modelUseManual(); return; }
+      if (mOut && !silent) mOut.textContent = 'fetching models...';
+      var d;
+      try {
+        d = { models: await window.LocModelCatalog.get(ref, { refresh: !!refresh }) };
+      } catch (err) {
+        if (!modelRequestIsCurrent(ref, generation)) return;
+        if (mOut) mOut.textContent = 'could not fetch models -- type an id.';
+        modelUseManual(); return;
+      }
+      if (!modelRequestIsCurrent(ref, generation)) return;
+      if (!d.models || !d.models.length) {
+        if (mOut) mOut.textContent = 'no model list -- type an id (blank = default).'; modelUseManual(); return; }
+      var cur = currentModel();
+      mSel.textContent = '';
+      var def = document.createElement('option'); def.value = ''; def.textContent = '(default)'; mSel.appendChild(def);
+      d.models.forEach(function (mm) { var o = document.createElement('option'); o.value = mm; o.textContent = mm; mSel.appendChild(o); });
+      if (cur && d.models.indexOf(cur) === -1) {
+        var o = document.createElement('option'); o.value = cur; o.textContent = cur + ' (current)';
+        mSel.insertBefore(o, mSel.children[1] || null); }
+      mSel.value = cur; modelUseList();
+      if (mOut) mOut.textContent = d.models.length + ' model(s) -- pick one, or (default).';
+    }
+    if (mFetch) mFetch.addEventListener('click', function () {
+      var p = fetchModels(false, true);
+      if (window.LocBusy) window.LocBusy.wrap(mFetch, p);
+    });
+    if (provEl) provEl.addEventListener('change', function () { fetchModels(true); });
+    fetchModelsOnOpen = function () { fetchModels(true); };
+    // The #new no-JS/error fallback may have opened the dialog before this model
+    // picker was initialized. Treat that as the same explicit open action.
+    if (dlg.open) fetchModelsOnOpen();
+    function setStatus(msg) { if (statusEl) statusEl.textContent = msg || ''; }
+    if (draftBtn) {
+      draftBtn.addEventListener('click', function () {
+        var text = (descEl && descEl.value || '').trim();
+        if (!text) { setStatus('Type a description first.'); return; }
+        // Busy indicators: shared spinner/label/elapsed counter + top bar for the
+        // LLM draft call; released on every outcome below.
+        if (window.LocBusy && window.LocBusy.isBusy(draftBtn)) return;
+        var busyDone = window.LocBusy ? window.LocBusy.start(draftBtn) : function () {};
+        draftBtn.disabled = true;
+        setStatus('Drafting the setup...');
+        renderWarnings([]);
+        renderNotes('');
+        var body = new URLSearchParams({ description: text,
+          provider: (provEl && provEl.value) || '', model: currentModel() });
+        fetch('/projects/author.json', { method: 'POST',
+          headers: { 'X-CSRF-Token': window.CSRF_TOKEN }, body: body })
+          .then(function (r) {
+            return r.json().then(function (d) { return { ok: r.ok, data: d }; });
+          })
+          .then(function (res) {
+            busyDone();
+            draftBtn.disabled = false;
+            if (!res.ok || !res.data || res.data.ok === false) {
+              setStatus((res.data && res.data.error) || 'Could not draft the setup.');
+              return;
+            }
+            applyDraft(res.data.draft);
+            renderWarnings(res.data.warnings);
+            renderNotes(res.data.model_notes);
+            setStatus('Draft applied -- review the fields below, then create.');
+          })
+          .catch(function () {
+            busyDone();
+            draftBtn.disabled = false;
+            setStatus('Could not reach the authoring endpoint.');
+          });
+      });
+    }
+  }
+
+  // --- start from a template: fetch the prefill + applyDraft (feature: template
+  // prefill). GET /projects/templates/{id}/prefill.json is read-only (no CSRF
+  // token needed, matching every other GET fetch on this page); it returns the
+  // SAME {draft, warnings} shape POST /projects/author.json does, so this reuses
+  // applyDraft()/renderWarnings() exactly rather than a parallel fill path.
+  var tplPick = dlg.querySelector('[data-np-tpl-pick]');
+  if (tplPick) {
+    var tplSelect = tplPick.querySelector('[data-np-tpl-select]');
+    var tplApplyBtn = tplPick.querySelector('[data-np-tpl-apply]');
+    var tplStatusEl = tplPick.querySelector('[data-np-tpl-status]');
+    var tplWarningsBox = tplPick.querySelector('[data-np-tpl-warnings]');
+    function setTplStatus(msg) { if (tplStatusEl) tplStatusEl.textContent = msg || ''; }
+    if (tplApplyBtn) {
+      tplApplyBtn.addEventListener('click', function () {
+        var id = tplSelect && tplSelect.value;
+        if (!id) { setTplStatus('Pick a template first.'); return; }
+        if (window.LocBusy && window.LocBusy.isBusy(tplApplyBtn)) return;
+        var tplBusyDone = window.LocBusy ? window.LocBusy.start(tplApplyBtn) : function () {};
+        tplApplyBtn.disabled = true;
+        setTplStatus('Applying template...');
+        renderWarnings([], tplWarningsBox);
+        fetch('/projects/templates/' + encodeURIComponent(id) + '/prefill.json')
+          .then(function (r) {
+            return r.json().then(function (d) { return { ok: r.ok, data: d }; });
+          })
+          .then(function (res) {
+            tplBusyDone();
+            tplApplyBtn.disabled = false;
+            if (!res.ok || !res.data || res.data.ok === false) {
+              setTplStatus((res.data && res.data.error) || 'Could not load that template.');
+              return;
+            }
+            applyDraft(res.data.draft);
+            renderWarnings(res.data.warnings, tplWarningsBox);
+            setTplStatus('Template applied -- review and create.');
+          })
+          .catch(function () {
+            tplBusyDone();
+            tplApplyBtn.disabled = false;
+            setTplStatus('Could not reach the template endpoint.');
+          });
+      });
+    }
+  }
+
+  // --- save as template: fill the template form from the main form ---
+  var tplForm = dlg.querySelector('[data-np-tpl-form]');
+  if (tplForm) {
+    tplForm.addEventListener('submit', function () {
+      // Copy the current main-form values into the template form's hidden inputs
+      // (the server re-validates everything regardless).
+      var src = form.querySelector('input[name="source_locale"]');
+      var prov = form.querySelector('select[name="default_provider"]');
+      var cust = form.querySelector('select[name="customer_id"]');
+      tplForm.querySelector('[data-np-tpl-src]').value = src ? src.value : '';
+      tplForm.querySelector('[data-np-tpl-provider]').value = prov ? prov.value : '';
+      var custVal = cust ? cust.value : '';
+      tplForm.querySelector('[data-np-tpl-customer]').value = custVal;
+      tplForm.querySelector('[data-np-tpl-scope]').value = custVal ? 'customer' : 'global';
+      // One hidden target_locales input per checked box.
+      var holder = tplForm.querySelector('[data-np-tpl-targets]');
+      holder.innerHTML = '';
+      form.querySelectorAll('input[name="target_locales"]:checked').forEach(function (cb) {
+        var hid = document.createElement('input');
+        hid.type = 'hidden'; hid.name = 'target_locales'; hid.value = cb.value;
+        holder.appendChild(hid);
+      });
+    });
+  }
+})();
+</script>

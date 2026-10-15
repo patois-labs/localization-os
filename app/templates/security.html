@@ -1,0 +1,318 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_form_errors.html" as fe %}
+{% block title %}Security{% endblock %}
+{% block content %}
+
+{% set header_action %}
+  <button type="button" class="ghost layout-edit-btn layout-edit-inline" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+{% endset %}
+{% set header_meta %}
+  <p class="muted">Controls for confidential / regulated deployments. Encryption keys come from
+  <strong>{{ key_source }}</strong>. {% if saved %}<span class="ok">Saved.</span>{% endif %}</p>
+  {# a11y T6: a failed save (?err=) renders in the page error summary at the top of main. #}
+{% endset %}
+{{ m.page_header("Security & compliance", meta=header_meta, secondary=header_action) }}
+
+{% if fly_proxy_warning %}
+<p class="notice notice-warn" role="alert">{{ fly_proxy_warning }}</p>
+{% endif %}
+
+<div class="settings-frame">
+<nav class="settings-index" aria-label="Security &amp; compliance">
+  <a href="#settings-access">Access control</a>
+  <a href="#sessions">Sessions</a>
+  <a href="#passwords">Passwords</a>
+  <a href="#mfa">Two-step sign-in</a>
+  <a href="#accessibility">Accessibility</a>
+  <a href="#settings-protection">Data protection</a>
+  <a href="#settings-idp">Identity provider</a>
+  <a href="#settings-smtp">Email (SMTP)</a>
+  <a href="#settings-oauth">Connector OAuth apps</a>
+</nav>
+<form method="post" action="/security" class="settings-content">
+  {% include "_csrf.html" %}
+  <div id="page-layout" class="page-layout" data-layout-page="security">
+  <section class="card" data-card="access" id="settings-access">
+    <h2>Access control</h2>
+    <p>Script Content Security Policy: <strong>{{ csp_mode }}</strong>.
+      The server operator sets this with LOC_TMS_CSP_MODE; the default is enforce.</p>
+    <p id="api-rate-help">API requests per calling identity per minute. Spend includes
+      engine work and uploads; reads includes cheap writes. 0 disables either limit.
+      Maximum 100000 per minute. Invalid stored values use the default.
+      Counters are in process memory, reset on restart, and are separate per worker.</p>
+    <label>API spend requests per minute
+      <input type="number" name="api_rate_limit_per_minute" min="0" max="100000" step="1"
+        value="{{ vals.api_rate_limit_per_minute }}" aria-describedby="api-rate-help"></label>
+    <label>API reads and cheap writes per minute
+      <input type="number" name="api_read_rate_limit_per_minute" min="0" max="100000" step="1"
+        value="{{ vals.api_read_rate_limit_per_minute }}" aria-describedby="api-rate-help"></label>
+    {# #411: same key, validator and audit row as `config set login_trusted_networks` and
+       /api config. Omitted from a post = unchanged; blank = no trusted networks. #}
+    <input type="hidden" name="login_networks_sent" value="1">
+    <label>Trusted sign-in networks (shared NAT)
+      <input type="text" name="login_trusted_networks" id="login-trusted-networks" maxlength="2000"
+        autocomplete="off" spellcheck="false" placeholder="203.0.113.0/24, 2001:db8:1::/48"
+        value="{{ vals.login_trusted_networks or '' }}"{{ fe.invalid_attrs(request, 'login-trusted-networks', 'login-trusted-networks-help') }}></label>
+    <p class="help" id="login-trusted-networks-help">IP addresses or networks, separated by
+      commas, that many people sign in from at once, such as a campus or office internet
+      address. They are exempt from the limit of 200 failed sign-ins per address in 15 minutes.
+      The per-person limits still apply on these networks: 5 failed attempts for one username
+      from one address, and 20 failed attempts per account per hour. IPv4 /8 or narrower, IPv6
+      /32 or narrower. Blank = none.</p>
+    {% if vals.security_auth_required != '1' and user_count == 0 %}
+      <p class="notice notice-warn">Create an admin first - enabling login with no users sends you to first-run setup.</p>
+    {% endif %}
+    <label class="toggle"><input type="checkbox" name="security_auth_required" value="1" {% if vals.security_auth_required == '1' %}checked{% endif %}>
+      <span><strong>Require login + enforce RBAC</strong> - anonymous access is blocked; roles are enforced on every action.</span></label>
+    {% if audit_locked %}
+    {# #220: audit logging is always on for an install that requires sign-in or runs as a
+       server. The disabled box is not submitted, so the hidden field keeps it on. #}
+    <input type="hidden" name="audit_enabled" value="1">
+    <label class="toggle"><input type="checkbox" id="audit-enabled" checked disabled aria-describedby="audit-enabled-help">
+      <span><strong>Audit logging</strong>: record every mutating action ({{ audit_count }} entries). <a href="/audit">View log <span aria-hidden="true">→</span></a></span></label>
+    <p class="help" id="audit-enabled-help">Always on for an install that requires sign-in. Only the server operator can turn it off, from the command line on the server, and that change is itself recorded in the log.</p>
+    {% else %}
+    <label class="toggle"><input type="checkbox" name="audit_enabled" id="audit-enabled" value="1" {% if vals.audit_enabled == '1' %}checked{% endif %}>
+      <span><strong>Audit logging</strong>: record every mutating action ({{ audit_count }} entries). Turning it on or off is itself recorded. <a href="/audit">View log <span aria-hidden="true">→</span></a></span></label>
+    {% endif %}
+    {% if audit_posture_locked %}
+    {# Gate round 1 L5: host-only like the switch above; the hidden field keeps the value. #}
+    <input type="hidden" name="audit_fail_open" value="{{ vals.audit_fail_open }}">
+    <label class="toggle"><input type="checkbox" id="audit-fail-open" {% if vals.audit_fail_open == '1' %}checked{% endif %} disabled aria-describedby="audit-fail-open-help">
+    {% else %}
+    <label class="toggle"><input type="checkbox" name="audit_fail_open" id="audit-fail-open" value="1" {% if vals.audit_fail_open == '1' %}checked{% endif %}>
+    {% endif %}
+      <span><strong>Audit fail-open under contention</strong>: if the audit row can't be written under sustained database write contention, drop the row and let the request proceed (availability over completeness). Uncheck to <strong>fail closed</strong>: a change is recorded before it runs, so when the record cannot be written the request is refused with a retryable 503 and nothing changes. Either way each dropped record is logged as an error.</span></label>
+    {% if audit_posture_locked %}
+    <p class="help" id="audit-fail-open-help">Only the server operator can change this, from the command line on the server, and that change is recorded in the log.</p>
+    {% endif %}
+  </section>
+
+  {# a11y T9 (WCAG 2.2.1): the session limits, on the web as well as `config set` and
+     /api config. Same store and validators; a change is audit-logged with the rest. #}
+  <section class="card" data-card="sessions" id="sessions">
+    <h2>Sessions</h2>
+    <p class="muted">Signed-in people see a warning 2 minutes before either limit ends. For the
+      inactivity limit they can choose "Stay signed in", and typing on a page counts as
+      activity. The maximum session length cannot be extended: when it ends, the person signs
+      in again. Use 0 to turn a limit off. Whatever these say, a session cookie is valid for at
+      most 24 hours after the last page load, so both limits are capped at 24 hours.</p>
+    <div class="grid2">
+      <div>
+        <label>Sign out after this many minutes of inactivity
+          <input type="number" name="session_idle_minutes" id="session-idle-minutes" min="0" max="1440" step="1" inputmode="numeric" required value="{{ vals.session_idle_minutes }}" aria-describedby="session-idle-help" /></label>
+        <p class="help" id="session-idle-help">Default 240 (4 hours), at most 1440 (24 hours). 0 = no inactivity limit.</p>
+      </div>
+      <div>
+        <label>Maximum session length in hours, counted from sign-in
+          <input type="number" name="session_max_hours" id="session-max-hours" min="0" max="24" step="1" inputmode="numeric" required value="{{ vals.session_max_hours }}" aria-describedby="session-max-help" /></label>
+        <p class="help" id="session-max-help">Default 24, which is also the most allowed. Activity never extends it. 0 = no separate maximum (the 24-hour cookie window still applies).</p>
+      </div>
+    </div>
+  </section>
+
+  {# Password policy for local accounts (HECVAT AAAI-03). Same keys, validators and audit
+     row as `config set`, /api config and MCP set_config. Accounts that sign in through
+     SSO, SAML or LDAP have no local password and are not affected. #}
+  <section class="card" data-card="passwords" id="passwords">
+    <h2>Passwords</h2>
+    <input type="hidden" name="pwpolicy_card_sent" value="1" />
+    <p class="muted">Rules for passwords of accounts that sign in with a password here. People
+      who sign in through single sign-on or LDAP are not affected. The defaults follow NIST
+      SP 800-63B; tighten them to match your institution's policy. New rules apply the next
+      time someone sets a password.</p>
+    <div class="grid2">
+      <div>
+        <label>Minimum length in characters
+          <input type="number" name="password_min_length" id="password-min-length" min="8" max="128" step="1" inputmode="numeric" required value="{{ vals.password_min_length }}"{{ fe.invalid_attrs(request, 'password-min-length', 'password-min-length-help') }} /></label>
+        <p class="help" id="password-min-length-help">Default 12, from 8 to 128. Spaces and letters from any language count.</p>
+      </div>
+      <div>
+        <label>Character types required
+          <input type="number" name="password_require_classes" id="password-require-classes" min="0" max="4" step="1" inputmode="numeric" required value="{{ vals.password_require_classes }}"{{ fe.invalid_attrs(request, 'password-require-classes', 'password-require-classes-help') }} /></label>
+        <p class="help" id="password-require-classes-help">How many of these a password must use: lowercase letter, uppercase letter, digit, symbol. Default 0, at most 4.</p>
+      </div>
+      <div>
+        <label>Previous passwords that cannot be reused
+          <input type="number" name="password_history" id="password-history" min="0" max="24" step="1" inputmode="numeric" required value="{{ vals.password_history }}"{{ fe.invalid_attrs(request, 'password-history', 'password-history-help') }} /></label>
+        <p class="help" id="password-history-help">Default 5, at most 24. 0 = no history. Only one-way hashes of old passwords are kept.</p>
+      </div>
+      <div>
+        <label>Require a new password after this many days
+          <input type="number" name="password_max_age_days" id="password-max-age-days" min="0" max="3650" step="1" inputmode="numeric" required value="{{ vals.password_max_age_days }}"{{ fe.invalid_attrs(request, 'password-max-age-days', 'password-max-age-days-help') }} /></label>
+        <p class="help" id="password-max-age-days-help">Default 0 = passwords never expire, which NIST recommends. Otherwise people must choose a new password at their next sign-in after this many days.</p>
+      </div>
+    </div>
+    <label class="toggle"><input type="checkbox" name="password_block_common" id="password-block-common" value="1" {% if vals.password_block_common != '0' %}checked{% endif %}{{ fe.invalid_attrs(request, 'password-block-common', 'password-block-common-help') }}>
+      <span><strong>Block common and personal passwords</strong></span></label>
+    <p class="help" id="password-block-common-help">Refuse a password that is on a list of commonly used passwords (also with digits or symbols added, or repeated), a repeated or keyboard sequence, one that contains the person's email or is their user name with digits or symbols added, and one that contains the full product or company name. On by default.</p>
+  </section>
+
+  {# TOTP train (HECVAT AAAI-17 / DCTR-14): who must use two-step sign-in. Same key,
+     validator and audit row as `config set mfa_required` and /api config. #}
+  <section class="card" data-card="mfa" id="mfa">
+    <h2>Two-step sign-in</h2>
+    <p class="muted">A code from an authenticator app after the password, for accounts that
+      sign in with a password here (local and LDAP accounts). People who sign in through
+      single sign-on (OIDC or SAML) use their identity provider's own multi-factor sign-in
+      instead. API keys are not affected. Anyone can turn two-step sign-in on for their own
+      account on the Account page; this setting decides who MUST use it. Someone who must and
+      has not set it up is asked to set it up right after their password, before they can do
+      anything else.</p>
+    <label>Who must use two-step sign-in
+      <select name="mfa_required" id="mfa-required"{{ fe.invalid_attrs(request, 'mfa-required', 'mfa-required-help') }}>
+        <option value="off" {% if vals.mfa_required not in ('admins', 'all') %}selected{% endif %}>Nobody (people can still turn it on for themselves)</option>
+        <option value="admins" {% if vals.mfa_required == 'admins' %}selected{% endif %}>Administrators</option>
+        <option value="all" {% if vals.mfa_required == 'all' %}selected{% endif %}>Everyone who signs in with a password</option>
+      </select></label>
+    <p class="help" id="mfa-required-help">Default: nobody. Before requiring it for administrators, set it up for your own account first. An administrator can reset a person's two-step sign-in on the <a href="/users">Users</a> page (for a lost phone); for a locked-out sole administrator, run <code>user mfa-reset</code> in the command line on the server.</p>
+  </section>
+
+  {# a11y T10 (maintainer decision 3): where people report an accessibility problem. Shown in
+     the Accessibility section of Help; same key, validator and audit row as `config set`
+     and /api config. The value is instance data, never a hardcoded vendor address. #}
+  <section class="card" data-card="accessibility" id="accessibility">
+    <h2>Accessibility</h2>
+    <input type="hidden" name="accessibility_contact_sent" value="1" />
+    <label>Accessibility contact
+      <input type="text" name="accessibility_contact" id="accessibility-contact" maxlength="254" autocomplete="off" spellcheck="false" value="{{ vals.accessibility_contact }}"{{ fe.invalid_attrs(request, 'accessibility-contact', 'accessibility-contact-help') }} /></label>
+    <p class="help" id="accessibility-contact-help">An email address or an https:// link where people can report an accessibility problem. It is shown in the <a href="/help#accessibility">Accessibility</a> section of Help. Leave it blank to tell people to contact their administrator.</p>
+  </section>
+
+  <section class="card" data-card="protection" id="settings-protection">
+    <h2>Data protection</h2>
+    <label class="toggle"><input type="checkbox" name="encrypt_uploads" value="1" {% if vals.encrypt_uploads == '1' %}checked{% endif %}>
+      <span><strong>Encrypt uploads at rest</strong> - uploaded documents are AES-encrypted (Fernet) on disk.</span></label>
+    <p><strong>Database encryption requires SQLCipher.</strong> The legacy shutdown vault is retired because it could omit committed data and leave plaintext behind. Configure SQLCipher at install time; see docs/SECRETS.md.</p>
+    <label class="toggle"><input type="checkbox" name="pii_redaction" value="1" {% if vals.pii_redaction == '1' %}checked{% endif %}>
+      <span><strong>PII redaction before AI</strong> - strip emails / SSNs / cards / phones / IBANs from everything sent to any AI engine (translation, agent workflows, LQA and QE, glossary tools, the assistant, embeddings), restore in the output. Leave OFF for fully local models.</span></label>
+    <p class="muted"><strong>PII named-entity recognition (NER)</strong> - the offline Presidio + spaCy
+      layer that also strips names / locations / dates - is now configured and enabled on the
+      <a href="/settings/enterprise#feature-pii_ner">Enterprise features</a> panel (with a preflight
+      that verifies the extras and the local model, and an operator-key step-up).</p>
+  </section>
+
+  <section class="card" data-card="idp" id="settings-idp">
+    <h2>Identity provider {{ m.status_badge("active", "OIDC ready") }}</h2>
+    <p class="muted">SSO uses <strong>OIDC authorization code + PKCE</strong> against any standard IdP
+    (Okta, Entra ID, Auth0, Keycloak…). Register this redirect URI with the provider:
+    <code>{{ external_base_url }}/auth/oidc/callback</code>. Local <strong>admin</strong> accounts always
+    keep password login. <strong>SAML is a scaffold</strong> - choose OIDC.
+    <a href="/help#auth">How OIDC sign-in works <span aria-hidden="true">→</span></a></p>
+    <label class="toggle"><input type="checkbox" name="sso_enabled" value="1" {% if vals.sso_enabled == '1' %}checked{% endif %}>
+      <span><strong>Enable SSO (SAML / OIDC)</strong></span></label>
+    <div class="grid2">
+      <label>Protocol
+        <select name="sso_provider">
+          <option value="oidc" {% if vals.sso_provider == 'oidc' %}selected{% endif %}>OIDC</option>
+          <option value="saml" {% if vals.sso_provider == 'saml' %}selected{% endif %}>SAML</option>
+        </select>
+      </label>
+      <label>Issuer / metadata URL <input type="text" name="sso_issuer" value="{{ vals.sso_issuer }}" placeholder="https://idp.example.com/.well-known/openid-configuration" /></label>
+    </div>
+    <div class="grid2">
+      <label>Client ID <input type="text" name="sso_client_id" value="{{ vals.sso_client_id }}" /></label>
+      <label>Client secret
+        <input type="password" autocomplete="new-password" name="sso_client_secret"
+               placeholder="{{ '(unchanged)' if sso_client_secret_set else '(optional - PKCE is always used)' }}" />
+      </label>
+    </div>
+    <p class="muted">An OIDC account is linked to the provider's subject id on its first sign-in and
+    matched by that id afterwards. The first link (a new account, or an existing account with the
+    same email) needs the provider to mark the email as verified (<code>email_verified</code>).
+    LDAP and SAML accounts are never taken over by OIDC. Accounts that existed before this
+    rule link on their next verified sign-in; if your provider never sends
+    <code>email_verified</code> (Entra ID by default), those sign-ins are refused and audited
+    (<code>login.sso_refused</code>) until you turn on the switch below.</p>
+    <label class="toggle"><input type="checkbox" name="sso_trust_unverified_email" value="1" {% if vals.sso_trust_unverified_email == '1' %}checked{% endif %}>
+      <span><strong>Trust this provider's email addresses without <code>email_verified</code></strong>
+      (only for a single-tenant provider whose addresses are assigned by your administrators and
+      that never sends the flag; off by default. While it is on, anyone who can set their own email
+      at the provider can claim an account with that email that is not linked yet.)</span></label>
+    <hr class="sep" />
+    <h3>LDAP / Active Directory {{ m.status_badge("active", "Wired") }}</h3>
+    <p class="muted">When enabled, each sign-in tries the directory first
+    (<strong>search-then-bind</strong>), falling back to local password login on any failure - so the
+    built-in admin always works. A local <strong>admin</strong> account is never taken over by an LDAP
+    identity with the same email. TLS certificate and hostname validation is mandatory. Bare hosts use LDAPS;
+    <code>ldap://</code> requires StartTLS before any password is sent.
+    <a href="/help#auth">Mechanics <span aria-hidden="true">→</span></a></p>
+    <label class="toggle"><input type="checkbox" name="ldap_enabled" value="1" {% if vals.ldap_enabled == '1' %}checked{% endif %}>
+      <span><strong>Enable LDAP / Active Directory</strong></span></label>
+    <div class="grid2">
+      <label>Server URI <input type="text" name="ldap_host" value="{{ vals.ldap_host }}" placeholder="ldaps://dc.example.com" /></label>
+      <label>CA bundle path <input type="text" name="ldap_ca_cert" value="{{ vals.ldap_ca_cert }}" placeholder="PEM file; blank uses system roots" /></label>
+      <label>Base DN <input type="text" name="ldap_base_dn" value="{{ vals.ldap_base_dn }}" placeholder="dc=example,dc=com" /></label>
+    </div>
+    <div class="grid2">
+      <label>Bind DN <input type="text" name="ldap_bind_dn" value="{{ vals.ldap_bind_dn }}" placeholder="cn=svc-loc,ou=service,dc=example,dc=com" /></label>
+      <label>Bind password
+        <input type="password" autocomplete="new-password" name="ldap_bind_password"
+               placeholder="{{ '(unchanged)' if ldap_bind_password_set else '(leave blank for anonymous bind)' }}" />
+      </label>
+    </div>
+    <div class="grid2">
+      <label>User filter <input type="text" name="ldap_user_filter" value="{{ vals.ldap_user_filter }}" placeholder="(|(uid={username})(mail={username}))" />
+        <span class="muted small"><code>{username}</code> is replaced (and escaped) with the login value. Blank = the default shown.</span></label>
+      <label>Default role for new users
+        <select name="ldap_default_role">
+          {% for r in roles %}<option value="{{ r }}" {% if vals.ldap_default_role == r %}selected{% endif %}>{{ r }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+  </section>
+
+  <section class="card" data-card="smtp" id="settings-smtp">
+    <h2>Email (SMTP) <span class="muted">- for invitation emails</span></h2>
+    <p class="muted">Optional. If left blank, invite links are shown in the admin UI to share manually
+    (air-gap friendly).</p>
+    <div class="grid2">
+      <label>Host <input type="text" name="smtp_host" value="{{ vals.smtp_host }}" placeholder="smtp.gmail.com" /></label>
+      <label>Port <input type="text" name="smtp_port" value="{{ vals.smtp_port }}" /></label>
+    </div>
+    <div class="grid2">
+      <label>Username <input type="text" name="smtp_user" value="{{ vals.smtp_user }}" /></label>
+      <label>Password <input type="password" autocomplete="new-password" name="smtp_password" placeholder="(unchanged)" /></label>
+    </div>
+    <label>From address <input type="text" name="smtp_from" value="{{ vals.smtp_from }}" placeholder="no-reply@yourfirm.com" /></label>
+    <label class="toggle"><input type="checkbox" name="smtp_tls" value="1" {% if vals.smtp_tls == '1' %}checked{% endif %}><span>Use STARTTLS</span></label>
+    <h3>Notifications</h3>
+    <label class="toggle"><input type="checkbox" name="notify_on_review_assigned" value="1" {% if vals.notify_on_review_assigned == '1' %}checked{% endif %}><span>Email the assignee when a workflow pauses at a human-review step</span></label>
+    <label class="toggle"><input type="checkbox" name="notify_on_budget_threshold" value="1" {% if vals.notify_on_budget_threshold == '1' %}checked{% endif %}><span>Email admins when a project crosses 80% / 100% of its monthly spend budget</span></label>
+    <label>App base URL <span class="muted">- external URL authority for invitations, SSO, provisioning and callbacks; scheme-qualified: https://host[:port][/prefix]; blank = request Host (review emails omit the link)</span>
+      <input type="text" name="app_base_url" value="{{ vals.app_base_url }}" placeholder="https://tms.example.com" /></label>
+      {% if external_base_url_warning %}<p role="alert">{{ external_base_url_warning }}</p>{% endif %}
+  </section>
+
+  <section class="card" data-card="oauth" id="settings-oauth">
+    <h2>Connector OAuth apps <span class="muted">- optional zero-setup connectors</span></h2>
+    <p class="muted">Register a provider app ONCE so users connect with OAuth instead of API tokens (tokens
+    still work). Jira and Confluence share one Atlassian 3LO app. Redirect URI:
+    <code>{{ external_base_url }}/connectors/oauth/callback</code>. <a href="/help#oauth">Details <span aria-hidden="true">→</span></a></p>
+    <p class="muted">AI apps that connect over MCP sign in through their own page:
+    <a href="/security/mcp-oauth" id="security-mcp-oauth-link">MCP OAuth (AI apps)</a>.</p>
+    <div class="grid2">
+      <label>Airtable client ID <input type="text" name="oauth_airtable_client_id" value="{{ vals.oauth_airtable_client_id }}" /></label>
+      <label>Airtable client secret
+        <input type="password" autocomplete="new-password" name="oauth_airtable_client_secret"
+               placeholder="{{ '(unchanged)' if oauth_airtable_secret_set else '(optional - Airtable uses PKCE)' }}" />
+      </label>
+    </div>
+    <div class="grid2">
+      <label>Atlassian client ID <input type="text" name="oauth_atlassian_client_id" value="{{ vals.oauth_atlassian_client_id }}" />
+        <span class="muted small">One 3LO app for both Jira and Confluence.</span></label>
+      <label>Atlassian client secret
+        <input type="password" autocomplete="new-password" name="oauth_atlassian_client_secret"
+               placeholder="{{ '(unchanged)' if oauth_atlassian_secret_set else '(required for Atlassian)' }}" />
+      </label>
+    </div>
+  </section>
+  </div>
+  {% with layout_page = 'security' %}{% include "_page_layout.html" %}{% endwith %}
+
+  <button type="submit">Save security settings</button>
+</form>
+</div>
+
+{% endblock %}

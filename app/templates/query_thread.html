@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_review_runs_status.html" as rs %}
+{% block title %}Query #{{ thread.id }} - Queries{% endblock %}
+{% block content %}
+<div class="review-runs-page">
+
+{% set header_meta %}
+  <p class="muted">
+    Project {{ thread.project_id }}
+    {% if thread.document_id %} · document {{ thread.document_id }}{% endif %}
+    {% if thread.segment_id %} · segment {{ thread.segment_id }}{% endif %}
+    {% if thread.key_id %} · key {{ thread.key_id }}{% endif %}
+    {% if thread.target_locale %} · {{ thread.target_locale }}{% endif %}
+  </p>
+  <p class="muted">
+    Opened by {{ thread.author or ('a vendor' if thread.author_kind == 'vendor' else '(unknown)') }}
+    · assignee {{ thread.assignee_email or '(unassigned)' }}
+    {% if thread.status == 'closed' and thread.closed_by %} · closed by {{ thread.closed_by }}{% endif %}
+  </p>
+  {% if thread.subject %}<p><strong>{{ thread.subject }}</strong></p>{% endif %}
+  <p><a href="/queries"><span aria-hidden="true">&larr;</span> all queries</a></p>
+{% endset %}
+{{ m.page_header("Query #" ~ thread.id, meta=header_meta, status=rs.localized_status_badge(request, thread.status, 'page.review_runs.status_')) }}
+<nav class="review-runs-sections" aria-label="{{ t(request, 'page.review_runs.nav_label') }}"><a href="#rr-conversation">Conversation</a>{% if thread.status != 'closed' %}<a href="#rr-reply">Reply</a>{% endif %}<a href="#rr-actions">Actions</a></nav>
+
+<section class="card" id="rr-conversation">
+  <h2>Conversation</h2>
+  {% for p in posts %}
+  <div class="post {{ 'vendor' if p.author_kind == 'vendor' else 'human' }}">
+    <p class="muted">
+      {% if p.author_kind == 'vendor' %}
+        {{ p.author_label or 'vendor' }} <span class="badge">vendor</span>
+      {% else %}
+        {{ p.author or '(unknown)' }}
+      {% endif %}
+      · {{ p.created_at | utcdt }}
+    </p>
+    <p>{{ p.body }}</p>
+  </div>
+  {% endfor %}
+</section>
+
+{% if thread.status != 'closed' %}
+<section class="card" id="rr-reply">
+  <h2>Reply</h2>
+  {# SPEC-wave3 §7.2 / L-9: a reply is also egress to the vendor when the segment is out. #}
+  {% if disclosure %}<p class="banner warn">{{ disclosure }}</p>{% endif %}
+  <form method="post" action="/queries/{{ thread.id }}/posts" class="form" data-preserve-draft="query-reply">
+{% call m.form_section("rr-fields-1", "Reply") %}
+    {% include "_csrf.html" %}
+    <label>Your reply
+      <textarea name="body" maxlength="4000" rows="3" required></textarea>
+    </label>
+    <label><input type="checkbox" name="answer" value="1"> mark this query answered</label>
+    <button type="submit" class="btn">Post reply</button>
+  {% endcall %}
+</form>
+</section>
+{% endif %}
+
+<section class="card" id="rr-actions">
+  <h2>Actions</h2>
+  {% if can_close %}
+  <form method="post" action="/queries/{{ thread.id }}/status" class="inline">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="status" value="closed">
+    <button type="submit" class="btn">Close query</button>
+  </form>
+  {% endif %}
+  {% if can_reopen %}
+  <form method="post" action="/queries/{{ thread.id }}/status" class="inline">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="status" value="open">
+    <button type="submit" class="btn">Reopen query</button>
+  </form>
+  {% endif %}
+  {% if can_assign %}
+  <form method="post" action="/queries/{{ thread.id }}/assign" class="form">
+{% call m.form_section("rr-fields-4", "Assign to") %}
+    {% include "_csrf.html" %}
+    <label>Assign to
+      <input type="email" name="assignee_email" value="{{ thread.assignee_email }}"
+             placeholder="an active user who can see this project (empty clears)">
+    </label>
+    <button type="submit" class="btn">Set assignee</button>
+  {% endcall %}
+</form>
+  {% endif %}
+</section>
+
+</div>
+{% endblock %}

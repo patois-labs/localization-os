@@ -1,0 +1,50 @@
+name: Bug report
+description: Something does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Security problems go to SECURITY.md (private reporting), never a public issue.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Create a Documents project
+        2. Upload ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Shown on the Help page, or `python -m app.cli release manifest`.
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you run it
+      options:
+        - run.py on my machine
+        - Docker / docker compose
+        - Embedded (API-only)
+        - Other
+  - type: input
+    id: engine
+    attributes:
+      label: Translation engine
+      description: For example mock, Claude, Gemini, OpenAI, a local model server.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Remove keys, passwords and customer content first.
+      render: text

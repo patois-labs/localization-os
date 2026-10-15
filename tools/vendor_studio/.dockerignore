@@ -1,0 +1,22 @@
+# Allow-list: new local folders never enter the build context by default (#417).
+*
+!run.py
+!vstudio/
+!static/
+!templates/
+!requirements.lock
+
+# Re-exclude private data and bytecode inside allowed directories too.
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/data/
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/.env
+**/.env.*
+**/.enc_key
+**/.session_secret
+**/.setup_token

@@ -1,0 +1,106 @@
+# Localization OS TMS - Dependabot (compliance gap G-08, dependency freshness).
+#
+# Watches the pip ecosystem and opens weekly PRs to bump vulnerable/outdated pins.
+#
+# WHAT DEPENDABOT ACTUALLY READS (and what it does NOT). The pip ecosystem fetcher
+# parses requirements*.txt / *.in (and pyproject/Pipfile/poetry/pdm lock formats).
+# It does NOT understand our `pip freeze`-style requirements.lock, so it NEVER edits
+# that file. Consequence, stated honestly: a Dependabot bump PR changes a pin in
+# requirements.txt; the dep-audit workflow fires (its paths filter includes
+# requirements.txt) but re-installs the UNCHANGED requirements.lock, so its green
+# result is evidence about the PRE-bump locked tree, not the proposed versions.
+# NOTHING here regenerates the lock, so any advisory listed in
+# .github/pip-audit-ignores.txt (empty on 2026-10-08) only clears after a human runs the
+# lock-regen step (documented in that ignore file's header). Treat Dependabot as the "what
+# to bump" signal; the lock refresh + ignore-list prune is the manual follow-through.
+#
+# PR VOLUME: each Dependabot PR runs the fast pull-request jobs in ci.yml plus dep-audit.
+# To keep review manageable, the open-PR count is capped, minor+patch bumps are grouped
+# into a single PR (N small updates -> ONE CI run), and auto-rebase is disabled (a rebase
+# re-runs CI on every base change). Raise the cap if the queue stays empty.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/tools/vendor_studio"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    rebase-strategy: disabled
+    ignore:
+      # Same naive-datetime break as the root; adopt with the root migration.
+      - dependency-name: "sqlmodel"
+        versions: [">=0.0.45"]
+  - package-ecosystem: npm
+    directory: "/integrations/jira-forge-app"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    rebase-strategy: disabled
+    ignore:
+      # @forge/react ships its own React 18 renderer; React 19 breaks the panel at
+      # runtime even though npm ci passes (assessed 2026-09-28).
+      - dependency-name: "react"
+        versions: [">=19"]
+  - package-ecosystem: npm
+    directory: "/integrations/airtable-extension"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    rebase-strategy: disabled
+    ignore:
+      # The Airtable Blocks SDK supports React 16/17 only (npm ci fails on the peer conflict).
+      - dependency-name: "react"
+        versions: [">=18"]
+      - dependency-name: "react-dom"
+        versions: [">=18"]
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 2
+    rebase-strategy: disabled
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "deps"
+    ignore:
+      # sqlmodel 0.0.45+ refuses the naive datetimes stored everywhere (~190 fields,
+      # ~195 utcnow() calls): adopting it is its own migration.
+      - dependency-name: "sqlmodel"
+        versions: [">=0.0.45"]
+      # openai 3 moves to httpx2; held until the httpx2 migration.
+      - dependency-name: "openai"
+        versions: [">=3"]
+    groups:
+      # One PR for all non-major bumps -> one CI run instead of many. Major bumps
+      # stay individual so a breaking upgrade (e.g. the coordinated fastapi+starlette
+      # move the G-08 baseline calls out) gets its own reviewable PR.
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Keep the GitHub Actions themselves current (checkout/setup-python/etc.). Cheap,
+  # security-relevant (pinned action versions).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 2
+    rebase-strategy: disabled
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - minor
+          - patch

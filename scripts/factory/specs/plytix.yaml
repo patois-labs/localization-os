@@ -1,0 +1,84 @@
+# Factory spec for the NEW Plytix PIM connector (connector parity wave 3). Built from Plytix vendor docs
+# and the MIT-licensed community Supplyline/plytix-mcp API notes (facts only, no code copied).
+# No bb-io code was read (bb-io has no Plytix repo), so no bb_io block.
+#
+# Locale model (re-derived): Plytix has NO locale dimension. A product's attributes are flat
+# label -> value pairs, and translations live in SEPARATE attributes per language (for example
+# `description` and `description_fr`). So the topology is T1 with an operator-configured attribute
+# map {source_attr: {locale: target_attr}}, written as a partial PATCH of only the target attributes.
+
+connector:
+  kind: plytix
+  name: Plytix
+  class_name: PlytixConnector
+  icon: "🧩"
+  cat: "PIM"
+  blurb: >-
+    Translate Plytix PIM product text attributes into any language. Plytix has no locale
+    dimension, so each language lives in its own attribute (for example description_fr); you map
+    each source attribute to one target attribute per language, and each translation is written to
+    that target attribute only. The source attribute is never written.
+  docs_url: "https://apidocs.plytix.com/"
+  supports_oauth: false
+  archived: false
+
+  topology: T1
+  auth: [api_key]
+  api_version: "v2"
+  rich_text: none
+  regions: "https://pim.plytix.com"
+  change_signals:
+    webhook_sig: null
+    poll_field: modified
+    stale_flag: null
+    thin_payload: false
+  anti_loop_label: false
+
+  retry_noun: product
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<productId>"
+  api_docstring: >-
+    Translate Plytix product text attributes on the fly into one or more languages, writing each
+    translation to its configured per-language target attribute with a partial PATCH (T1 attribute
+    map). The source attribute is never written. article ids are Plytix product ids.
+
+  article_noun_phrase: "a Plytix product"
+  cli_parser_help: >-
+    Translate Plytix product text attributes into the connection's per-language target
+    attributes (T1 attribute map).
+
+  item_units:
+    scan: "your Plytix products"
+    becomes: "the per-language target attributes you mapped (a partial PATCH of those attributes only; the source attribute is never written)"
+
+  help_row_body: "Translate Plytix product text attributes into mapped per-language attributes (T1 attribute map). Body: <code>article_ids</code>/<code>article_id</code> (Plytix product ids), <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Translate Plytix product text attributes into the per-language target attributes mapped on the connection (T1; partial PATCH of the target attributes only). `--article-ids` are Plytix product ids."
+
+  cli_expected_desc: "translate Plytix product text attributes into mapped per-language attributes (T1 attribute map; POST /api/connectors/{cid}/plytix/translate parity)"
+
+  config_fields:
+    - {name: attribute_map, label: "Attribute map (JSON)", help: "Which source attribute goes to which per-language attribute, e.g. {\"description\": {\"fr\": \"description_fr\", \"de\": \"description_de\"}}. Use attribute LABELS (not display names). Create the target attributes in Plytix first.", placeholder: "{\"description\": {\"fr\": \"description_fr\"}}"}
+    - {name: source_locale, label: "Source language", help: "The language the source attributes are written in, e.g. en. A target equal to it is skipped.", required: false, placeholder: "en"}
+    - {name: skus, label: "Only these SKUs", help: "Optional comma-separated SKUs to restrict the run to. Blank = every product (up to the record cap).", required: false, placeholder: "MUG-001, MUG-002"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated languages to write; each must appear in the attribute map.", required: false, placeholder: "fr, de"}
+    - {name: max_entries, label: "Max records", help: "Safety cap on products scanned per run.", required: false, placeholder: "50"}
+  secret_fields:
+    - {name: api_key, label: "API key", help: "From Plytix Admin, API tab.", secret: true, placeholder: "API key"}
+    - {name: api_password, label: "API password", help: "The password shown next to the API key.", secret: true, placeholder: "API password"}
+  setup_steps:
+    - "In Plytix, create one text attribute per target language (for example description_fr) and add it to the product family."
+    - "In accounts.plytix.com open the API tab, create an API key with a role that can read and edit products and attributes, and copy the key and password."
+    - "Paste the key and password here, then fill in the Attribute map with your attribute labels."
+  other_side: >-
+    Change detection is poll-based: run on a schedule. Re-translation is gated on a per-(product,
+    language) content hash plus a check that the target attribute is filled. A target attribute
+    you edit by hand is kept while the source text is unchanged, but it is overwritten when the
+    source text changes. Until Plytix is proven to keep a product's other attributes on a write,
+    the first write of each run is checked: if anything else on that product was lost, the run
+    stops, the product is put back and further writes are refused. Plytix has no webhook
+    receiver in scope for v1.

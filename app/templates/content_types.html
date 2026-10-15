@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Content types{% endblock %}
+{% block content %}
+<div class="guidance-page">
+
+{% set guidance_actions_label %}<span class="sr-only">Actions</span>{% endset %}
+{% set guidance_title %}Content types{% endset %}
+{% set guidance_meta %}<p>Global domain tags such as Marketing or Legal that scope glossaries and TM. Customer types live on the customer page.
+  {% if not can_edit %}<br><span class="badge warn">Read-only</span> Editing content types is limited to admins and linguists.{% endif %}</p>{% endset %}
+{% set guidance_status %}{% endset %}
+{% set guidance_actions %}{% endset %}
+{{ m.page_header(guidance_title, meta=guidance_meta, status=guidance_status, secondary=guidance_actions) }}
+<nav class="guidance-sections" aria-label="{{ guidance_title | striptags }}">
+<a href="#guidance-1">Global content types</a>
+{% if can_edit %}<a href="#guidance-2">New content type</a>{% endif %}
+</nav>
+
+{# a11y T6: a ?err= error renders once, as a sentence, in the summary at the top of
+   main (base.html + _form_errors.html). #}
+{% if request.query_params.get('saved') %}
+  <p class="ok">Saved.</p>
+{% endif %}
+
+{% call m.card(flat=true) %}
+  <h2 id="guidance-1">Global content types</h2>
+  {% if rows %}
+  {% call m.data_table('Global content types', [{'label': 'Name'}, {'label': 'Description'}, {'label': 'In use'}] + ([{'label': guidance_actions_label, 'actions': true}] if can_edit else [])) %}
+      {% for row in rows %}
+      {% set ct = row.ct %}
+      <tr>
+        <td><span class="cell-primary">{{ ct.name }}</span></td>
+        <td class="muted">{{ ct.description or '-' }}</td>
+        <td class="muted small">{{ row.summary.references.projects }} project(s), {{ row.summary.references.customer_defaults }} default(s), {{ row.summary.references.get('glossaries', 0) }} glossary(ies), {{ row.summary.references.get('connections', 0) }} connection(s), {{ row.summary.references.get('context_profiles', 0) }} context card(s), {{ row.summary.references.get('tm_rows', 0) }} TM row(s)</td>
+        {% if can_edit %}
+        <td class="row-actions">
+          <form method="post" action="/content-types/{{ ct.id }}/rename" class="form inline-form">
+            {% include "_csrf.html" %}
+            <input type="text" name="name" aria-label="New name for {{ ct.name }}" value="{{ ct.name }}" size="14" />
+            <button type="submit" class="small ghost">Rename</button>
+          </form>
+          {# SECURITY: never interpolate a user-controlled name into an inline on*
+             JS string (the browser HTML-decodes an attribute before the JS parser
+             runs, so an escaped quote breaks out -> stored XSS). The name rides in a
+             data-* attribute (safe HTML-attribute context) and confirm() runs from a
+             static addEventListener handler below, reading it as plain string data. #}
+          {% call m.row_menu('ctm-' ~ ct.id, 'More actions for ' ~ ct.name) %}
+          <form method="post" action="/content-types/{{ ct.id }}/delete" class="form inline-form" data-confirm-delete data-ct-name="{{ ct.name }}">
+            {% include "_csrf.html" %}
+            <button type="submit" role="menuitem" class="rm-danger">Delete</button>
+          </form>
+          {% endcall %}
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    {% endcall %}
+  {% else %}
+    {{ m.empty_state('No global content types yet.') }}
+  {% endif %}
+  {% if can_edit %}
+  <form method="post" action="/content-types" class="form inline-form">
+{% call m.form_section('guidance-fields-0', 'New content type') %}
+    {% include "_csrf.html" %}
+    <label id="guidance-2">New content type <input type="text" name="name" placeholder="Marketing" required /></label>
+    <label>Description <input type="text" name="description" placeholder="(optional)" /></label>
+    <button type="submit">Add global content type</button>
+  {% endcall %}
+</form>
+  {% endif %}
+{% endcall %}
+
+<script nonce="{{ csp_nonce() }}">
+// SECURITY (stored-XSS fix): the delete confirm() reads the name from a data-*
+// attribute via getAttribute() - the browser returns the DECODED value as a plain
+// string, and concatenating it into the confirm() argument at runtime never re-parses
+// it as HTML or JS. This is the safe alternative to interpolating the name into an
+// inline on* handler.
+(function () {
+  document.querySelectorAll('form[data-confirm-delete]').forEach(function (f) {
+    f.addEventListener('submit', function (e) {
+      var name = f.getAttribute('data-ct-name') || 'this content type';
+      if (window.LocAsk && window.LocAsk.guard) { window.LocAsk.guard(e, 'Delete content type "' + name + '"? This is refused '
+          + 'while any project or default still uses it.'); }
+      else { e.preventDefault(); }
+    });
+  });
+})();
+</script>
+
+</div>
+{% endblock %}

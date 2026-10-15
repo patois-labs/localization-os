@@ -1,0 +1,57 @@
+{# Shared "How this run went" card - the workflow GRAPH overlay + the per-step-visit
+   GANTT (VIZ-RESEARCH #1). Rendered BOTH inline on the full run page (run_view.html)
+   AND standalone by GET /runs/{id}/graph-fragment, which the live SSE handler fetches
+   and swaps on each step/paused/done event so the graph + Gantt stay live during a run
+   (Run View v2, piece 2). Because BOTH render paths use THIS include with the same
+   context, the fragment is byte-identical to the card in the full page. Self-imports
+   the macros so it works when rendered on its own (the fragment has no parent). #}
+{% import "_macros.html" as m %}
+<section class="card rv-graphcard" id="runGraphCard">
+  <h2>How this run went</h2>
+  <div class="wf-graph-region" role="region" aria-label="Workflow" tabindex="0">{{ m.wf_graph(steps, overlay=overlay, text_id='wfgText') }}</div>{{ m.wf_graph_text(steps, overlay, 'wfgText') }}
+  {% if overlay and overlay.orphan_steps %}
+  <p class="muted small">{{ overlay.orphan_steps | length }} recorded step run(s) reference
+    workflow steps that no longer exist (the workflow was edited after this run) - they are
+    listed in Steps below but are not shown on the graph.</p>
+  {% endif %}
+  {% if gantt and gantt.any %}
+  <div class="rv-gantt" role="group" aria-label="Per-step timeline for this run">
+    <h3 class="rv-gantt-h">Step timeline</h3>
+    <p class="muted small">One bar per step visit, sized by the visit's recorded latency
+      (no per-step start times are recorded, so bars show each visit's own duration, not a
+      wall-clock axis). Loop revisits appear as separate bars under their step.</p>
+    <div class="rv-gantt-rows">
+      {% for r in gantt.rows %}
+      <div class="rv-gantt-row{% if r.orphan %} rv-gantt-orphan{% endif %}">
+        <div class="rv-gantt-name" title="{{ r.name or 'step' }}">
+          {% if r.index is not none %}{{ r.index + 1 }}.{% else %}<span aria-hidden="true">–</span>{% endif %}
+          {{ r.name or r.key or 'step' }}{% if r.visit_of > 1 %}
+          <span class="rv-gantt-visit data-mono" title="loop visit {{ r.visit }} of {{ r.visit_of }}">#{{ r.visit }}</span>{% endif %}
+        </div>
+        <div class="rv-gantt-badge">{{ m.status_badge(r.status, r.label) }}</div>
+        <div class="rv-gantt-track" role="img"
+             aria-label="{{ r.name or 'step' }}: {% if r.latency_ms is not none %}{{ r.latency_ms }} ms{% else %}no recorded duration{% endif %}">
+          <svg viewBox="0 0 100 12" preserveAspectRatio="none" class="rv-gantt-svg"
+               xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect x="0" y="2" width="100" height="8" rx="2" class="rv-gantt-bg"/>
+            {% if r.pct > 0 %}<rect x="0" y="2" width="{{ r.pct }}" height="8" rx="2"
+              fill="{{ r.token }}" class="rv-gantt-bar"/>{% endif %}
+          </svg>
+        </div>
+        <div class="rv-gantt-dur data-mono">{% if r.latency_ms is not none %}{{ r.latency_ms }}ms{% else %}<span class="muted">-</span>{% endif %}</div>
+        <div class="rv-gantt-cost data-mono">{% if r.cost_usd is not none %}${{ '%.4f'|format(r.cost_usd) }}{% endif %}</div>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="rv-gantt-foot">
+      <div class="rv-gantt-name"><strong>Run total</strong></div>
+      <div class="rv-gantt-badge"></div>
+      <div class="rv-gantt-track rv-gantt-foot-wall">
+        {% if gantt.wall_ms is not none %}<span class="muted small">wall {{ '%.1f'|format(gantt.wall_ms / 1000.0) }}s</span>{% endif %}
+      </div>
+      <div class="rv-gantt-dur data-mono">{% if gantt.total_latency_ms is not none %}{{ gantt.total_latency_ms }}ms{% endif %}</div>
+      <div class="rv-gantt-cost data-mono">{% if gantt.total_cost_usd is not none %}<strong>${{ '%.4f'|format(gantt.total_cost_usd) }}</strong>{% endif %}</div>
+    </div>
+  </div>
+  {% endif %}
+</section>

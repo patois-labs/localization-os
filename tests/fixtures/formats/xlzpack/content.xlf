@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xliff xmlns="urn:oasis:names:tc:xliff:document:1.2" xmlns:iws="http://www.idiominc.com/ws/asset" version="1.2">
+  <file original="/Content/en/help.html" source-language="en-US" target-language="fr-FR" datatype="html">
+    <header>
+      <iws:asset-metadata asset_name="help.html" asset_id="4711"/>
+    </header>
+    <body>
+      <trans-unit id="1">
+        <source>Open the <g id="1">Settings</g> page.</source>
+        <target></target>
+        <iws:segment-metadata ws_word_count="4" sid="ws_1" max_segment_length="0">
+          <iws:status translation_status="pending" translation_type="manual_translation"/>
+        </iws:segment-metadata>
+      </trans-unit>
+      <trans-unit id="2">
+        <source>Approved text.</source>
+        <target>Texte approuve.</target>
+        <iws:segment-metadata tm_score="100.00" ws_word_count="2" sid="ws_2">
+          <iws:status translation_status="finished" tm_origin="from_ws_tm"/>
+        </iws:segment-metadata>
+      </trans-unit>
+      <trans-unit id="3">
+        <source>Locked text.</source>
+        <target>Texte verrouille.</target>
+        <iws:segment-metadata ws_word_count="2" sid="ws_3">
+          <iws:status translation_status="pending" lock_status="locked"/>
+        </iws:segment-metadata>
+      </trans-unit>
+      <trans-unit id="4">
+        <source>Use {0} items &amp; <x id="2"/>more.</source>
+        <target></target>
+        <iws:segment-metadata ws_word_count="4" sid="ws_4">
+          <iws:status translation_status='pending'/>
+        </iws:segment-metadata>
+      </trans-unit>
+      <trans-unit id="5">
+        <source>Left untranslated.</source>
+        <iws:segment-metadata ws_word_count="2" sid="ws_5">
+          <iws:status translation_status="pending"/>
+        </iws:segment-metadata>
+      </trans-unit>
+    </body>
+  </file>
+</xliff>

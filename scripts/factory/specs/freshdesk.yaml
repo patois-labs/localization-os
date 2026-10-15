@@ -1,0 +1,73 @@
+# Factory spec for the shipped Freshdesk Solutions connector (T2, SubResourceStrategy).
+# Written by the connector parity rebuild so `python scripts/factory/generate.py check
+# scripts/factory/specs/freshdesk.yaml` proves every shared-file touchpoint is wired. The
+# prose fields carry the EXACT shipped wording (check is a whitespace-normalized substring
+# match). The module body is hand-finished (T2 semantics are not generated).
+
+connector:
+  kind: freshdesk
+  name: Freshdesk Solutions
+  class_name: FreshdeskConnector
+  icon: "\U0001F9BE"
+  cat: "Knowledge base / help center"
+  blurb: >-
+    Translate Freshdesk Solutions (knowledge-base) articles into any language. Each
+    translation is written back as the article's per-language version (GET/POST/PUT
+    /api/v2/solutions/articles/{id}/{lang}), so the master article is never overwritten.
+    Translations land as drafts by default.
+  docs_url: "https://developers.freshdesk.com/api/"
+  supports_oauth: false
+  archived: false
+
+  topology: T2
+  auth: [api_key]
+  api_version: "v2"
+  rich_text: html
+  regions: subdomain
+  change_signals:
+    webhook_sig: null
+    poll_field: updated_at
+    stale_flag: null
+    thin_payload: false
+  anti_loop_label: false
+
+  retry_noun: article
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<numeric article id>"
+  api_docstring: >-
+    Translate Freshdesk Solutions article(s) on the fly into one or more supported
+    languages, writing each back as the article's per-language version (T2).
+  article_noun_phrase: "a Freshdesk"
+  cli_parser_help: >-
+    Translate Freshdesk Solutions articles into the connection's languages as per-language
+    article versions.
+
+  item_units:
+    scan: "your Solutions articles"
+    becomes: "the article's per-language version (drafts by default)"
+
+  help_row_body: "Translate Freshdesk Solutions article(s). Body: <code>article_ids</code>/<code>article_id</code>, <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Translate Freshdesk articles (default: the connection's category/folder scope). Ids and locale overrides are comma/space separated."
+
+  cli_expected_desc: "translate Freshdesk Solutions articles into per-language article versions (T2 SubResourceStrategy)"
+
+  config_fields:
+    - {name: domain, label: "Freshdesk domain", help: "The acme in acme.freshdesk.com.", placeholder: "acme"}
+    - {name: category_id, label: "Category id", help: "Limit discovery to one Solution category (optional).", required: false, placeholder: "80000012345"}
+    - {name: folder_id, label: "Folder id", help: "Limit discovery to one folder (optional).", required: false, placeholder: "80000067890"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated Freshdesk language codes to write.", required: false, placeholder: "fr, de, es"}
+    - {name: publish, label: "Publish after write", help: "1 = published, 0 = draft (default).", required: false, placeholder: "0"}
+  secret_fields:
+    - {name: api_key, label: "API key", help: "Freshdesk Profile settings, Your API key. Sent as HTTP Basic.", secret: true, placeholder: "your-api-key"}
+  setup_steps:
+    - "In Freshdesk Profile settings, copy Your API key."
+    - "Enter your domain and paste the API key."
+    - "Multilingual Solutions need a Pro or Enterprise plan with the target languages enabled."
+  other_side: >-
+    Freshdesk Solutions have no webhooks and no updated_since filter; change detection is a
+    full-tree poll walk with a per-article source content hash.

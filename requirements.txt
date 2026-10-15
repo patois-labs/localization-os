@@ -1,0 +1,160 @@
+# Localization OS - local MT-first TMS
+#
+# This is the human-curated list of DIRECT dependencies (with the pins that
+# matter, e.g. starlette below). For a fully-pinned, reproducible install of the
+# ENTIRE transitive tree (what CI and the Docker image should use), use the
+# generated lock instead:
+#     pip install -r requirements.lock
+# Refresh in a clean Python 3.13 venv with all declared extras intact.
+# Use the exact docs/DEPLOY.md recipe, including the pywin32/uvloop/tzdata
+# ; sys_platform marker re-adds; a bare pip freeze loses cross-platform pins.
+#
+# Web stack
+fastapi==0.142.2
+# Keep standard extras in refreshes, including httptools and watchfiles.
+# uvloop has a Linux-only marked lock line; see docs/DEPLOY.md.
+uvicorn[standard]==0.54.0
+jinja2==3.1.6
+python-multipart==0.0.32
+# Frontmatter parsing for the capability cards (app/capabilities/*.md), which are
+# both the /help pages and the grounding for the Ask assistant - see
+# app/services/assist.py. Promoted from a transitive dep (it was already pinned in
+# requirements.lock) to a DIRECT one now that app code imports it.
+PyYAML==6.0.3
+# Starlette 1.x adopted after migrating all TemplateResponse call sites. Route
+# introspection, empty-form contracts, Host refusal and FileResponse behavior are tested.
+starlette==1.7.0
+
+# Data
+sqlmodel==0.0.44
+# Schema migrations. SQLite stays the zero-config default/test engine. alembic pulls
+# only Mako (1.19.1 dropped its tzdata dep) and does not move the fastapi/starlette
+# pins above (SQLAlchemy 2.0.52 already satisfies it).
+alembic==1.20.0
+# OPTIONAL Postgres backend (Phase 4-A): the psycopg3 driver for
+# `postgresql+psycopg://` is an OPT-IN EXTRA - it is LGPL, so it is deliberately NOT
+# in the default (zero-copyleft) install. Set DATABASE_URL to opt into Postgres, then
+#     pip install -r requirements-postgres.txt   &&   alembic upgrade head
+# The container image bundles it (see Dockerfile); db.py raises a clear install hint
+# if DATABASE_URL points at Postgres without the driver present.
+
+# Localization engine bits
+# CLDR plural rules + gettext catalog I/O for key-based projects (Batch 4,
+# SPEC-key-based-projects sections 3-4). Pure Python, no compiled deps, ships the CLDR
+# data itself. Used for TWO things that must never be hand-rolled: the set of plural
+# categories a locale actually uses (babel.Locale.plural_form), and .po parse/render
+# incl. the Plural-Forms expression a catalog declares (babel.messages). Imported
+# LAZILY inside app/services/keys.py's plural helpers, so app boot and every other
+# verify suite pay nothing for it.
+babel==2.18.0
+fluent.syntax==0.19.0     # Mozilla Project Fluent .ftl parse (Apache-2.0), app/filters/fluent_filter.py
+rapidfuzz==3.14.5        # fuzzy TM matching (Chunk 2)
+lxml==6.1.3              # TMX/TBX/XLIFF parsing (Chunk 2/3)
+python-docx==1.2.0       # DOCX round-trip (Chunk 1)
+# PDF parse + page render for vision OCR (parse) and reflow of translated text
+# (build). Both PERMISSIVELY licensed so the default install carries NO copyleft PDF
+# engine (procurement "zero AGPL/GPL" scans): pypdfium2 is Apache-2.0/BSD-3 and its
+# wheels bundle PDFium; typst is Apache-2.0 (one self-contained abi3 wheel, zero deps).
+# Replaced the AGPL-3.0 PyMuPDF/MuPDF. typst does real text shaping + bidi + system-font
+# fallback, so every default locale (CJK, Arabic/Hebrew RTL, Indic, Thai) renders
+# correctly - which ReportLab (no shaping, no fallback) could not. See
+# app/filters/pdf_filter.py and tests/verify_licenses.py.
+pypdfium2==5.14.0        # PDFium text extraction + page render (Apache-2.0/BSD-3)
+typst==0.15.0            # translated-PDF reflow / build with shaping + fallback (Apache-2.0)
+openpyxl==3.1.5          # XLSX round-trip (pure-python, offline-safe)
+# Image localization (Beta): raster decode + overlay typesetting. Promoted from a
+# transitive dep (requirements.lock) to DIRECT per SPEC-image-localization 3.3.
+# The module's optional local-OCR extra (rapidocr + onnxruntime) is deliberately
+# NOT listed - opt-in via `pip install rapidocr onnxruntime` (D2).
+pillow==12.3.0
+
+# Evaluations Lab Tier-0 MT metrics (PROPOSAL-evaluations-lab section 5): BLEU, chrF,
+# chrF++, TER, and - crucially - the SIGNATURE STRING that makes a BLEU number
+# comparable at all. Pure Python, no torch, no model download; pulls only portalocker,
+# regex, tabulate and numpy (all wheels, all already common). Imported LAZILY inside
+# app/services/eval_metrics.py so app boot and the other verify suites never pay for
+# it. The Tier-2 neural metrics (COMET/MetricX) are deliberately NOT here - they are
+# opt-in and capability-checked, the RapidOCR precedent.
+# presidio-analyzer 2.2.364 (optional PII profile) requires numpy<2.5.
+numpy<2.5
+sacrebleu==2.6.0
+# regex promoted from a transitive dep (requirements.lock, via sacrebleu) to a DIRECT one:
+# the ReDoS guards run remote/third-party-supplied patterns through it - stdlib re has no
+# match timeout, while regex's timeout= is the hard per-match cap the Contentful connector
+# (contentful_part1._compile_js_regex) and the SRX engine (app/services/srx.py) rely on
+# (red-team audit 2026-10-03, findings 01-02). Keep the pin in lockstep with
+# requirements.lock.
+regex==2026.9.29
+
+# MT/LLM providers (Chunk 4)
+anthropic==1.11.0
+google-genai==2.28.0     # coordinated with Pillow 12; core dependencies already locked
+# openai stays on 2.x: 3.x requires httpx2 (http_client typed httpx2.Client);
+# the httpx2 migration train comes first (BACKLOG 2026-09-13).
+openai==2.54.0
+
+# Orchestration helpers (Chunk 4/5)
+# The [socks] extra pulls socksio, needed for the OPT-IN Tailscale sidecar egress
+# path (app/services/tailnet.py): outbound ENGINE http bound for a tailnet
+# destination routes through the sidecar's SOCKS5 proxy. No sidecar (default) ->
+# the socks transport is never constructed; the extra just makes it available.
+httpx[socks]==0.28.1
+# idna is a transitive dep of httpx, PROMOTED to a direct pin now that
+# app/services/egress.py imports it at module scope for IDNA (UTS46) normalization of
+# genuinely non-ASCII target/allowlist hostnames (the SSRF egress guard).
+idna==3.20
+# httpcore is a transitive dep of httpx, PROMOTED to a direct pin: the egress guard
+# (app/services/egress.py) adapts its private _pool._network_backend seam for the
+# pre-connect pinning and connected-peer check (#327). Re-run verify_egress_policy
+# before or when bumping it.
+httpcore==1.0.9
+tenacity==9.1.4
+
+# Security / compliance
+argon2-cffi==25.1.0      # Argon2id password hashing
+itsdangerous==2.2.0      # signed session cookies
+PyJWT==2.15.1            # OIDC id_token validation (Phase 3 SSO)
+segno==1.6.6             # QR code for TOTP MFA enrollment (pure Python, BSD-3-Clause)
+# LDAP / Active Directory authentication (search-then-bind) is an OPT-IN EXTRA:
+# ldap3 is LGPL, so it is deliberately NOT in the default (zero-copyleft) install.
+# It is imported LAZILY/guarded (app/services/ldap_auth.py) - the app boots and every
+# other verify suite passes without it; it is only a hard requirement when the LDAP
+# toggle is turned on (the Security page refuses to enable it while the package is
+# absent). Enable it with:
+#     pip install -r requirements-ldap.txt
+# (cryptography is already pulled in above - used for Fernet encryption at rest)
+
+# Config
+python-dotenv==1.2.4
+# Release identity: app/release.py parses the lock lines with packaging.requirements.
+# The Docker image installs the lock with --no-deps, so this must be an explicit pin
+# (it was a venv side-effect locally; /api/release answered 500 on Fly until pinned).
+packaging==26.3
+
+# OPTIONAL: always-on SQLite-at-rest encryption (LOC_TMS_DB_ENCRYPTION=sqlcipher).
+# NOT a default install and NOT in requirements.lock - plain SQLite stays the
+# zero-config default and the app never imports this unless the env var is set.
+# `sqlcipher3` is SQLCipher's own sqlite3-compatible DBAPI (ships a cp313
+# win_amd64 wheel; drop-in for stdlib sqlite3, so SQLAlchemy's standard pysqlite
+# dialect drives it via module=+creator). Install only when opting in:
+#     pip install sqlcipher3==0.6.2
+# See docs/SECRETS.md (encryption modes).
+# sqlcipher3==0.6.2   # optional; uncomment to enable LOC_TMS_DB_ENCRYPTION=sqlcipher
+
+# MCP front door (Claude Desktop + streamable-http) - ONLY for
+# integrations/mcp-server/, NOT the app. The Localization OS app never imports `mcp`;
+# its other verify suites pass without it (and verify_mcp itself skips cleanly when
+# the SDK is absent). The server (integrations/mcp-server/server.py) is a standalone
+# HTTP client of the app's /api. Installing this upgrades some transitive deps
+# (starlette - pinned above) so the app stays importable.
+#
+# PIN PHILOSOPHY. mcp 2.x (ported 2026-10-02, issue #369): FastMCP is now MCPServer
+# (mcp.server.mcpserver), the listener settings (host/port/path/transport_security/
+# max_request_body_size) are run()/streamable_http_app() arguments instead of constructor
+# kwargs, there is no ambient request_ctx (server.py parks the transport's request in a
+# contextvar from a middleware), and the streamable-http client is streamable_http_client
+# over httpx2. We pin an EXACT version for reproducible installs; verify_mcp_transport
+# asserts the window (>=2.2,<3). 2.x moved the SDK onto httpx2 (httpx2/httpcore2/
+# truststore), mcp-types and opentelemetry-api, and dropped httpx-sse and pydantic-settings
+# (so those two left requirements.lock); starlette/pydantic/uvicorn stay on the pins above.
+mcp==2.3.0

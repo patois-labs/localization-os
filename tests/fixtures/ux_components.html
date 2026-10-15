@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Shared component fixture</title>
+<script>try{document.documentElement.dataset.theme=localStorage.getItem('loc_theme')||'light';}catch(e){document.documentElement.dataset.theme='light';}</script>
+<link rel="stylesheet" href="/static/style.css?v={{ static_v('style.css') }}">
+</head><body>
+{% import '_macros.html' as m %}
+<main id="main-content" style="max-width:1100px;margin:var(--space-5) auto;padding:var(--space-5)">
+{% set primary %}<button type="button" data-component-open="fixture-dialog">Open dialog</button>{% endset %}
+{% set secondary %}<button type="button" class="ghost" data-component-open="fixture-drawer">Open drawer</button>{% endset %}
+{{ m.page_header('Shared components', 'Offline fixture: no actions change application data.', m.status_badge('approved', 'Approved'), primary, secondary) }}
+{% call m.card() %}
+{% call(section) m.tabs('fixture-tabs', 'Example sections', [{'id':'records','label':'Records'}, {'id':'details','label':'Details'}, {'id':'empty','label':'Empty state'}]) %}
+{% if section.id == 'records' %}
+<h2>Records</h2>
+{% call m.data_table('Example records', [{'label':'Name'}, {'label':'Words','numeric':true}, {'label':'Status'}, {'label':'Actions','actions':true}]) %}
+{% for name, count, status, status_label in [('Getting started', 1420, 'completed', 'Completed'), ('Product overview', 800, 'in_review', 'In review'), ('Release notes', 320, 'running', 'Running')] %}
+<tr><th scope="row">{{ name }}</th><td class="numeric">{{ count }}</td><td>{{ m.status_badge(status, status_label) }}</td><td class="row-actions"><a href="#details" aria-label="Details for {{ name }}">Details</a></td></tr>
+{% endfor %}
+{% endcall %}
+{% elif section.id == 'details' %}
+<h2>Details</h2>
+<form>{% call m.form_section('fixture-fields', 'Record details', 'Existing help text remains beside its fields.') %}<label>Name <input name="name" value="Getting started"></label>{% endcall %}</form>
+{% call m.disclosure('More details') %}<p>Disclosure content stays available without JavaScript.</p>{% endcall %}
+{% else %}<h2>Empty state</h2>{{ m.empty_state('No records match.') }}{% endif %}
+{% endcall %}
+{% endcall %}
+{{ m.action_bar('Example actions', primary=primary, secondary=secondary, consequence='Fixture actions open local dialogs only.') }}
+{{ m.step_indicator('Existing steps', [{'label':'Translate','status':'completed','status_label':'Completed'}, {'label':'Review','status':'in_review','status_label':'In review','current':true}]) }}
+{{ m.toast('Existing outcome message', announce=false) }}
+{% call m.dialog('fixture-dialog', 'Example dialog', 'Close') %}<p>Escape closes this dialog and returns focus to its opener.</p><label>Name <input name="dialog_name"></label>{% endcall %}
+{% call m.dialog('fixture-drawer', 'Example drawer', 'Close', drawer=true) %}<p>The drawer uses the same native dialog behavior.</p>{% endcall %}
+</main>{{ m.component_script() }}</body></html>

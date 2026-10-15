@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Custom fields{% endblock %}
+{% block content %}
+<div class="guidance-page">
+
+{% set cf_title %}Custom fields{% endset %}
+{% set cf_meta %}<p>Typed fields you add to projects, such as a Jira ticket or a purchase order number. Fields can be shown as columns in the <a href="/projects">projects list</a>, filtered and sorted there, and are available in the CLI, the API and MCP. <a href="/help#custom-fields">How custom fields work</a></p>{% endset %}
+{{ m.page_header(cf_title, meta=cf_meta) }}
+
+{% if request.query_params.get('saved') %}<p class="ok" role="status">Saved.</p>{% endif %}
+{% if cf_off %}<p class="warn" role="status">Custom project fields are switched off (setting custom_fields_enabled). Existing values are kept; fields, columns and forms are hidden until it is switched on again.</p>{% endif %}
+
+{% call m.card(flat=true) %}
+  <h2 id="cf-existing">Field schema</h2>
+  {% if rows %}
+  {% call m.data_table('Custom fields', [{'label': 'Label'}, {'label': 'Key'}, {'label': 'Type'}, {'label': 'Scope'}, {'label': 'Settings'}, {'label': '', 'actions': true}]) %}
+    {% for row in rows %}
+    {% set d = row.d %}
+    <tr{% if d.archived %} class="muted"{% endif %}>
+      <td><span class="cell-primary">{{ d.label }}</span>{% if d.archived %} <span class="badge warn">Archived</span>{% endif %}</td>
+      <td class="data-mono">{{ d.key }}</td>
+      <td>{{ d.type }}{% if d.type == 'select' %} <span class="muted small">({{ d.options|join(', ') }})</span>{% endif %}{% if d.link_system %} <span class="muted small">{{ d.link_system }}</span>{% endif %}</td>
+      <td>{% if row.customer %}{{ row.customer }}{% elif d.customer_id %}customer #{{ d.customer_id }}{% else %}Every customer{% endif %}</td>
+      <td class="muted small">{% if d.required %}required, {% endif %}{% if d.show_in_list %}list column, {% endif %}{% if d.filterable %}filterable{% else %}not filterable{% endif %}</td>
+      <td class="row-actions">
+        {% if row.can_edit %}{% call m.row_menu('cfm-' ~ d.id, 'More actions for ' ~ d.label) %}
+          <a role="menuitem" href="#cf-edit-{{ d.id }}">Edit</a>
+          <form method="post" action="/settings/custom-fields/{{ d.id }}/{{ 'restore' if d.archived else 'archive' }}" class="form inline-form">
+            {% include "_csrf.html" %}
+            <button type="submit" role="menuitem">{{ 'Restore' if d.archived else 'Archive' }}</button>
+          </form>
+        {% endcall %}{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+
+  {% for row in rows %}{% set d = row.d %}{% if row.can_edit %}
+  <details class="inline-edit" id="cf-edit-{{ d.id }}">
+    <summary class="btnlink small">Edit {{ d.label }}</summary>
+    <form method="post" action="/settings/custom-fields/{{ d.id }}/update" class="form">
+      {% include "_csrf.html" %}
+      <label>Label <input type="text" name="label" value="{{ d.label }}" maxlength="80" required /></label>
+      {% if d.type == 'select' %}<label>Options (one per line) <textarea name="options" rows="4">{{ d.options|join('\n') }}</textarea></label>{% endif %}
+      {% if d.type in ('external_link', 'text') %}<label>Key pattern (optional regular expression) <input type="text" name="key_pattern" value="{{ d.key_pattern }}" maxlength="200" /></label>{% endif %}
+      {% if d.type == 'external_link' %}<label>System (for example jira) <input type="text" name="link_system" value="{{ d.link_system }}" maxlength="32" /></label>{% endif %}
+      <label>Help text <input type="text" name="help_text" value="{{ d.help_text }}" maxlength="300" /></label>
+      <label>Order <input type="number" name="list_order" value="{{ d.list_order }}" /></label>
+      <label class="checkbox"><input type="checkbox" name="required"{% if d.required %} checked{% endif %} /> Required when a project is created</label>
+      <label class="checkbox"><input type="checkbox" name="show_in_list"{% if d.show_in_list %} checked{% endif %} /> Show as a column in the projects list by default</label>
+      <label class="checkbox"><input type="checkbox" name="filterable"{% if d.filterable %} checked{% endif %} /> Filterable</label>
+      <button type="submit">Save changes</button>
+    </form>
+  </details>{% endif %}
+  {% endfor %}
+  {% else %}
+    {{ m.empty_state('No custom fields yet. Add one below.') }}
+  {% endif %}
+{% endcall %}
+
+{% call m.card(flat=true) %}
+  <h2 id="cf-new">New field</h2>
+  <form method="post" action="/settings/custom-fields" class="form">
+  {% call m.form_section('cf-new-fields', 'New custom field') %}
+    {% include "_csrf.html" %}
+    <label>Label <input type="text" name="label" placeholder="Jira ticket" maxlength="80" required /></label>
+    <label>Key <span class="muted small">(lowercase letters, digits, underscores; cannot be changed later)</span>
+      <input type="text" name="key" placeholder="jira_ticket" maxlength="40" pattern="[a-z][a-z0-9_]*" required /></label>
+    <label>Type
+      <select name="type">
+        {% for t in types %}<option value="{{ t }}">{{ {'text':'Text','long_text':'Long text','number':'Number','date':'Date','select':'Select (one of a list)','url':'URL','external_link':'Link to an external ticket or document'}[t] }}</option>{% endfor %}
+      </select></label>
+    <label>Options for a select (one per line) <textarea name="options" rows="3"></textarea></label>
+    <label>System of a link (for example jira) <input type="text" name="link_system" maxlength="32" /></label>
+    <label>Key pattern (optional regular expression the key must match) <input type="text" name="key_pattern" maxlength="200" /></label>
+    <label>Help text <input type="text" name="help_text" maxlength="300" /></label>
+    {% if not can_global %}<p class="muted small">Managers define fields for one customer; an admin defines fields for every customer.</p>{% endif %}
+    <label>Applies to
+      <select name="customer_id">
+        {% if can_global %}<option value="">Every customer</option>{% endif %}
+        {% for c in customers %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+      </select></label>
+    <label>Order <input type="number" name="list_order" value="0" /></label>
+    <label class="checkbox"><input type="checkbox" name="required" /> Required when a project is created</label>
+    <label class="checkbox"><input type="checkbox" name="show_in_list" /> Show as a column in the projects list by default</label>
+    <label class="checkbox"><input type="checkbox" name="filterable" checked /> Filterable</label>
+    <button type="submit">Add field</button>
+  {% endcall %}
+  </form>
+{% endcall %}
+
+</div>
+{% endblock %}

@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ doc.filename }} - Paragraphs{% endblock %}
+{% block content %}
+{#- T5 (a11y, WCAG 3.1.2): lang (and dir for RTL) on the source and target text only. -#}
+{% set src_lang = project.source_locale|langattrs %}{% set tgt_lang = selected|langattrs %}
+{#
+  FULL_TEXT paragraph view + recovery (GitHub #42).
+
+  In FULL_TEXT mode the segment IS the whole document, so the CAT editor offers one
+  giant unit and a linguist facing an inline-tag quarantine has nowhere to go. This
+  page is the way out: the body split back into its real paragraphs, the token delta
+  named per paragraph, and two actions - hand-repair, or revert that paragraph to its
+  SOURCE text so the document can be delivered at all.
+
+  DELIBERATELY NOT `|tagchips` FOR THE SOURCE. The editor's chip filter renders ⟦r1⟧
+  as a numbered chip: the linguist can neither see nor COPY the token, and U+27E6 /
+  U+27E7 are on no keyboard. That is the actual complaint in #42's body. So the source
+  paragraph is rendered TWICE - once as chips (readable) and once as escaped literal
+  text in a <pre> block with a copy button (usable). Jinja autoescaping makes the
+  literal rendering safe; the chip rendering goes through the audited filter.
+#}
+
+<p><a href="/documents/{{ doc.id }}/editor?locale={{ selected }}" class="back"><span aria-hidden="true">←</span> Editor</a></p>
+
+<section class="review-intro">
+  {{ m.page_header('Paragraphs - ' ~ doc.filename) }}
+  <p class="muted">This document is translated as ONE full-text unit. Inline formatting
+    tokens (<code>⟦r1⟧…⟦/r1⟧</code>) must match their source paragraph exactly, or the
+    export is quarantined so broken formatting never reaches a delivered file.</p>
+  {% if locales|length > 1 %}
+    <div class="tabs">
+      {% for l in locales %}<a class="tab {% if l == selected %}active{% endif %}" href="/documents/{{ doc.id }}/paragraphs?locale={{ l }}">{{ l }}</a>{% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+{% if not view.ok %}
+<section class="card">
+  {% if view.reason == 'count_desync' %}
+    <h2>No per-paragraph view for this document</h2>
+    <p class="error">The translated body has {{ view.parts }} paragraph(s) but the source
+      has {{ view.units }}. A merged or added blank line shifts EVERY later paragraph, so
+      no per-paragraph mapping is trustworthy and neither a revert nor an
+      &ldquo;export anyway&rdquo; is offered here.</p>
+    <p class="muted">Fix it in the editor by restoring the blank lines between paragraphs
+      so the counts match, then come back.</p>
+  {% elif view.reason == 'not_full_text' %}
+    <h2>Not a full-text document</h2>
+    <p class="muted">This view exists only for <code>full_text</code> documents. Use the
+      <a href="/documents/{{ doc.id }}/editor">editor</a>.</p>
+  {% else %}
+    <h2>Nothing to show</h2>
+    {% set empty_copy %}No segment for this locale yet.{% endset %}{{ m.empty_state(empty_copy) }}
+  {% endif %}
+</section>
+{% else %}
+
+<section class="card">
+  <h2>Status</h2>
+  <p>
+    {{ m.status_badge('in_review' if view.damaged_count else 'approved', view.damaged_count ~ ' damaged') }}
+    of {{ view.rows|length }} paragraph(s)
+    {% if view.reverted_indices %}
+      · <span class="badge warn">{{ view.reverted_indices|length }} reverted to source</span>
+      ({{ '%.0f'|format(view.fallback_share * 100) }}% of the document body is UNTRANSLATED)
+    {% endif %}
+  </p>
+  {% if view.damaged_count %}
+    <p class="muted">Each damaged paragraph below names what broke - tokens that went
+      missing, added, reordered, or a span whose tokens are all present but whose WORDS
+      moved out (that span's formatting is dropped when the file is rebuilt). Fix it in
+      place and save - or revert that one paragraph to its source text, which restores
+      the formatting and leaves the paragraph visibly untranslated for review.</p>
+  {% endif %}
+  {#
+    Batch revert (GitHub #42). Shown only when MORE THAN ONE paragraph is damaged: the
+    web twin of `doc revert-paragraph --all-damaged`. It is ATOMIC - the server reverts
+    every damaged paragraph in one transaction and writes NOTHING if the combined
+    untranslated share would exceed the export ceiling, so a linguist cannot leave a
+    half-reverted doc past the ceiling by clicking N single reverts.
+  #}
+  {% if view.damaged_count > 1 %}
+    <p class="mt"><button type="button" class="small" data-csp-handler="csp-1">Revert all {{ view.damaged_count }} damaged paragraphs to source</button></p>
+  {% endif %}
+</section>
+
+<div id="pgStatus" class="muted" aria-live="polite"></div>
+
+{% for r in view.rows %}
+<section class="card" id="para-{{ r.index }}">
+  <h3>
+    Paragraph {{ r.index }}
+    {% if r.damaged %}<span class="badge warn">tags broken</span>{% endif %}
+    {% if r.index in view.reverted_indices %}<span class="badge warn">source fallback</span>{% endif %}
+  </h3>
+
+  {#
+    `r.reason` FIRST and unconditionally. This block used to render only the
+    missing/extra delta - but the damage classes that PRESERVE the token multiset
+    (an emptied paired span, broken nesting) have an empty delta on both sides, so the
+    paragraph showed a "tags broken" badge above an EMPTY red line. The reason string
+    is quality.tag_damage's own verdict and names the token.
+  #}
+  {% if r.damaged %}
+    <p class="error">
+      {{ r.reason or 'inline tag damage' }}
+      {% if r.missing %}<br>Missing token(s): {% for t in r.missing %}<code>{{ t }}</code>{% if not loop.last %} {% endif %}{% endfor %}{% endif %}
+      {% if r.extra %}{% if not r.missing %}<br>{% else %} · {% endif %}Unexpected token(s): {% for t in r.extra %}<code>{{ t }}</code>{% if not loop.last %} {% endif %}{% endfor %}{% endif %}
+    </p>
+  {% endif %}
+
+  <p class="muted">Source</p>
+  <p class="src"{{ src_lang }}>{{ r.source|tagchips }}</p>
+  <p class="muted">Source, literal - copy the tokens from here</p>
+  <pre class="code small"{{ src_lang }} id="src-{{ r.index }}">{{ r.source }}</pre>
+  <button type="button" class="small" data-action="copy-source" data-id="{{ r.index }}">Copy source</button>
+
+  {% call m.form_section('paragraph-target-' ~ r.index, 'Target (' ~ selected ~ ')') %}
+  <textarea aria-label="Translation for paragraph {{ r.index + 1 }}"{{ tgt_lang }} id="tgt-{{ r.index }}" rows="4" style="width:100%">{{ r.target }}</textarea>
+  <div class="mt">
+    <button type="button" class="small" data-action="save-paragraph" data-id="{{ r.index }}">Save paragraph</button>
+    {% if r.damaged %}
+      <button type="button" class="small" data-action="revert-paragraph" data-id="{{ r.index }}">Revert to source</button>
+    {% endif %}
+  </div>
+  {% endcall %}
+</section>
+{% endfor %}
+
+<script nonce="{{ csp_nonce() }}">
+const DOC_ID = {{ doc.id }};
+const LOCALE = {{ selected|tojson }};
+
+function say(msg) { document.getElementById('pgStatus').textContent = msg; }
+
+function copySrc(i) {
+  const t = document.getElementById('src-' + i).textContent;
+  navigator.clipboard.writeText(t).then(() => say('Source paragraph ' + i + ' copied.'),
+                                        () => say('Copy failed - select the text manually.'));
+}
+
+// Busy indicators: the clicked button shows the shared busy state for the POST.
+// A success reloads the page (busy until then); a refusal or error releases it.
+async function post(url, body, btn) {
+  const done = (window.LocBusy && btn) ? window.LocBusy.start(btn) : () => {};
+  try {
+    const r = await fetch(url, { method: 'POST',
+                                 headers: { 'X-CSRF-Token': window.CSRF_TOKEN },  // # pregate: allow-secret CSRF header name, value is the page session variable
+                                 body: body });
+    const res = { status: r.status, data: await r.json() };
+    if (!res.data.ok) done();
+    return res;
+  } catch (e) {
+    done();
+    return { status: 0, data: { ok: false, message: 'the request failed. Reload the page and try again.' } };
+  }
+}
+
+// #623: the question is asked in the page (window.LocAsk), never with the native confirm.
+// Only the yes button answers true; a page without the dialog answers no (fails closed).
+async function ask(message, btn) {
+  try { return !!(window.LocAsk && await window.LocAsk(String(message), { opener: btn })); }
+  catch (e) { return false; }
+}
+
+async function revertAll(btn) {
+  if (!(await ask('Revert EVERY damaged paragraph to its SOURCE text? Those paragraphs will '
+               + 'be UNTRANSLATED, the document goes back to review, and it is recorded. '
+               + 'If together they cover too much of the document, nothing is reverted.', btn))) return;
+  const b = new URLSearchParams(); b.set('locale', LOCALE);
+  const res = await post(`/documents/${DOC_ID}/paragraphs/revert-all-damaged`, b, btn);
+  if (res.data.ok) { location.reload(); }
+  else { say('Batch revert refused: ' + (res.data.message || res.data.reason || 'unknown')); }
+}
+
+async function revertPara(i, btn) {
+  if (!(await ask('Replace paragraph ' + i + ' with its SOURCE text? That paragraph will be '
+               + 'UNTRANSLATED, the document goes back to review, and it is recorded.', btn))) return;
+  const b = new URLSearchParams(); b.set('locale', LOCALE);
+  const res = await post(`/documents/${DOC_ID}/paragraphs/${i}/revert`, b, btn);
+  if (res.data.ok) { location.reload(); }
+  else { say('Revert refused: ' + (res.data.message || res.data.reason || 'unknown')); }
+}
+
+async function savePara(i, confirmed, btn) {
+  const b = new URLSearchParams();
+  b.set('locale', LOCALE);
+  b.set('text', document.getElementById('tgt-' + i).value);
+  if (confirmed) b.set('confirm', '1');
+  const res = await post(`/documents/${DOC_ID}/paragraphs/${i}/save`, b, btn);
+  if (res.data.ok) { location.reload(); return; }
+  if (res.data.needs_confirm) {
+    if (await ask(res.data.message, btn)) { savePara(i, true, btn); }
+    return;
+  }
+  say('Save refused: ' + (res.data.message || res.data.reason || 'unknown'));
+}
+
+document.querySelectorAll('[data-csp-handler="csp-1"]').forEach(function (el) {
+  el.addEventListener('click', function () { revertAll(el); });
+});
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,70 @@
+# Factory spec for the REBUILT Zoho Desk connector (connector parity wave 3, un-archived 2026-10-10).
+# `python scripts/factory/generate.py check scripts/factory/specs/zoho.yaml` must PASS.
+# Zoho Desk predates the factory, so this spec only records the parametric touchpoints; the
+# module body is hand-written (see app/services/connectors/zoho.py).
+
+connector:
+  kind: zoho
+  name: Zoho Desk
+  class_name: ZohoConnector
+  icon: "\U0001F5C3"
+  cat: "Knowledge base / help center"
+  blurb: >-
+    Translate Zoho Desk knowledge-base articles into any language. Each translation is
+    written back as the article's per-locale translation (POST/PATCH
+    /api/v1/articles/{id}/translations), so the source article is never overwritten. Draft by
+    default.
+  docs_url: "https://desk.zoho.com/DeskAPIDocument"
+  supports_oauth: false
+  archived: false
+
+  topology: T2
+  auth: [oauth3lo]
+  api_version: "v1"
+  rich_text: html
+  regions: dynamic-from-token
+  change_signals:
+    webhook_sig: null
+    poll_field: modifiedTime
+    stale_flag: translationState
+    thin_payload: false
+  anti_loop_label: false
+
+  retry_noun: article
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<article id>"
+  api_docstring: >-
+    Translate Zoho Desk KB article(s) on the fly into one or more locales, writing each back
+    as the article's per-locale translation object (T2). Article ids are digits only and must
+    sit inside the connection's configured category or department.
+
+  article_noun_phrase: "a Zoho Desk"
+  cli_parser_help: >-
+    Translate Zoho Desk articles into the connection's locales as per-locale translations.
+
+  item_units:
+    scan: "your Zoho Desk articles"
+    becomes: "the article's per-locale translation (Draft by default; a held title or body keeps its stored value)"
+
+  help_row_body: "Translate Zoho Desk article(s) as per-locale translations. Body: <code>article_ids</code>/<code>article_id</code> (digits only, inside the connection's category or department), <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Translate Zoho Desk articles into the connection's locales as per-locale translations (T2). `--article-ids` are digits only and must sit inside the connection's category or department."
+
+  cli_expected_desc: "translate Zoho Desk articles into per-locale translations (T2 SubResourceStrategy)"
+
+  config_fields:
+    - {name: api_domain, label: "Desk host (data center)", help: "The Zoho Desk host of your data center: desk.zoho.com (US), desk.zoho.eu (EU), desk.zoho.in (India), desk.zoho.com.au (Australia), desk.zoho.jp (Japan), desk.zohocloud.ca (Canada). The sign-in host is derived from it.", placeholder: "desk.zoho.com"}
+    - {name: org_id, label: "Organization id (orgId)", help: "The Zoho Desk organization id (digits), sent as the mandatory orgId header.", placeholder: "600000000000"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated Zoho locale codes to write (must be enabled for the KB).", required: false, placeholder: "de, fr, es"}
+  secret_fields:
+    - {name: refresh_token, label: "OAuth refresh token", help: "Exchange the one-time grant code once (steps below); the refresh token does not expire until revoked.", required: false, secret: true, placeholder: "1000.abcd..."}
+  setup_steps:
+    - "Set the Desk host to your data center (desk.zoho.eu for the EU, and so on). The sign-in host is derived from it."
+  other_side: >-
+    Zoho Desk change detection polls modifiedTime + the per-translation translationState stale
+    flag (webhook intake is a documented follow-up). Every call routes to the pinned Zoho host
+    of your data center.

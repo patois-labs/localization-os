@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+{# Gate round 1 LOW-3: every string comes from the catalog (page.logout.*, all four
+   locales), so the page declares the interface language like the sign-in page. #}
+<html lang="{{ ui_lang(request) }}"{{ theme_attrs(request) }}>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <title>{{ compose_title(t(request, 'page.logout.title')) }}</title>
+  {# No-FOUC theme bootstrap: runs synchronously BEFORE the stylesheet so the
+     saved theme is applied before first paint (no flash). Absent/invalid value
+     or no-JS -> attribute stays off -> :root dark default, exactly today. #}
+  <script nonce="{{ csp_nonce() }}">
+    (function () {
+      try {
+        var el = document.documentElement;
+        var p = el.getAttribute('data-theme-pref');  // ADR 0063: the signed-in account's choice
+        var t = (p === 'light' || p === 'dark' || p === 'system') ? p : localStorage.getItem('loc_theme');
+        if (t === 'light' || t === 'dark') el.setAttribute('data-theme', t);
+        else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) el.setAttribute('data-theme', 'light');  // #564 p1: no saved choice follows the OS
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/style.css?v={{ static_v('style.css') }}" />
+  <script src="/static/busy.js?v={{ static_v('busy.js') }}"></script>
+</head>
+<body class="authbody auth-account">
+{% include "_busy.html" %}
+  {# #251: GET /auth/logout changes nothing. Sign-out ends every session of this account,
+     on every device, so it happens only when the person presses the button below (a
+     POST with the CSRF token). A bookmarked or linked sign-out URL lands here. #}
+  <main class="authcard">
+    <div class="brand-big"><span class="mark" aria-hidden="true">◐</span> {{ app_meta().org }}</div>
+    <header class="page-header"><div class="page-header-copy"><div class="page-header-title"><h1>{{ t(request, 'page.logout.title') }}</h1></div></div></header>
+    <p class="muted">{{ t(request, 'page.logout.body', email=me.email) }}</p>
+    <form method="post" action="/auth/logout" class="form">
+      {% include "_csrf.html" %}
+      <button type="submit" id="logout-confirm" autofocus>{{ t(request, 'page.logout.button') }}</button>
+    </form>
+    <p class="help mt"><a href="/">{{ t(request, 'page.logout.cancel') }}</a></p>
+  </main>
+</body>
+</html>

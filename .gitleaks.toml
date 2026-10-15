@@ -1,0 +1,41 @@
+# gitleaks configuration for Localization OS.
+#
+# Run: gitleaks dir . --config .gitleaks.toml --redact=100
+#
+# The default ruleset applies to the whole tree. The allowlists below cover only
+# the places that legitimately contain secret-shaped strings: test fixtures with
+# fake credentials, and a few lines that the repository's own pre-commit scan has
+# already reviewed and marked. Real credentials must never be added here.
+
+title = "Localization OS gitleaks config"
+
+[extend]
+useDefault = true
+
+# Test fixtures use fake keys, tokens and passwords so the suites can prove that
+# real ones are masked, never logged and never echoed. Scoped to the rules that
+# fire on such fixtures; every other rule still scans the test files.
+[[allowlists]]
+description = "fake credentials in test fixtures"
+targetRules = ["generic-api-key", "gitlab-pat", "gitlab-deploy-token", "stripe-access-token"]
+paths = [
+  '''^tests/.*\.py$''',
+  '''^tools/vendor_studio/tests/.*\.py$''',
+]
+
+# A line carrying this marker was reviewed by scripts/pregate.py, which refuses the
+# marker on named credential classes (cloud key prefixes, PEM private keys).
+[[allowlists]]
+description = "lines marked as reviewed fixtures"
+regexTarget = "line"
+regexes = ['''pregate: allow-secret''']
+
+# `curl -H "Authorization: Bearer lsu_..."` in the help page is documentation with
+# an ellipsis, not a credential; the import line below matches the Airtable key
+# shape by accident.
+[[allowlists]]
+description = "documentation placeholders and a module name"
+paths = [
+  '''^app/templates/help\.html$''',
+  '''^app/services/connectors/airtable\.py$''',
+]

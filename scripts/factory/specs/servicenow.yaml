@@ -1,0 +1,93 @@
+# Factory spec - ServiceNow Knowledge Management connector (connector parity, NEW kind, 2026-10-10).
+#
+# Parametric touchpoints only. The SEMANTIC build (T3 client methods, discovery, workflow-state
+# rules, held-back payload, fake instance) is hand-written in servicenow.py / verify_servicenow.py.
+#
+# DECISIONS (recorded in the connector module docstring):
+#   - TOPOLOGY = T3. Each language is its own kb_knowledge record (language field) linked to the
+#     base-language article by the native Parent reference (I18N Knowledge Management plugin v2).
+#     Rides DocPerLocaleStrategy + the id map; Parent is a corroborating probe (rule 6) and a
+#     write-time link, never the source of truth.
+#   - AUTH = Basic (integration user) or OAuth client credentials, both held as secrets.
+#   - Built from ServiceNow vendor docs only. bb-io/ServiceNow (verbatim MIT, re-verified
+#     2026-10-10) was NOT read, so there is no THIRD_PARTY_NOTICES entry.
+#   - Translations are created as drafts and never auto-published (workflow respected).
+
+connector:
+  kind: servicenow
+  name: ServiceNow
+  class_name: ServiceNowConnector
+  icon: "\U0001F4D8"
+  cat: "Knowledge Base"
+  blurb: >-
+    Translate ServiceNow Knowledge Management articles into any language. Each translation is
+    created as a separate kb_knowledge record in the target language, linked to the source
+    article through ServiceNow's native Parent field, and left in Draft so your publish workflow
+    still applies. Only published source articles in the configured knowledge base are read.
+  docs_url: "https://www.servicenow.com/docs/bundle/zurich-api-reference/page/integrate/inbound-rest/concept/c_TableAPI.html"
+  supports_oauth: false
+  archived: false
+
+  topology: T3
+  auth: [basic, api_key]
+  api_version: "table-v2"
+  rich_text: html
+  regions: base_url
+  change_signals:
+    webhook_sig: null
+    poll_field: sys_updated_on
+    stale_flag: null
+    thin_payload: false
+  anti_loop_label: false
+
+  retry_noun: article
+  delegator_extra_guard: ""
+  harvest_title_field: title
+
+  article_id_shape: "<sys_id>"
+  api_docstring: >-
+    Translate ServiceNow Knowledge articles on the fly into one or more languages. Each
+    translation is created (or updated) as a separate Draft kb_knowledge record in the target
+    language, linked to the source article by its Parent field (T3). Each id is a 32-character
+    article sys_id and must belong to the connection's configured knowledge base.
+
+  article_noun_phrase: "a ServiceNow"
+  cli_parser_help: >-
+    Translate ServiceNow Knowledge articles into the connection's languages as separate Draft
+    articles linked to the source by Parent.
+
+  item_units:
+    scan: "the published articles of your ServiceNow knowledge base"
+    becomes: "a separate Draft article per language, linked to the source by Parent (the source and other languages are never overwritten)"
+
+  help_row_body: "Translate ServiceNow Knowledge articles as one Draft article per language, linked by Parent (T3). Body: <code>article_ids</code>/<code>article_id</code> (article <code>sys_id</code>), <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Translate ServiceNow Knowledge articles into the connection's languages as one Draft kb_knowledge record per language, linked to the source by the Parent field (T3). `--article-ids` are 32-character article sys_ids inside the connection's knowledge base."
+
+  cli_expected_desc: "translate ServiceNow Knowledge articles into one Draft article per language linked by Parent (T3; POST /api/connectors/{cid}/servicenow/translate parity)"
+
+  config_fields:
+    - {name: base_url, label: "Instance URL", help: "Your ServiceNow instance, e.g. https://dev12345.service-now.com. The connector calls /api/now/table on it.", placeholder: "https://dev12345.service-now.com"}
+    - {name: knowledge_base, label: "Knowledge base sys_id", help: "The 32-character sys_id of the knowledge base to translate (open the knowledge base record, right-click the header, Copy sys_id). It is the scope fence: other knowledge bases are never read or written.", placeholder: "0123456789abcdef0123456789abcdef"}
+    - {name: source_locale, label: "Source language", help: "Language code of the source articles, as ServiceNow stores it (kb_knowledge.language), e.g. en. Never written as a target. Blank = en.", required: false, placeholder: "en"}
+    - {name: target_locales, label: "Target languages", help: "Comma-separated ServiceNow language codes to create, e.g. fr, de, es. Each must be an active language on the instance.", required: false, placeholder: "fr, de, es"}
+    - {name: kb_category, label: "Category sys_id", help: "Optional: only translate articles in this category (sys_id).", required: false, placeholder: ""}
+    - {name: update_published, label: "Edit LIVE (published) translations", help: "0 (default) = a translation that has been published is never edited (the pair is held; make a new version in ServiceNow). 1 = DANGER: overwrite published translations in place. The change goes live at once, with no new version and no review step. Only an admin can turn it on.", required: false, placeholder: "0"}
+    - {name: max_articles, label: "Max articles", help: "Safety cap on source articles scanned per run.", required: false, placeholder: "50"}
+  secret_fields:
+    - {name: username, label: "Username", help: "Integration user (Basic auth). Needs the snc_platform_rest_api_access and knowledge roles (knowledge_admin to write to a locked knowledge base).", required: false, secret: true, placeholder: "svc_locos"}
+    - {name: password, label: "Password", help: "The integration user's password (Basic auth).", required: false, secret: true, placeholder: ""}
+    - {name: client_id, label: "OAuth client ID", help: "Alternative to Basic: the Client ID of a System OAuth > Application Registry entry using the client credentials grant.", required: false, secret: true, placeholder: ""}
+    - {name: client_secret, label: "OAuth client secret", help: "The Client Secret of that registry entry.", required: false, secret: true, placeholder: ""}
+  setup_steps:
+    - "Create an integration user (User Administration > Users) with the roles snc_platform_rest_api_access and knowledge (add knowledge_admin if your knowledge base restricts contributors). Give it a strong password."
+    - "Install the I18N Knowledge Management plugin (com.glideapp.knowledge.i18n2) and activate each language you will translate into. This gives kb_knowledge its Language and Parent fields."
+    - "Open your knowledge base record, copy its sys_id into Knowledge base sys_id, then enter the Instance URL, username and password here."
+    - "Or, instead of a user, register an OAuth client (System OAuth > Application Registry > New inbound OAuth) with the client credentials grant and enter its Client ID and Secret."
+    - "ServiceNow has no content webhook for this connector, so run on a schedule (Every N minutes); the source-content hash keeps translations fresh. Translations land in Draft: publish them through your normal workflow."
+  other_side: >-
+    Change detection is poll-based and gated on a per-(article, language) source-content hash.
+    Each translation is a separate Draft kb_knowledge record in the target language, linked to the
+    source through the Parent field and tracked in the connector's id map. A translation that
+    already exists in ServiceNow for a language is never overwritten (it is flagged for review).

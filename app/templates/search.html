@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ tl(request, 'page.search.title') }}{% endblock %}
+{% block content %}
+
+{% macro count_text(block) -%}
+  {%- if block.capped -%}{{ tl(request, 'page.search.count_capped', count=block.count) }}
+  {%- elif block.count == 1 -%}{{ tl(request, 'page.search.count_one') }}
+  {%- else -%}{{ tl(request, 'page.search.count', count=block.count) }}{%- endif -%}
+{%- endmacro %}
+
+{% set header_meta %}<p class="muted">{{ tl(request, 'page.search.searched') }}</p>{% endset %}
+{{ m.page_header(tl(request, 'page.search.title'), meta=header_meta) }}
+
+<section class="card search-box" aria-label="{{ t(request, 'page.search.title') }}">
+  <form method="get" action="/search" class="search-page-form" role="search">
+    <label for="search-page-q">{{ tl(request, 'page.search.label') }}</label>
+    <div class="search-page-row">
+      <input id="search-page-q" type="search" name="q" value="{{ q }}" autocomplete="off"
+             maxlength="100" aria-describedby="search-page-help" />
+      <button type="submit">{{ tl(request, 'page.search.button') }}</button>
+    </div>
+    <p id="search-page-help" class="muted small">{{ tl(request, 'page.search.help', min=min_query) }}</p>
+  </form>
+</section>
+
+{% if message %}
+  <p class="search-message" role="alert">{{ message }}</p>
+{% elif not q %}
+  {% call m.card() %}{{ m.empty_state(tl(request, 'page.search.start')) }}{% endcall %}
+{% elif result %}
+  <p class="search-summary" role="status">
+    {% if result.total == 0 %}{{ tl(request, 'page.search.none', query=q) }}
+    {% else %}{{ tl(request, 'page.search.summary', query=q) }}{% endif %}
+  </p>
+  {% if group and group_block %}
+    <p><a href="/search?q={{ q|urlencode }}"><span aria-hidden="true">&larr;</span> {{ tl(request, 'page.search.all_results') }}</a></p>
+  {% endif %}
+  {% for g in result.groups %}
+    {% if g.count or group %}
+    <section class="card search-group" aria-labelledby="sg-{{ g.key }}">
+      <header class="search-group-head">
+        <h2 id="sg-{{ g.key }}">{{ tl(request, 'page.search.group_' ~ g.key) }}</h2>
+        <span class="search-count">{{ count_text(g) }}</span>
+      </header>
+      {% if g.hits %}
+      <ul class="search-hits">
+        {% for h in g.hits %}
+        <li>
+          <a href="{{ h.href }}" class="search-hit-title">{{ h.title }}</a>
+          {% if h.subtitle %}<span class="search-hit-sub">{{ h.subtitle }}</span>{% endif %}
+          {% if h.detail %}<span class="search-hit-detail">{{ h.detail }}</span>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="muted">{{ tl(request, 'page.search.group_none') }}</p>
+      {% endif %}
+      {% if g.key == 'tm' and g.truncated %}<p class="muted small">{{ tl(request, 'page.search.tm_truncated') }}</p>{% endif %}
+      <footer class="search-group-foot">
+        {% if not group and g.count > g.hits|length %}
+          <a href="/search?q={{ q|urlencode }}&amp;group={{ g.key }}">{{ tl(request, 'page.search.see_all', count=g.count) }}<span class="sr-only"> {{ tl(request, 'page.search.group_' ~ g.key) }}</span></a>
+        {% endif %}
+        {% if g.list_href %}<a href="{{ g.list_href }}">{{ tl(request, 'page.search.open_list') }}<span class="sr-only"> {{ tl(request, 'page.search.group_' ~ g.key) }}</span></a>{% endif %}
+      </footer>
+      {% if group and pages > 1 %}
+      <nav class="pager" aria-label="{{ t(request, 'page.search.pages') }}">
+        {% if page > 1 %}<a href="/search?q={{ q|urlencode }}&amp;group={{ group }}&amp;page={{ page - 1 }}"><span aria-hidden="true">&larr;</span> {{ tl(request, 'page.search.prev') }}</a>{% endif %}
+        <span class="muted">{{ tl(request, 'page.search.page_of', page=page, pages=pages) }}</span>
+        {% if page < pages %}<a href="/search?q={{ q|urlencode }}&amp;group={{ group }}&amp;page={{ page + 1 }}">{{ tl(request, 'page.search.next') }} <span aria-hidden="true">&rarr;</span></a>{% endif %}
+      </nav>
+      {% endif %}
+    </section>
+    {% endif %}
+  {% endfor %}
+{% endif %}
+{% endblock %}
