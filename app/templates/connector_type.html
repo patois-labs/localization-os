@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ spec.name }} - Connector{% endblock %}
+{% block content %}
+<div class="connections-page">
+
+<p><a href="/connectors" class="back"><span aria-hidden="true">←</span> All connectors</a></p>
+
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
+{% if return_to %}<p class="notice" role="status" id="connector-return-note">Setting up a source for a connected project. Add the connection below and you come back to the project with it selected. <a href="{{ return_to }}">Back to the project without connecting</a></p>{% endif %}
+
+{% set header_actions %}
+<button type="button" class="ghost layout-edit-btn layout-edit-inline" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+    {% if spec.docs_url %}<a class="btnlink small" href="{{ spec.docs_url }}" target="_blank" rel="noopener">API docs <span aria-hidden="true">↗</span></a>{% endif %}{% endset %}
+{% set header_title %}<span class="tile-icon" aria-hidden="true">{{ spec.icon }}</span> {{ spec.name }}{% endset %}
+{{ m.page_header(header_title, meta=spec.blurb, secondary=header_actions) }}
+
+<div id="page-layout" class="page-layout" data-layout-page="connector_type">
+<div class="grid2">
+  <section class="card" data-card="connections">
+    <h2>Your connections</h2>
+    {% if connections %}
+      {% call m.data_table('Your connections', [{'label': 'Name'}, {'label': 'Status'}, {'label': 'Last sync'}]) %}
+
+          {% for c in connections %}
+            <tr>
+              <td><a href="/connectors/connection/{{ c.id }}">{{ c.name }}</a></td>
+              <td>
+                {% if c.status == 'connected' %}{{ m.status_badge('connected', 'connected') }}
+                {% elif c.status == 'error' %}{{ m.status_badge('failed', 'error') }}
+                {% else %}{{ m.status_badge('new', 'new') }}{% endif %}
+              </td>
+              <td class="muted small">{{ (c.last_sync.strftime('%Y-%m-%d %H:%M') ~ ' UTC') if c.last_sync else '-' }}</td>
+            </tr>
+          {% endfor %}
+
+{% endcall %}
+    {% else %}
+      {% set empty_connections %}No {{ spec.name }} connections yet.{% if not archived %} Add one →{% endif %}{% endset %}
+      {{ m.empty_state(empty_connections) }}
+    {% endif %}
+  </section>
+
+  <section class="card" data-card="howto">
+    <h2>How to get credentials</h2>
+    <ol class="doc-list">
+      {% for step in spec.setup_steps %}<li>{{ step }}</li>{% endfor %}
+    </ol>
+    {% if spec.other_side %}<p class="help mt">{{ spec.other_side }}</p>{% endif %}
+  </section>
+</div>
+
+{% if can_manage %}
+{% if archived %}
+<section class="card" data-card="closed">
+  <h2>New connections are closed</h2>
+  <div class="notice notice-warn">The {{ spec.name }} connector is archived - it is retired from
+    new connections while it awaits a rebuild. Any existing {{ spec.name }} connection above keeps
+    working (test, pull, push, sync, translate and webhooks are all unchanged); only creating a new
+    one is disabled.</div>
+</section>
+{% else %}
+{% if spec.supports_oauth and spec.kind != "mcp_cms" %}
+<section class="card" data-card="oauth">
+  <h2>Connect with OAuth <span class="muted small">· advanced, auto-refreshing</span></h2>
+  {% if oauth_configured %}
+    <p class="muted">Authorize {{ brand }} against {{ spec.name }} directly - no API token to copy,
+      and credentials refresh automatically. You'll be redirected to {{ spec.name }} to approve.</p>
+    <form method="post" action="/connectors/{{ spec.kind }}/oauth/start" class="form">
+      {% include "_csrf.html" %}
+      {% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}" />{% endif %}
+      <label>Connection name <input type="text" name="name" placeholder="{{ spec.name }} - Marketing" required /></label>
+      {% if spec.kind != 'airtable' %}
+      <label>Site URL <input type="text" name="base_url" placeholder="https://your-team.atlassian.net" required />
+        <span class="muted small">Your Atlassian site - used to pick the right site if your app spans several.</span></label>
+      {% endif %}
+      <button type="submit">Connect with {{ spec.name }} <span aria-hidden="true">↗</span></button>
+    </form>
+  {% else %}
+    <div class="notice notice-warn">OAuth needs a one-time provider app (Security → connector OAuth apps). Until
+      then use the API token below.</div>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="card" data-card="add">
+  <h2>Add a {{ spec.name }} connection <span class="muted small">· with an API token, zero setup</span></h2>
+  <form method="post" action="/connectors/{{ spec.kind }}" class="form"
+        data-browse="add" data-kind="{{ spec.kind }}">
+    {% include "_csrf.html" %}
+    {% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}" />{% endif %}
+    <label>Connection name <input type="text" name="name" placeholder="{{ spec.name }} - Marketing base" required /></label>
+
+    <label>Customer <span class="muted small">(optional - scopes this connection to one customer; blank = global)</span>
+      <select name="customer_id">
+        <option value="">Global (all customers)</option>
+        {% for c in customers %}
+          <option value="{{ c.id }}">{{ customer_label(c) }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label>Default content type <span class="muted small">(optional - applied to the auto-created sync project; blank = General/untyped)</span>
+      <select name="content_type_id">
+        <option value="">General (untyped)</option>
+        {% for t in content_types %}
+          <option value="{{ t.id }}">{{ t.name }}{% if t.customer_id %} (this customer){% else %} (global){% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <div class="mt">
+      <button type="button" class="small ghost" data-connector-browse>Load from {{ spec.name }}</button>
+      <span class="muted small browse-out">Enter your credentials{% if spec.kind != 'airtable' %} and Site URL{% endif %} below first, then load to pick from live dropdowns.</span>
+    </div>
+
+    {% if spec.config_fields %}
+    {% set field_label_1 %}Settings{% endset %}
+{% call m.form_section("connector_type-fields-1", field_label_1) %}
+
+      {% for f in spec.config_fields %}
+      <label>{{ f.label }}{% if not f.required %} <span class="muted small">(optional)</span>{% endif %}
+        <input type="text" name="{{ f.name }}" placeholder="{{ f.placeholder }}" {% if f.required %}required{% endif %} />
+        {% if f.help %}<span class="muted small">{{ f.help }}</span>{% endif %}
+      </label>
+      {% endfor %}
+    {% endcall %}
+    {% endif %}
+
+    {% set field_label_2 %}Credentials <span class="muted small">· stored encrypted at rest</span>{% endset %}
+{% call m.form_section("connector_type-fields-2", field_label_2) %}
+
+      {% for f in spec.secret_fields %}
+      <label>{{ f.label }}
+        <input type="{{ 'password' if f.secret else 'text' }}" name="{{ f.name }}" placeholder="{{ f.placeholder }}" {% if f.required %}required{% endif %} autocomplete="{{ 'new-password' if f.secret else 'off' }}" />
+        {% if f.help %}<span class="muted small">{{ f.help }}</span>{% endif %}
+      </label>
+      {% endfor %}
+    {% endcall %}
+
+    <button type="submit">Create connection</button>
+  </form>
+</section>
+{% endif %}
+{% endif %}
+
+<section class="card" data-card="embed">
+  <h2>Embed in {{ spec.name }} (companion app)</h2>
+  <p class="muted">A localhost TMS can't be reached from {{ spec.name }}'s cloud on its own. Two ways to bridge:</p>
+  <ul class="doc-list">
+    <li><strong>This end (no extra app):</strong> {% if not archived %}add a connection above with an API token - {{ brand }} pulls/pushes on demand.{% else %}an existing {{ spec.name }} connection above pulls/pushes on demand (new connections are closed while this connector is archived).{% endif %}</li>
+    <li><strong>Their end (companion app):</strong> install the
+      {% if spec.kind == 'airtable' %}<code>integrations/airtable-extension</code> (an Airtable Extension){% else %}<code>integrations/jira-forge-app</code> (an Atlassian Forge app){% endif %}
+      so users can trigger a sync from inside {{ spec.name }}. It calls {{ brand }}'s inbound API:</li>
+  </ul>
+  <p class="help">Companions call the inbound API base <code>{{ base_url }}/api/connectors</code> with
+    your per-user API key from <a href="/account">Account</a>.
+    Legacy shared tokens cannot run connectors or read connection data.
+    <a href="/help#api-companion">Companion API reference <span aria-hidden="true">→</span></a></p>
+  {% if can_see_token %}
+  <div class="form" style="max-width:560px">
+    <label>Legacy shared token (retired)
+      <input class="linkbox" type="text" value="{{ api_token }}" readonly data-select-on-click />
+    </label>
+    <form method="post" action="/connectors/token/regenerate">
+      {% include "_csrf.html" %}<button class="small ghost" type="submit">Regenerate token</button></form>
+  </div>
+  {% endif %}
+</section>
+</div>
+{% with layout_page = 'connector_type' %}{% include "_page_layout.html" %}{% endwith %}
+
+{% if can_manage %}<script src="/static/connectors.js?v={{ static_v('connectors.js') }}"></script>{% endif %}
+
+</div>
+{% endblock %}

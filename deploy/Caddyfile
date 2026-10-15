@@ -1,0 +1,47 @@
+# Localization OS TMS - Caddy reverse proxy (Phase 4-C).
+#
+# Caddy is the simplest way to front the app with production TLS: it obtains and
+# renews Let's Encrypt certificates AUTOMATICALLY for a real domain. Edit the two
+# placeholders below (the domain and the ACME email), then start it with:
+#
+#     docker compose --profile proxy up -d
+#
+# TOPOLOGY NOTE: ONLY this proxy should be exposed to the public internet. The
+# `app` service binds 0.0.0.0:8000 *inside* the compose network and is reached
+# here as `app:8000` - it is not published publicly (compose publishes it on
+# 127.0.0.1 for local admin only). The web UI is session/RBAC-authed and the
+# /api surface is token-authed (X-Loc-Token); the proxy just terminates TLS and
+# adds transport-level hardening. Do not expose the Postgres `db` service.
+
+# ---- Replace with your real domain (e.g. tms.example.com) ----
+tms.example.com {
+	# ---- Replace with an email for Let's Encrypt expiry notices ----
+	tls you@example.com
+
+	encode gzip zstd
+
+	# Security headers (transport-level; the app sets its own app-level policy).
+	header {
+		# HSTS: force HTTPS for a year (incl. subdomains). Only enable once you
+		# are sure every host under this domain is HTTPS-only.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Do not leak the upstream server banner.
+		-Server
+	}
+
+	# Forward everything to the app container. Caddy sets X-Forwarded-Proto/-For
+	# and preserves Host, which the app's same-origin CSRF check relies on
+	# (Origin/Referer are compared against Host - keep Host intact end-to-end).
+	reverse_proxy app:8000 {
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	# Cap request bodies near the app's own MAX_UPLOAD_BYTES (default 100 MB) so
+	# oversized uploads are rejected at the edge. Raise both together if needed.
+	request_body {
+		max_size 100MB
+	}
+}

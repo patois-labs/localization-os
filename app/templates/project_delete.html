@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_form_errors.html" as fe %}
+{% block title %}Delete project{% endblock %}
+{% block content %}
+<div class="project-confirmation">
+
+{% set confirmation_title %}Delete project: {{ preview.project_name }}{% endset %}
+{{ m.page_header(confirmation_title) }}
+<div class="confirmation-notice">
+  <p class="muted">This permanently destroys the project and everything it owns. This
+  cannot be undone.</p>
+  {# a11y T7: a ?err= error renders once, as a sentence, in the summary at the top of
+     main (base.html + _form_errors.html), never as a raw code here. #}
+</div>
+
+{% if preview.blockers.total > 0 %}
+<section class="card">
+  <h2>Cannot delete yet</h2>
+  <p class="error">This project is still referenced by
+    <strong>{{ preview.blockers.connections }}</strong> connection(s) and
+    <strong>{{ preview.blockers.routing_rules }}</strong> routing rule(s).</p>
+  <p class="muted">Reassign or delete those first (they are independent objects, not
+  owned by this project, so they are never cascade-deleted).</p>
+  <p><a class="btnlink" href="/projects/{{ preview.project_id }}">Back to project</a></p>
+</section>
+{% else %}
+<section class="card">
+  <h2>What will be destroyed</h2>
+  {# Only rows that actually LOSE something. The cascade dict grows a key per owned table
+     (26 and counting), so listing every zero buried the two or three numbers that matter in a
+     wall of "0" -- and the reader has to notice what IS being destroyed. The preview dict
+     itself stays complete (the /api dry-run and the audit detail carry every key); this is a
+     render-layer filter only, and the CLI applies the same one. #}
+  {% set shown = preview.cascade.items() | rejectattr('0', 'equalto', 'total') | rejectattr('1', 'equalto', 0) | list %}
+  {% if shown %}
+  <table class="table">
+    <tbody>
+      {% for k, v in shown %}
+        <tr><td>{{ k.replace('_', ' ') }}</td><td><strong>{{ v }}</strong></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">This project owns no documents, memory or history: only the project itself
+  is removed.</p>
+  {% endif %}
+  <form method="post" action="/projects/{{ preview.project_id }}/delete" class="form mt">
+    {% include "_csrf.html" %}
+    <label>Type the project name <strong>{{ preview.project_name }}</strong> to confirm
+      <input type="text" name="confirm_name" id="project-delete-confirm" autocomplete="off" required{{ fe.invalid_attrs(request, 'project-delete-confirm') }} /></label>
+    <label><input type="checkbox" name="privacy_erasure" value="true"> Privacy erasure: also delete the translation memory rows learned from this project</label>
+    <button class="danger-btn" type="submit">Delete this project permanently</button>
+  </form>
+  <p class="mt"><a class="btnlink" href="/projects/{{ preview.project_id }}">Cancel</a></p>
+</section>
+{% endif %}
+
+</div>
+{% endblock %}

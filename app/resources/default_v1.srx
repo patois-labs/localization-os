@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Localization OS default segmentation ruleset (SRX 2.0).
+
+  This ruleset is engineered to reproduce, as closely as practical, the behavior
+  of the LEGACY regex splitter in app/services/segment.py so that turning the SRX
+  path on (srx_enabled=1, srx_file blank) does not regress existing segmentation.
+
+  Legacy splitter (for reference):
+    _SENT_SPLIT = (?<=[.!?])\s+(?=["'(\[A-Z0-9])   # break after . ! ? + space
+                                                   #   when next looks like a
+                                                   #   sentence start (quote /
+                                                   #   bracket / A-Z / 0-9)
+    _CJK_SPLIT  = (?<=[。！？])                      # break after any CJK terminator
+
+  Mapped here as two break rules. Boundaries land before the afterbreak text;
+  Localization OS strips each segment, so leading/trailing whitespace is normalized
+  away exactly as the legacy .strip() did.
+
+  cascade="yes": the base "Default" rules apply to EVERY locale (the catch-all
+  languagemap ".*"), and locale-specific rulesets that precede it (e.g. Japanese)
+  contribute ADDITIONAL rules. Ordering: specific patterns first, ".*" last.
+
+  NOTE ON ABBREVIATIONS: the legacy splitter does NOT suppress breaks after
+  abbreviations (it splits "Dr. Smith" into "Dr." + "Smith went home." because
+  "Smith" starts uppercase). To stay byte-faithful to that behavior, the Default
+  ruleset likewise does NOT carry abbreviation no-break rules. A custom uploaded
+  SRX can add them if smarter segmentation is wanted.
+-->
+<srx xmlns="http://www.lisa.org/srx20" version="2.0">
+  <header segmentsubflows="yes" cascade="yes">
+    <formathandle type="start" include="no"/>
+    <formathandle type="end" include="yes"/>
+    <formathandle type="isolated" include="no"/>
+  </header>
+  <body>
+    <languagerules>
+      <!-- Japanese/CJK-style: break after any CJK sentence terminator, always.
+           Mirrors _CJK_SPLIT. Applies to ja.* via the maprule below AND (through
+           cascade) is also covered by the Default CJK rule for other locales. -->
+      <languagerule languagerulename="Japanese">
+        <rule break="yes">
+          <beforebreak>[。！？]</beforebreak>
+          <afterbreak></afterbreak>
+        </rule>
+      </languagerule>
+
+      <!-- Catch-all default, applied to every locale via the ".*" maprule. -->
+      <languagerule languagerulename="Default">
+        <!-- Latin sentence break: after . ! ? followed by whitespace and a
+             sentence-start character (quote, open bracket, A-Z, or digit).
+             Mirrors _SENT_SPLIT exactly (ASCII A-Z / 0-9, not \p{Lu}/\p{N}). -->
+        <rule break="yes">
+          <beforebreak>[.!?]</beforebreak>
+          <afterbreak>\s+["'(\[A-Z0-9]</afterbreak>
+        </rule>
+        <!-- CJK terminators break unconditionally. Mirrors _CJK_SPLIT. -->
+        <rule break="yes">
+          <beforebreak>[。！？]</beforebreak>
+          <afterbreak></afterbreak>
+        </rule>
+      </languagerule>
+    </languagerules>
+
+    <maprules>
+      <!-- Japanese source contributes the Japanese rule first, then (cascade)
+           the Default rules. -->
+      <languagemap languagepattern="[Jj][Aa].*" languagerulename="Japanese"/>
+      <!-- Everything else (and, via cascade, Japanese too) uses Default. -->
+      <languagemap languagepattern=".*" languagerulename="Default"/>
+    </maprules>
+  </body>
+</srx>

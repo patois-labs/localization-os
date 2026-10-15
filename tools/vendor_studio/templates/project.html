@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Project {{ proj.id }} - Vendor Studio{% endblock %}
+{% block body %}
+<a href="/" class="back">&larr; Inbox</a>
+<h1>{{ proj.customer_label or "Project" }} #{{ proj.id }}</h1>
+<p class="meta">
+  <span class="status s-{{ proj.status }}">{{ proj.status }}</span>
+  {{ proj.source_locale }} &rarr; {{ proj.target_locale }} &middot;
+  {{ seg_count }} segments &middot; run {{ proj.run_ref or "-" }} / {{ proj.step_name }}
+  {% if proj.expiry_at %}&middot; expires {{ proj.expiry_at.strftime("%Y-%m-%d %H:%M") }}{% endif %}
+</p>
+
+{% if proj.status == STATUS.CANCELLED %}
+<p class="error">This project was cancelled{% if proj.cancel_reason %}: {{ proj.cancel_reason }}{% endif %}.
+  Late work is blocked.</p>
+{% endif %}
+
+{% if proj.is_rework %}
+<section class="panel rework-banner">
+  <h2>Rework{% if proj.rework and proj.rework.get("round") %} &middot; round {{ proj.rework.get("round") }}{% endif %}</h2>
+  {% if proj.rework and proj.rework.get("note") %}<p>{{ proj.rework.get("note") }}</p>{% endif %}
+  <p class="muted small">This job returned for corrections. Per-segment feedback is shown in the CAT editor.</p>
+</section>
+{% endif %}
+
+{% if proj.quote_requested %}
+<section class="panel quote-panel">
+  <h2>Quote</h2>
+  {% if proj.quote_status == "approved" %}
+    <p class="ok">Quote approved{% if proj.quoted_cost_usd is not none %} at ${{ "%.2f"|format(proj.quoted_cost_usd) }}{% endif %} &mdash; you may start work.</p>
+  {% elif proj.quote_status == "declined" %}
+    <p class="error">Quote declined{% if proj.cancel_reason %}: {{ proj.cancel_reason }}{% endif %}.</p>
+  {% else %}
+    <p class="muted">This job is quote-gated. Submit a quote before starting work.
+      {% if proj.quote_status == "submitted" %}<b>Quote submitted{% if proj.quoted_cost_usd is not none %} at ${{ "%.2f"|format(proj.quoted_cost_usd) }}{% endif %}; awaiting a decision.</b> You may resubmit if needed.{% endif %}</p>
+    <form method="post" action="/projects/{{ proj.id }}/quote" class="inline">
+      <input name="quoted_cost_usd" value="{{ proj.quoted_cost_usd or '' }}" placeholder="quote USD" required>
+      <input name="note" placeholder="note (optional)">
+      <button type="submit">Submit quote</button>
+    </form>
+  {% endif %}
+</section>
+{% endif %}
+
+<div class="bar big"><span style="width:{{ progress.pct }}%"></span></div>
+<p class="muted">{{ progress.done }}/{{ progress.total }} confirmed
+  ({{ progress.locked }} locked, excluded) &middot; {{ outstanding }} id(s) outstanding</p>
+
+<section class="panel">
+  <h2>TM-band estimate</h2>
+  <table class="grid small">
+    <thead><tr><th>Band</th><th>Segments</th><th>Words</th><th>Covered</th><th>Cost</th></tr></thead>
+    <tbody>
+    {% for b in bands %}
+      <tr><td>{{ b.band }}</td><td>{{ b.segments }}</td><td>{{ b.words }}</td>
+        <td>{{ "yes" if b.covered else "billable" }}</td>
+        <td>{{ "$%.2f"|format(b.cost) if b.cost is not none else "-" }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if proj.estimate %}<p class="muted small">Estimate total:
+    {{ proj.estimate.get("total_cost", "-") }} {{ proj.estimate.get("currency", "") }}</p>{% endif %}
+</section>
+
+<section class="panel actions">
+  <h2>Actions</h2>
+  {% if proj.status not in [STATUS.DELIVERED, STATUS.CANCELLED] %}
+  <form method="post" action="/projects/{{ proj.id }}/claim" class="inline">
+    <button type="submit">Claim (as translator)</button>
+  </form>
+  <form method="post" action="/projects/{{ proj.id }}/assign" class="inline">
+    <input name="assignee" placeholder="assign to (name)">
+    <button type="submit">Assign</button>
+  </form>
+  <a class="btn" href="/projects/{{ proj.id }}/editor">Open CAT editor</a>
+  <form method="post" action="/projects/{{ proj.id }}/cost" class="inline">
+    <input name="actual_cost_usd" value="{{ proj.actual_cost_usd or '' }}" placeholder="actual cost USD">
+    <button type="submit">Save cost</button>
+  </form>
+  <form method="post" action="/projects/{{ proj.id }}/cancel" class="inline">
+    <input name="reason" placeholder="cancel reason">
+    <button type="submit" class="danger">Cancel</button>
+  </form>
+  {% endif %}
+  <a class="btn" href="/projects/{{ proj.id }}/export">Export return file</a>
+  <a class="btn" href="/projects/{{ proj.id }}/export?format=xliff">Export return (XLIFF)</a>
+  <a class="btn" href="/projects/{{ proj.id }}/package?format=xliff">Download package (XLIFF)</a>
+</section>
+
+<section class="panel">
+  <h2>Deliver</h2>
+  <p class="muted">Delivery is driven from the editor. QA findings are advisory only and
+    never block delivery. Partial delivery sends the confirmed subset; full delivery sweeps
+    every outstanding id.</p>
+  <button class="btn" data-deliver="full" data-project="{{ proj.id }}">Deliver all</button>
+  <button class="btn" data-deliver="partial" data-project="{{ proj.id }}">Deliver confirmed subset</button>
+  <span id="deliver-result" class="muted"></span>
+</section>
+<script src="/static/editor.js"></script>
+{% endblock %}

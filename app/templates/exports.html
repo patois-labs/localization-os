@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_form_errors.html" as fe %}
+{% block title %}Data export{% endblock %}
+{% block content %}
+<div class="documents-page">
+
+{% set page_title %}Data export{% endset %}
+{% set export_meta %}<p>A checksummed ZIP of one JSONL file per entity plus a manifest, limited to what you can already see
+  (an admin can export the whole workspace). It runs as a job: start it, watch the status, download when ready.
+  Nothing leaves your install and no secret is included.</p>{% endset %}
+{{ m.page_header(page_title, meta=export_meta) }}
+<section class="document-heading">
+  {% if started %}<p class="ok">Export job started.</p>{% endif %}
+  {# a11y T7: ?error= renders once, as a sentence, in the page error summary at the top
+     of main (base.html + _form_errors.html). #}
+</section>
+
+<section class="card">
+  <h2>New export</h2>
+  <form method="post" action="/exports" class="form">
+    {% include "_csrf.html" %}
+    <fieldset id="export-scope">
+      <legend>Scope</legend>
+      <label><input type="radio" name="scope" value="self" checked> Everything I can see (self)</label>
+      <label><input type="radio" name="scope" value="customer"> One customer</label>
+      <label><input type="radio" name="scope" value="project"> One project</label>
+      {% if is_admin %}
+      <label><input type="radio" name="scope" value="workspace"> The whole workspace (admin)</label>
+      {% endif %}
+    </fieldset>
+    <label>Customer / project id (for the customer / project scopes)
+      <select name="ref" id="export-ref"{{ fe.invalid_attrs(request, 'export-ref') }}>
+        <option value="">-</option>
+        {% if customers %}<optgroup label="Customers">
+          {% for c in customers %}<option value="{{ c.id }}">customer {{ c.id }} - {{ c.name }}</option>{% endfor %}
+        </optgroup>{% endif %}
+        {% if projects %}<optgroup label="Projects">
+          {% for p in projects %}<option value="{{ p.id }}">project {{ p.id }} - {{ p.name }}</option>{% endfor %}
+        </optgroup>{% endif %}
+      </select>
+    </label>
+    <fieldset>
+      <legend>History depth</legend>
+      <label><input type="radio" name="history" value="current" checked> Current state only</label>
+      <label><input type="radio" name="history" value="full"> Full history (edit / run / change log)</label>
+    </fieldset>
+    <label><input type="checkbox" name="include_eval" value="1"> Include Evaluations Lab data (off by default)</label>
+    <label><input type="checkbox" name="include_embeddings" value="1"> Include embedding vectors (large; off by default)</label>
+    {% if is_admin %}
+    <label><input type="checkbox" name="include_audit" value="1"> Include the admin audit slice (workspace scope only)</label>
+    {% endif %}
+    <button type="submit" class="btn" data-busy-label="{{ t(request, 'busy.exporting') }}">Start export</button>
+  </form>
+</section>
+
+<section class="card flat">
+  <h2>Your exports</h2>
+  {% if runs %}
+  {% set column_0 %}#{% endset %}
+  {% set column_1 %}Scope{% endset %}
+  {% set column_2 %}History{% endset %}
+  {% set column_3 %}Status{% endset %}
+  {% set column_4 %}Rows{% endset %}
+  {% set column_5 %}Bytes{% endset %}
+  {% set column_6 %}{% endset %}
+{% call m.data_table('Your exports', [{'label': column_0}, {'label': column_1}, {'label': column_2}, {'label': column_3}, {'label': column_4}, {'label': column_5}, {'label': column_6, 'actions': true}]) %}
+    {% for r in runs %}
+      <tr>
+        <td>{{ r.id }}</td>
+        <td>{{ r.scope_kind }}{% if r.scope_ref %}:{{ r.scope_ref }}{% endif %}</td>
+        <td>{{ r.history }}</td>
+        <td>{{ m.status_badge(r.status, m.status_label(r.status)) }}</td>
+        <td>{{ r.counts.values() | sum }}</td>
+        <td>{{ r.artifact_bytes or 0 }}</td>
+        <td class="row-actions">
+          {% call m.row_menu('xm-' ~ r.id, 'More actions for export #' ~ r.id) %}
+            <a role="menuitem" href="/exports/{{ r.run_uuid }}" aria-label="Open export #{{ r.id }}">Open export</a>
+          {% endcall %}
+        </td>
+      </tr>
+    {% endfor %}
+    {% endcall %}
+  {% else %}
+  {{ m.empty_state('No exports yet. Start one above.') }}
+  {% endif %}
+</section>
+
+</div>
+{% endblock %}

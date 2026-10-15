@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE messagebundle [
+<!ELEMENT messagebundle (msg)*>
+<!ATTLIST messagebundle class CDATA #IMPLIED>
+
+<!ELEMENT msg (#PCDATA|ph|source)*>
+<!ATTLIST msg id CDATA #IMPLIED>
+<!ATTLIST msg desc CDATA #IMPLIED>
+<!ATTLIST msg meaning CDATA #IMPLIED>
+
+<!ELEMENT source (#PCDATA)>
+
+<!ELEMENT ph (#PCDATA|ex)*>
+<!ATTLIST ph name CDATA #REQUIRED>
+
+<!ELEMENT ex (#PCDATA)>
+]>
+<messagebundle handler="angular">
+  <msg id="1795488914424217085" desc="Cart summary" meaning="checkout"><source>src/app/cart.ts:12</source>You have <ph name="PH"/> items in <ph name="START_TAG_SPAN"/>your cart<ph name="CLOSE_TAG_SPAN"/>.</msg>
+  <msg id="8805961235120419102"><source>src/app/cart.ts:18</source>Checkout</msg>
+</messagebundle>

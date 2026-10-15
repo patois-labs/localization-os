@@ -1,0 +1,12 @@
+{"source": "Pay 10 euros.", "target": "Zahlen Sie 10 Euro.", "source_locale": "en", "target_locale": "de", "gold_pass": true}
+{"source": "Save the file before closing the window.", "target": "Speichern Sie die Datei, bevor Sie das Fenster schließen.", "source_locale": "en", "target_locale": "de", "gold_pass": true}
+{"source": "Open the settings menu.", "target": "Öffnen Sie das Einstellungsmenü.", "source_locale": "en", "target_locale": "de", "gold_pass": true}
+{"source": "The battery is fully charged.", "target": "La batería está completamente cargada.", "source_locale": "en", "target_locale": "es", "gold_pass": true}
+{"source": "Please enter your name.", "target": "Por favor, introduzca su nombre.", "source_locale": "en", "target_locale": "es", "gold_pass": true}
+{"source": "Do not disconnect the cable.", "target": "No desconecte el cable.", "source_locale": "en", "target_locale": "es", "gold_pass": true}
+{"source": "Pay 10 euros.", "target": "Zahlen Sie 100 Euro.", "source_locale": "en", "target_locale": "de", "gold_pass": false}
+{"source": "Save the file before closing the window.", "target": "Speichern Sie die Datei.", "source_locale": "en", "target_locale": "de", "gold_pass": false}
+{"source": "Open the settings menu.", "target": "Öffnen Sie das settings-Menü.", "source_locale": "en", "target_locale": "de", "gold_pass": true, "gold_note": "minor by design: passes at threshold 70"}
+{"source": "The battery is fully charged.", "target": "La pantalla está completamente cargada.", "source_locale": "en", "target_locale": "es", "gold_pass": false}
+{"source": "Dear customer, please enter your name.", "target": "Estimado cliente, por favor, introduce tu nombre.", "source_locale": "en", "target_locale": "es", "gold_pass": true, "gold_note": "minor by design: passes at threshold 70"}
+{"source": "Do not disconnect the cable.", "target": "Desconecte el cable.", "source_locale": "en", "target_locale": "es", "gold_pass": false}

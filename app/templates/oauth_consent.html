@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{# #753: MCP OAuth consent (app/web/mcp_oauth_as.py). The MCP spec requires the redirect URI
+   hostname to be shown clearly, with an extra warning for localhost-only redirects. #}
+{% block title %}Connect {{ v.client_name }}{% endblock %}
+{% block content %}
+{% set consent_title %}Connect an AI app to your account{% endset %}
+{% set consent_meta %}Signed in as <strong>{{ me.email }}</strong>{% endset %}
+{{ m.page_header(consent_title, meta=consent_meta) }}
+<section class="card" id="oauth-consent">
+  <h2 id="oauth-consent-client">{{ v.client_name }}</h2>
+  <p>This app is asking to use this install's tools (the MCP server at <code>{{ v.resource }}</code>) as you.</p>
+  <dl class="kv">
+    <dt>App published at</dt>
+    <dd>{% if v.client_host %}<strong>{{ v.client_host }}</strong>{% else %}registered on this install by the app itself (not verified){% endif %}</dd>
+    <dt>After you answer, your browser goes to</dt>
+    <dd id="oauth-consent-redirect-host"><strong>{{ v.redirect_host }}</strong></dd>
+  </dl>
+  {% if v.localhost_redirect %}
+  <p class="notice notice-warn" id="oauth-consent-localhost">The answer goes to a program on
+    <strong>this computer</strong> ({{ v.redirect_host }}). Approve only if you just started the
+    connection from an app on this computer yourself.</p>
+  {% endif %}
+  <form method="post" action="/oauth/consent" class="form" id="oauth-consent-form">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="r" value="{{ r }}" />
+    <fieldset>
+      <legend>What the app may do</legend>
+      <label><input type="checkbox" checked disabled /> Use the API as you (always included)</label>
+      {% if 'docs' in v.scopes %}
+      <label><input type="checkbox" name="scope" value="docs" checked /> Documents and projects (upload, translate, download)</label>
+      {% endif %}
+      {% if 'keys' in v.scopes %}
+      <label><input type="checkbox" name="scope" value="keys" checked /> String keys (import, translate, export)</label>
+      {% endif %}
+    </fieldset>
+    <p class="help">Access lasts until you disconnect the app on
+      <a href="/account/connected-apps">Connected apps</a>. It never includes administration.</p>
+    <button type="submit" name="decision" value="approve" class="btn-primary" id="oauth-consent-approve">Allow</button>
+    <button type="submit" name="decision" value="deny" class="ghost" id="oauth-consent-deny">Deny</button>
+  </form>
+</section>
+{% endblock %}

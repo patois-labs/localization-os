@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}My work{% endblock %}
+{% block content %}
+<div class="review-runs-page">
+
+{% set header_actions %}
+<button type="button" class="ghost layout-edit-btn" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+{% endset %}
+{% set header_meta %}<p class="muted">Everything across every project you can see that is waiting on you:
+    paused review steps assigned to you, {% if queries_on %}queries on you, and {% endif %}documents needing quality
+    attention. This is a page you visit - not a notification centre.</p>
+{% endset %}
+{{ m.page_header("My work", meta=header_meta, secondary=header_actions) }}
+<nav class="review-runs-sections" aria-label="{{ t(request, 'page.review_runs.nav_label') }}"><a href="#rr-items">Work items</a><a href="#rr-legend">What these sections mean</a></nav>
+
+{# SPEC-wave3 §8.3: the assignment limitation, stated verbatim on the page. #}
+<section class="card">
+  <p class="muted small">&ldquo;Paused workflow steps that name you&rdquo; means paused
+    runs whose current step's <em>definition</em> names your address. Assignment is a
+    property of the workflow, not of an individual run - if a workflow's review step
+    names you, every paused run of that workflow appears here. Per-run assignment does not
+    exist yet.</p>
+</section>
+
+<div id="page-layout" class="page-layout" data-layout-page="my_work">
+<section class="card" id="rr-items" data-card="items" data-card-title="Work items">
+  <form method="get" action="/my-work" class="filters">
+{% call m.form_section("rr-fields-1", "Work items") %}
+    <label>Quality window (days)
+      <input type="number" name="days" min="1" max="3650" value="{{ days }}">
+    </label>
+    <label><input type="checkbox" name="quality" value="needs_review"
+      {{ 'checked' if quality == 'needs_review' }}> show NEEDS_REVIEW segments instead of findings</label>
+    <button type="submit" class="btn">Apply</button>
+  {% endcall %}
+</form>
+
+  {% if items %}
+  {% call m.data_table("Work items", [{"label": "Section"}, {"label": "Item"}, {"label": "Project"}, {"label": "Locale"}, {"label": "Why"}, {"label": "Updated"}]) %}
+      {% for it in items %}
+      <tr>
+        <td><span class="chip">{{ it.section }}</span></td>
+        <td><a href="{{ it.url }}">{{ it.title or '(untitled)' }}</a></td>
+        <td>{{ it.project_name or it.project_id }}</td>
+        <td>{{ it.target_locale or '-' }}</td>
+        <td>{{ it.reason }}</td>
+        <td>{{ it.updated_at | utcdt or '-' }}</td>
+      </tr>
+      {% endfor %}
+    {% endcall %}
+  <p class="muted">Showing {{ offset + 1 }}&ndash;{{ offset + shown }} of {{ total }}
+    work item(s).</p>
+  {% if has_prev or has_next %}
+  <p class="pager">
+    {% if has_prev %}<a class="btnlink small"
+      href="?offset={{ prev_offset }}&amp;days={{ days }}{% if quality %}&amp;quality={{ quality }}{% endif %}"><span aria-hidden="true">&larr;</span> Prev</a>{% endif %}
+    {% if has_next %}<a class="btnlink small"
+      href="?offset={{ next_offset }}&amp;days={{ days }}{% if quality %}&amp;quality={{ quality }}{% endif %}">Next <span aria-hidden="true">&rarr;</span></a>{% endif %}
+  </p>
+  {% endif %}
+  {% else %}
+  {{ m.empty_state("Nothing is waiting on you right now.") }}
+  {% endif %}
+</section>
+
+{# The honest section legend (§8.2) + the quality caption (§8.2, HIGH-4). #}
+<section class="card" id="rr-legend" data-card="legend">
+  <h2>What these sections mean</h2>
+  <ul class="muted small">
+    <li><strong>review</strong> - paused workflow steps that name you (see the note
+      above about workflow-level assignment).</li>
+    {% if queries_on %}
+    <li><strong>query</strong> - queries assigned to you (waiting on you) and your
+      own queries that were answered.</li>
+    {% endif %}
+    {% if can_review %}
+    {% if quality == 'needs_review' %}
+    <li><strong>quality</strong> - segments a write-seam QA gate routed to a human.
+      This is a machine flag, not an assignment, and it persists until someone edits the
+      segment - on an established install there can be a great many.</li>
+    {% else %}
+    <li><strong>quality</strong> - every document you can see that has open major or
+      critical MQM findings from the last {{ days }} days. Nothing in {{ brand }} assigns an
+      LQA task to a person; this is a derived list, not an assignment.</li>
+    {% endif %}
+    {% endif %}
+  </ul>
+</section>
+</div>
+{% with layout_page = 'my_work' %}{% include "_page_layout.html" %}{% endwith %}
+
+</div>
+{% endblock %}

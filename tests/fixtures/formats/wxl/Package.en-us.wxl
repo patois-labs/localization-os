@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization Culture="en-us" Codepage="1252" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="ProductName" Value="Northwind Desktop" />
+  <String Id="Downgrade" Value="A newer version of [ProductName] is already installed." />
+  <String Id="UpgradeCode" Value="{6F2C1E7A-0000-4000-8000-000000000001}" Localizable="no" />
+  <String Id="LegacyText">Click Next to continue.</String>
+  <UI Dialog="WelcomeDlg" Control="Title" Text="Welcome to the setup wizard" />
+</WixLocalization>

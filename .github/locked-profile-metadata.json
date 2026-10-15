@@ -1,0 +1,71 @@
+{
+  "psycopg": {
+    "version": "3.3.6",
+    "requires": [
+      "typing-extensions>=4.6; python_version < \"3.13\"",
+      "tzdata; sys_platform == \"win32\"",
+      "psycopg-c==3.3.6; implementation_name != \"pypy\" and extra == \"c\"",
+      "psycopg-binary==3.3.6; implementation_name != \"pypy\" and extra == \"binary\"",
+      "psycopg-pool; extra == \"pool\"",
+      "anyio>=4.0; extra == \"test\"",
+      "mypy>=2.1.0; implementation_name != \"pypy\" and extra == \"test\"",
+      "pproxy>=2.7; extra == \"test\"",
+      "pytest>=6.2.5; extra == \"test\"",
+      "pytest-cov>=3.0; extra == \"test\"",
+      "pytest-randomly>=3.5; extra == \"test\"",
+      "ast-comments>=1.1.2; extra == \"dev\"",
+      "black>=26.1.0; extra == \"dev\"",
+      "codespell>=2.2; extra == \"dev\"",
+      "cython-lint>=0.21; extra == \"dev\"",
+      "dnspython>=2.1; extra == \"dev\"",
+      "flake8>=4.0; extra == \"dev\"",
+      "isort[colors]>=6.0; extra == \"dev\"",
+      "isort-psycopg>=0.0.3; extra == \"dev\"",
+      "mypy>=2.1.0; extra == \"dev\"",
+      "pre-commit>=4.0.1; extra == \"dev\"",
+      "types-setuptools>=57.4; extra == \"dev\"",
+      "types-shapely>=2.0; extra == \"dev\"",
+      "wheel>=0.37; extra == \"dev\"",
+      "Sphinx>=9.1; extra == \"docs\"",
+      "furo==2025.12.19; extra == \"docs\"",
+      "sphinx-autobuild>=2025.8.25; extra == \"docs\"",
+      "sphinx-autodoc-typehints>=3.10.2; extra == \"docs\""
+    ]
+  },
+  "psycopg-binary": {
+    "version": "3.3.6",
+    "requires": []
+  },
+  "tzdata": {
+    "version": "2026.2",
+    "requires": []
+  },
+  "ldap3": {
+    "version": "2.9.1",
+    "requires": [
+      "pyasn1 (>=0.4.6)"
+    ]
+  },
+  "python3-saml": {
+    "version": "1.16.0",
+    "requires": [
+      "lxml (!=4.7.0,>=4.6.5)",
+      "isodate (>=0.6.1)",
+      "xmlsec (>=1.3.9)",
+      "coverage (>=4.5.2) ; extra == 'test'",
+      "freezegun (<=1.1.0,>=0.3.11) ; extra == 'test'",
+      "flake8 (<=5.0.0,>=3.6.0) ; extra == 'test'",
+      "pytest (>=4.6) ; extra == 'test'"
+    ]
+  },
+  "isodate": {
+    "version": "0.7.2",
+    "requires": []
+  },
+  "xmlsec": {
+    "version": "1.3.17",
+    "requires": [
+      "lxml>=3.8"
+    ]
+  }
+}

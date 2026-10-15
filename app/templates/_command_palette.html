@@ -1,0 +1,28 @@
+{# Search dialog (Ctrl+K, or click/type in the top bar): pages from the rendered sidebar plus live grouped results from /search/suggest. #}
+<dialog id="command-palette" class="command-palette" aria-labelledby="command-palette-title"{{ _ui_lang_attr }}
+        data-search-label="{{ t(request, 'page.app_shell.palette_search') }}"
+        data-count-label="{{ t(request, 'page.app_shell.palette_count') }}"
+        data-count-one-label="{{ t(request, 'page.app_shell.palette_count_one') }}"
+        data-count-none-label="{{ t(request, 'page.app_shell.palette_count_none') }}"
+        data-pages-label="{{ t(request, 'page.app_shell.palette_pages') }}"
+        data-wait-label="{{ t(request, 'page.app_shell.palette_wait') }}"
+        data-error-label="{{ t(request, 'page.app_shell.palette_error') }}"
+        data-short-label="{{ t(request, 'page.app_shell.palette_short') }}"
+        data-group-projects="{{ t(request, 'page.search.group_projects') }}"
+        data-group-documents="{{ t(request, 'page.search.group_documents') }}"
+        data-group-tm="{{ t(request, 'page.search.group_tm') }}"
+        data-group-glossary="{{ t(request, 'page.search.group_glossary') }}"
+        data-group-workflows="{{ t(request, 'page.search.group_workflows') }}"
+        data-group-connections="{{ t(request, 'page.search.group_connections') }}">
+  <div class="command-palette-head">
+    <h2 id="command-palette-title">{{ tl(request, 'page.app_shell.palette_title') }}</h2>
+    <button type="button" class="ghost" data-command-palette-close>{{ tl(request, 'page.app_shell.palette_close') }}</button>
+  </div>
+  <label class="sr-only" for="command-palette-input">{{ tl(request, 'page.app_shell.palette_title') }}</label>
+  <input id="command-palette-input" type="text" role="combobox" aria-autocomplete="list"
+         aria-expanded="false" aria-controls="command-palette-results" aria-describedby="command-palette-help command-palette-count"
+         autocomplete="off" spellcheck="false" />
+  <p id="command-palette-help">{{ tl(request, 'page.app_shell.palette_help') }}</p>
+  <div id="command-palette-results" role="listbox" aria-labelledby="command-palette-title"></div>
+  <p id="command-palette-count" role="status" aria-live="polite" aria-atomic="true"></p>
+</dialog>

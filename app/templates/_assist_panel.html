@@ -1,0 +1,53 @@
+{#- "Ask about this page" panel (SPEC-ask-draft section 4).
+
+    Include with the module slug:  {% with assist_module = 'memories' %}{% include "_assist_panel.html" %}{% endwith %}
+
+    Hidden entirely when the assist_enabled kill switch is off (the route 404s too --
+    the switch is honoured on BOTH surfaces, not just visually). Answers are grounded
+    exclusively in the module's capability card, which is the same text /help/<module>
+    renders, so the panel and the guide can never disagree.
+
+    ALSO hidden when card_is_off(assist_module) -- i.e. this page's module is owned by a
+    switched-off feature, so its capability card 404s. Without this guard the panel would
+    render on a switched-off module, its "Read the full guide" link would 404 and an Ask
+    POST would 400 (assist.py refuses a card_is_off slug). card_is_off is the one authority
+    the /help/{module} and /api/capabilities/{slug} routes already call, exposed to Jinja
+    next to feature_enabled in app/web/deps.py.
+
+    ALSO hidden for a caller who cannot POST (assist_can_write -- the app-wide
+    mutating-request predicate the middleware itself uses). Ask is a POST, so a
+    VIEWER pressing this button would get a 403; a button that always fails is worse
+    than no button. The page's read-only "?" link to /help/<module> stays visible to
+    every role, because that is a plain GET of plain documentation. -#}
+{% if feature_enabled('assist') and not card_is_off(assist_module) and assist_can_write(request) %}
+{% call m.card() %}
+  <div class="assist-panel" data-assist-panel
+       data-assist-module="{{ assist_module }}"
+       data-assist-url="/assist/ask"
+       data-csrf="{{ csrf_token(request) }}">
+    <h2>Ask about this page</h2>
+    <p class="muted small">Answers come from this module's guide only - if the
+      guide does not cover something, it will say so rather than guess.
+      <a href="/help/{{ assist_module }}">Read the full guide <span aria-hidden="true">&rarr;</span></a></p>
+    <p class="muted small">Paid Ask and Draft calls share a limit of 6 per minute and
+      60 per day (UTC) for your account.</p>
+    <form method="post" action="/assist/ask" class="form inline-form" data-assist-form>
+      {% include "_csrf.html" %}
+      <input type="hidden" name="module" value="{{ assist_module }}" />
+      <label class="grow">Your question
+        <input type="text" name="question" data-assist-question
+               placeholder="What can this do?" maxlength="500" />
+      </label>
+      <button type="submit" data-busy-label="{{ t(request, 'busy.asking') }}">Ask</button>
+    </form>
+    <div class="assist-starters">
+      {% for q in assist_starters() %}
+      <button type="button" class="chip" data-assist-starter="{{ q }}">{{ q }}</button>
+      {% endfor %}
+    </div>
+    <div class="assist-answer" data-assist-answer aria-live="polite"></div>
+    <p class="muted small" data-assist-grounding></p>
+  </div>
+{% endcall %}
+<script src="/static/assist.js?v={{ static_v('assist.js') }}"></script>
+{% endif %}

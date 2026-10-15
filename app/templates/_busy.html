@@ -1,0 +1,20 @@
+{# Busy indicators (feat/busy-indicators): the thin top progress bar plus the
+   translated strings busy.js reads. Included as the FIRST child of <body> on every
+   page (base.html and the four standalone auth shells) so the bar sits above all
+   page chrome; busy.js itself loads in <head>. The bar is idle (aria-hidden, not
+   shown) until busy.js marks it active; with JS off it never shows. The strings come
+   from ONE busy_labels() call (app/web/deps.py), so the locale is resolved
+   once per page, the error page included. The attribute contract and the LocBusy
+   API are documented in DESIGN.md, section 5.
+   T4 (a11y): #busyAnnounce is the polite live region busy.js speaks "working" /
+   "done" into; it must exist at load (a region inserted later is often missed).
+   announce.js loads here, before any page content, so every page script can call
+   makeAnnouncer() (the Editor, Run view and Document page do). #}
+{% set _busy = busy_labels(request) %}
+{# a11y T11 (WCAG 3.1.2): busy messages come from the catalog, so the region speaks in
+   the interface language even on a page declared English. #}
+{% set _busy_lang_attr = ui_lang_attr(request) %}
+<p id="busyAnnounce" class="sr-only" role="status" aria-live="polite" aria-atomic="true"{{ _busy_lang_attr }}></p>
+<script src="/static/announce.js?v={{ static_v('announce.js') }}"></script>
+<div class="busybar" data-busy-bar role="progressbar"{{ _busy_lang_attr }} aria-label="{{ _busy.bar }}" aria-hidden="true"></div>
+<script nonce="{{ csp_nonce() }}" type="application/json" data-busy-labels>{{ _busy|tojson }}</script>

@@ -1,0 +1,1155 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_viz_macros.html" as vm %}
+{% import "_form_errors.html" as fe %}
+{% block title %}{{ project.name }} - Project{% endblock %}
+{% block content %}
+{% if request.query_params.get('file_pending') %}
+<p class="warn" role="status">Document records deleted. Upload erasure is pending because storage deletion failed. It will be retried automatically.</p>
+{% endif %}
+{% if request.query_params.get('lab_datasets_preserved', '0') | int > 0 %}
+<p class="banner-warn" role="status">{{ request.query_params.get('lab_datasets_preserved') | int }} Lab snapshot(s) still hold this document's text.</p>
+{% endif %}
+
+<p><a href="/projects" class="back"><span aria-hidden="true">←</span> All projects</a></p>
+
+{# 2026-07-14: a customer-LESS project is flagged for assignment. Assignment is
+   from-NULL-only (no general reassignment - TM/glossary provenance is customer-scoped). #}
+{% if not project.customer_id %}
+<section class="card banner-warn">
+  <p class="error"><strong>This project has no customer.</strong> TM, glossaries and
+  reporting are organized by customer - assign one:</p>
+  {% if can_write and customer_choices %}
+  <form method="post" action="/projects/{{ project.id }}/set-customer" class="form inline-form">
+    {% include "_csrf.html" %}
+    <label>Customer
+      <select name="customer_id" required>
+        <option value="">- pick a customer -</option>
+        {% for c in customer_choices %}<option value="{{ c.id }}">{{ customer_label(c) }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="submit">Assign customer</button>
+  </form>
+  <p class="help">A customer can be assigned only while none is set - reassignment is
+  not supported.</p>
+  {% elif can_write %}
+  <p class="help">No customer is available to assign - create one under Customers first.</p>
+  {% else %}
+  <p class="help">Assigning a customer requires a write role.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{#- SPEC-key-based-projects section 6: a KEY project's content lives in the key grid,
+    never in a document list. This page keeps the SHARED chrome (customer, languages,
+    workflows, TM/glossary attach, members, settings) and swaps the document sections
+    for a pointer at /projects/<id>/keys. A DOCUMENT project renders byte-identically
+    to before this batch -- `is_key_project` is false and every guard below is a no-op. -#}
+{% set is_key_project = project.project_type == 'key_based' %}
+{#- Connected projects: `connected` is the setup-menu / Source-card state, None for every other project. -#}
+{% set is_connected = connected is not none %}
+
+{#- A-F8: the key affordances gate on the KILL SWITCH as well as on the project's
+    type. With the switch off /projects/<id>/keys is a 404, so an ungated link is a
+    link to a dead page -- and a key project is still a real project somebody can open
+    from a bookmark, so the page says plainly what it is and why there is nothing to
+    click, instead of rendering a document project's empty upload form. -#}
+{% set project_keys %}
+{% if is_key_project %}
+{% if feature_enabled('keys') %}
+<section class="card">
+  <h2>Keys</h2>
+  <p class="muted">This is a key-based project: its content is a set of translatable
+  string keys, not uploaded files. Add, edit, import, export and translate them on the
+  key grid.</p>
+  <p><a class="btnlink primary" href="/projects/{{ project.id }}/keys">Open the key grid <span aria-hidden="true">&rarr;</span></a>
+     <a class="btnlink small" href="/help/keys">Read the guide</a></p>
+</section>
+{% else %}
+<section class="card">
+  <h2>Keys</h2>
+  <p class="muted">This is a key-based project, and key-based projects are currently
+  turned off on this install, so its keys cannot be viewed or edited here. Its content
+  is untouched; an administrator can switch <code>key_projects_enabled</code> back on
+  in Settings.</p>
+</section>
+{% endif %}
+{% endif %}
+
+{% endset %}
+<section class="card flat project-header has-layout-edit">
+{% set project_badges %}{% if is_key_project and feature_enabled('keys') %} <span class="badge beta">Keys</span>{% endif %}{% if ai_status and ai_status.ai_opt_out %} <span class="badge warn" data-ai-off>AI off</span>{% endif %}{% endset %}
+{% import "_custom_fields.html" as cfm %}
+{% set project_fields_line %}{% for f in cf_defs if cf_vals.get(f.key) is not none %}<span class="nowrap"> · {{ f.label }}: <strong>{{ cfm.cf_value(f, cf_vals.get(f.key)) }}</strong></span>{% endfor %}{% endset %}
+{% set project_meta %}<p>
+    Customer: {{ customer.name if customer else "-" }} ·
+    Source: <strong>{{ project.source_locale }}</strong>
+    {% if project.created_by %} · Created by <strong title="{{ project.created_by }}">{{ project.created_by.split('@')[0] }}</strong>{% endif %}
+    · <span class="nowrap">{{ project.created_at.strftime('%Y-%m-%d') }} UTC</span>
+    {% if is_connected %}· <a href="#source">Source</a>{% else %}· <a href="/projects/{{ project.id }}/automation">Automation</a>{% endif %}
+  </p>{% endset %}
+{% set project_meta %}{{ project_meta }}{% if cf_vals %}<p class="project-fields">{{ project_fields_line }}</p>{% endif %}{% endset %}
+{# Make this a connected project (manager+): an existing project a connection already feeds. Binds
+   that same connection; nothing is scheduled or run. #}
+{% if convert_offer %}
+{% set project_meta %}{{ project_meta }}<form method="post" action="/projects/{{ project.id }}/make-connected" class="inline-form" id="make-connected">{% include "_csrf.html" %}{% if convert_offer | length > 1 %}<label>Connection <select name="connection_id">{% for c in convert_offer %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select></label> {% endif %}<button type="submit" class="btn-small">Make this a connected project</button> <span class="small muted">{{ convert_offer[0].name if convert_offer | length == 1 else 'The chosen connection' }} already feeds this project. This links the two as a connected project; nothing is scheduled or run.</span></form>{% endset %}
+{% endif %}
+{% set layout_action %}<button type="button" class="ghost layout-edit-btn" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>{% endset %}
+{{ m.page_header(project.name, meta=project_meta, status=project_badges, secondary=layout_action) }}
+{% set project_ai_settings %}
+  {# AI opt-out (HECVAT DPAI-08): the state, what it means, and the switch (manager+). #}
+  {% if ai_status %}
+  <div id="ai-use" class="ai-use">
+    {% if ai_status.ai_opt_out %}
+    <p class="notice notice-warn"><strong>AI is off for this project.</strong>
+      This instance's AI engines never process this project's content.
+      Content you download, export, or connect to your own AI tools
+      (for example the MCP agent connection) is outside this switch.
+      Machine translation, AI workflow steps,
+      AI quality checks, AI suggestions and translation memory learning are unavailable.
+      TM and glossary lookups and human-only workflows (human review, TM match, external
+      vendor) still work.{% if ai_status.ai_opt_out_customer %} AI is switched off for the
+      whole customer; change it on the customer page.{% endif %}</p>
+    {% endif %}
+    {% if can_manage and not ai_status.ai_opt_out_customer %}
+    <form method="post" action="/projects/{{ project.id }}/ai-opt-out" class="inline-form">
+      {% include "_csrf.html" %}
+      <input type="hidden" name="ai_opt_out" value="{{ '0' if project.ai_opt_out else '1' }}" />
+      <button type="submit" class="btn-small">{{ 'Switch AI back on for this project' if project.ai_opt_out else 'Switch AI off for this project' }}</button>
+      {% if not project.ai_opt_out %}<span class="small muted">
+        When AI is off: This instance's AI engines never process this project's content.
+        Content you download, export, or connect to your own AI tools
+        (for example the MCP agent connection) is outside this switch.
+      </span>{% endif %}
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+  {# #690: translate comments in Office files (Word, Excel, PowerPoint, OpenDocument,
+     Visio). Default off for new projects; manager+ switches it. #}
+  {% if comment_status and not is_key_project %}
+  <div id="comments-option" class="comments-option">
+    <p class="small"><strong>Comments in Office files:</strong>
+      {% if comment_status.translate_comments %}translated (Word, Excel, PowerPoint, OpenDocument and Visio).
+      {% elif comment_status.translate_comments_word %}translated in Word files only (this project predates the option); kept in the source language in Excel, PowerPoint, OpenDocument and Visio.
+      {% else %}kept in the source language.{% endif %}
+      Comment authors and dates never change. A change applies to files uploaded or re-imported afterwards.</p>
+    {% if can_manage %}
+    <form method="post" action="/projects/{{ project.id }}/translate-comments" class="inline-form">
+      {% include "_csrf.html" %}
+      <input type="hidden" name="translate_comments" value="{{ '0' if comment_status.translate_comments else '1' }}" />
+      <button type="submit" class="btn-small">{{ 'Stop translating comments' if comment_status.translate_comments else 'Translate comments in Office files' }}</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+{% endset %}
+  {# SPEC-wave3 §4.2: the project-scoped queries panel. Gated on the kill switch so it
+     vanishes with the feature (test 16f). #}
+  {% if feature_enabled('queries') %}<p class="small"><a href="/queries?project={{ project.id }}"><span aria-hidden="true">💬</span> Queries on this project <span aria-hidden="true">&rarr;</span></a></p>{% endif %}
+
+  {# --- compact horizontal fact strip: status, due date, content type,
+       segmentation, provider(s), target-locale chips (in that order) --- #}
+  {% set st = project.status %}
+  {% set pp_by_target = {} %}
+  {% for pr in pair_providers %}{% set _ = pp_by_target.update({pr.target_locale: pr.provider}) %}{% endfor %}
+  <div class="fact-strip">
+    <div class="fact" id="project-lifecycle">
+      {# Issue #54 L4: label this the LIFECYCLE chip, not a bare "Status" -- it shows the
+         STORED lifecycle field (auto-set to Completed when every segment has a translation,
+         approval NOT required), which is a DIFFERENT notion from the dashboard/projects-row
+         STATUS chip (derived from approved %). Labelling both bare "Status" made the same
+         project read "Completed" here and "In progress - 0% approved" on the dashboard, which
+         looked like data corruption. Neither state machine changes -- only the label/tooltip. #}
+      <span class="fact-lbl">Lifecycle</span>
+      <span class="fact-val">
+        <span title="Lifecycle: {{ 'No content yet' if (st == 'in_translation' and not stats.segments) else status_labels.get(st, st) }}{% if st == 'completed' and all_segments_translated %} - every segment has a translation (approval is tracked separately; the dashboard status is derived from approval %){% endif %}">{% if st == 'in_translation' and not stats.segments %}{{ m.status_badge('new', 'No content yet', 'status') }}{% else %}{% set _tone = 'exact' if st == 'completed' else ('status' if st in ('closed', 'cancelled') else 'run') %}{{ m.status_badge(st, status_labels.get(st, st), _tone) }}{% endif %}</span>
+        {% if st == 'completed' and all_segments_translated %}<span class="muted small">(all segments translated)</span>{% endif %}
+        {% if request.query_params.get('status_set') %}
+          <span class="ok small">Updated.</span>
+        {% elif request.query_params.get('err') == 'status' %}
+          <span class="error-inline small" id="project-lifecycle-error">That status change is not allowed.</span>
+        {% endif %}
+      </span>
+    </div>
+
+    <div class="fact">
+      <span class="fact-lbl">Due date</span>
+      <span class="fact-val">
+        {% if project.due_date %}
+          <strong>{{ project.due_date.strftime('%Y-%m-%d') }}</strong>
+          {% if due_status == 'overdue' %}
+            <span class="badge fuzzy">Overdue</span>
+          {% elif due_status == 'due_soon' %}
+            <span class="badge fuzzy">Due soon</span>
+          {% endif %}
+        {% else %}
+          <span class="muted">none set</span>
+        {% endif %}
+        {% if request.query_params.get('saved') %}
+          <span class="ok small">Saved.</span>
+        {% endif %}
+      </span>
+    </div>
+
+    {% set project_configuration_facts %}
+    <div class="fact">
+      <span class="fact-lbl">Content type</span>
+      <span class="fact-val">
+        {% if content_type %}
+          <strong>{{ content_type.name }}</strong>
+        {% else %}
+          <span class="muted">General (none)</span>
+        {% endif %}
+      </span>
+    </div>
+
+    <div class="fact">
+      <span class="fact-lbl">Segmentation</span>
+      <span class="fact-val">
+        {% if project.segmentation_profile_id %}
+          <strong>{{ seg_resolved.name if seg_resolved else "profile #" ~ project.segmentation_profile_id }}</strong> <span class="muted small">(override)</span>
+        {% elif seg_resolved %}
+          <strong>{{ seg_resolved.name }}</strong> <span class="muted small">(inherited)</span>
+        {% else %}
+          <strong>default rules</strong> <span class="muted small">(inherited)</span>
+        {% endif %}
+      </span>
+    </div>
+
+    <div class="fact">
+      <span class="fact-lbl">Provider(s)</span>
+      <span class="fact-val">
+        {% if provider_mode == 'per_pair' %}
+          <strong>per language pair</strong>
+        {% else %}
+          <strong>{{ project.default_provider }}</strong> <span class="muted small">(uniform)</span>
+        {% endif %}
+      </span>
+      {% if provider_mode == 'per_pair' and pair_providers %}
+        <ul class="small" style="margin:2px 0 0;padding-left:16px;">
+          {% for pr in pair_providers %}
+          <li>{{ pr.source_locale }} → {{ pr.target_locale }}: <strong>{{ pr.provider }}</strong></li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </div>
+
+    {% endset %}
+    {{ project_configuration_facts }}
+    <div class="fact fact-wide">
+      <span class="fact-lbl">Target locales</span>
+      <span class="fact-val">
+        {% if locales %}
+          <ul class="chips">
+            {% for l in locales|sort(attribute='locale') %}<li class="chip">{{ l.locale }}{% if can_write and l.id in removable_locale_ids %}
+              <a class="chip-x" href="/projects/{{ project.id }}/remove-locale/{{ l.locale }}"
+                 title="{% if project_is_bound %}Stop {{ l.locale }}: it stops at the next run{% else %}Remove {{ l.locale }} from this project{% endif %}" aria-label="{% if project_is_bound %}Stop {{ l.locale }} at the next run{% else %}Remove {{ l.locale }} from this project{% endif %}"><span aria-hidden="true">&times;</span></a>{% endif %}</li>{% endfor %}
+          </ul>
+        {% else %}
+          <span class="muted">None set.</span>
+        {% endif %}
+        {% if stopped_locales %}
+          <p class="muted" id="stopped-locales">Stopped (kept, no longer worked on; add it again to resume):
+            {% for l in stopped_locales|sort(attribute='locale') %}<span class="chip">{{ l.locale }}</span>{% endfor %}</p>
+        {% endif %}
+        {% if project_is_bound %}
+          <p class="muted" id="connected-languages-note">This project is connected to a content source. Its languages are the only list the next run uses: an added language is included from the next run (new pairs only), a removed one stops there. Nothing already written to the external system is deleted.</p>
+        {% endif %}
+      </span>
+    </div>
+  </div>
+
+  {# --- every edit affordance collapsed into a horizontal row of small
+       <details> disclosures, so the header stays compact --- #}
+{% set project_settings %}
+  <section class="card project-settings">
+  {{ project_ai_settings }}
+  {% with fscope='project', fobj=project %}{% include "_formality.html" %}{% endwith %}
+  {% if not is_connected %}{% include "_project_notifications.html" %}{% endif %}
+  <div class="edit-row">
+    {% if can_write %}
+    <details class="inline-edit" name="project-settings-edit">
+      <summary class="btnlink small">Rename project</summary>
+      <div class="mt">
+        <form method="post" action="/projects/{{ project.id }}/rename" class="form inline-form">
+          {% include "_csrf.html" %}
+          <input type="text" name="name" aria-label="New name for {{ project.name }}" value="{{ project.name }}" required />
+          <button type="submit" class="btn-small">Rename</button>
+        </form>
+      </div>
+    </details>
+    {% endif %}
+
+    {% if can_write %}
+    {# The same condition that renders #project-lifecycle-error in the fact strip: while it
+       shows, the status controls reference it and the form is open (a11y T6, 3.3.1). #}
+    {% set lifecycle_err = not request.query_params.get('status_set') and request.query_params.get('err') == 'status' %}
+    <details class="inline-edit" name="project-settings-edit"{% if lifecycle_err %} open{% endif %}>
+      <summary class="btnlink small">Edit status</summary>
+      <div class="mt">
+        <form method="post" action="/projects/{{ project.id }}/status" class="form inline-form">
+          {% include "_csrf.html" %}
+          {% if st in ('completed', 'closed', 'cancelled') %}
+            <button type="submit" name="status" value="in_translation"{% if lifecycle_err %} aria-describedby="project-lifecycle-error"{% endif %}>Reopen</button>
+          {% endif %}
+          {% if st not in ('completed', 'closed', 'cancelled') %}
+            <button type="submit" name="status" value="completed" class="ghost"{% if lifecycle_err %} aria-describedby="project-lifecycle-error"{% endif %}>Mark completed</button>
+          {% endif %}
+          {% if st == 'completed' %}
+            <button type="submit" name="status" value="closed" class="ghost"{% if lifecycle_err %} aria-describedby="project-lifecycle-error"{% endif %}>Close</button>
+          {% endif %}
+          {% if st not in ('cancelled', 'closed') %}
+            <button type="submit" name="status" value="cancelled" class="ghost"{% if lifecycle_err %} aria-describedby="project-lifecycle-error"{% endif %}>Cancel</button>
+          {% endif %}
+        </form>
+      </div>
+    </details>
+    {% endif %}
+
+    {% if can_write %}
+    <details class="inline-edit" name="project-settings-edit">
+      <summary class="btnlink small">Edit due date</summary>
+      <div class="mt">
+        <form method="post" action="/projects/{{ project.id }}/due" class="form inline-form">
+          {% include "_csrf.html" %}
+          <label>Set due date
+            <input type="date" name="due_date"
+                   value="{{ project.due_date.strftime('%Y-%m-%d') if project.due_date else '' }}" />
+          </label>
+          <button type="submit">Save due date</button>
+        </form>
+        {% if project.due_date %}
+        <form method="post" action="/projects/{{ project.id }}/due" style="display:inline">
+          {% include "_csrf.html" %}
+          <input type="hidden" name="due_date" value="" />
+          <button type="submit" class="ghost">Clear due date</button>
+        </form>
+        {% endif %}
+      </div>
+    </details>
+    {% endif %}
+
+    {% if can_write and cf_defs %}
+    <details class="inline-edit" name="project-settings-edit">
+      <summary class="btnlink small">Edit project fields</summary>
+      <div class="mt">
+        <form method="post" action="/projects/{{ project.id }}/fields" class="form">
+          {% include "_csrf.html" %}
+          {% for f in cf_defs if not f.archived %}{{ cfm.cf_input(f, cf_vals.get(f.key), true) }}{% endfor %}
+          <button type="submit">Save project fields</button>
+        </form>
+      </div>
+    </details>
+    {% endif %}
+
+    {% if can_write %}
+    <details class="inline-edit" name="project-settings-edit">
+      <summary class="btnlink small">Edit content type</summary>
+      <div class="mt">
+        <form method="post" action="/projects/{{ project.id }}/content-type" class="form inline-form">
+          {% include "_csrf.html" %}
+          <label>Content type
+            <select name="content_type_id">
+              <option value="">- General (none) -</option>
+              {% for t in ct_choices %}
+                <option value="{{ t.id }}" {% if project.content_type_id == t.id %}selected{% endif %}>{{ t.name }}{% if t.customer_id %} (this customer){% else %} (global){% endif %}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <button type="submit">Save content type</button>
+        </form>
+        <p class="help">(applies to future runs; existing TM keeps its type)</p>
+      </div>
+    </details>
+    {% endif %}
+
+    {% if can_write and seg_choices %}
+    <details class="inline-edit" name="project-settings-edit">
+      <summary class="btnlink small">Edit segmentation</summary>
+      <div class="mt">
+        <form method="post" action="/projects/{{ project.id }}/segmentation" class="rowform">
+          {% include "_csrf.html" %}
+          <label>Segmentation profile <select name="segmentation_profile_id">
+            <option value="">- inherit -</option>
+            {% for p in seg_choices %}
+              <option value="{{ p.id }}" {% if project.segmentation_profile_id == p.id %}selected{% endif %}>{{ p.name }}{% if p.customer_id %} (customer){% endif %}</option>
+            {% endfor %}
+          </select></label>
+          <button type="submit" class="btn-small">Set</button>
+        </form>
+        <p class="small">(applies to future runs)</p>
+      </div>
+    </details>
+    {% endif %}
+
+    {% if can_write %}
+    <details class="inline-edit" name="project-settings-edit" id="pair-providers">
+      <summary class="btnlink small">Edit per-pair providers</summary>
+      <form method="post" action="/projects/{{ project.id }}/pair-providers" class="form mt">
+        {% include "_csrf.html" %}
+        <label class="inline">
+          <input type="radio" name="provider_mode" value="uniform"
+                 {% if provider_mode != 'per_pair' %}checked{% endif %} data-pp-edit-mode />
+          One provider for every pair ({{ project.default_provider }})
+        </label>
+        <label class="inline">
+          <input type="radio" name="provider_mode" value="per_pair"
+                 {% if provider_mode == 'per_pair' %}checked{% endif %} data-pp-edit-mode />
+          Choose per language pair
+        </label>
+        <table class="pp-matrix" data-pp-edit-matrix
+               {% if provider_mode != 'per_pair' %}hidden{% endif %}>
+          <thead><tr><th scope="col">Language pair</th><th scope="col">Provider</th></tr></thead>
+          <tbody>
+          {% for loc in locales %}
+            <tr>
+              <td class="data-mono">{{ project.source_locale }} → {{ loc.locale }}</td>
+              <td>
+                <input type="hidden" name="pair_target" value="{{ loc.locale }}" />
+                <select name="pair_provider" aria-label="Provider for {{ project.source_locale }} to {{ loc.locale }}">
+                  <option value="">Default ({{ project.default_provider }})</option>
+                  {% for p in providers_list %}<option value="{{ p }}" {% if pp_by_target.get(loc.locale) == p %}selected{% endif %}>{{ p }}</option>{% endfor %}
+                  {% for value, label in engine_options(request) %}<option value="{{ value }}" {% if pp_by_target.get(loc.locale) == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                </select>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        <button type="submit" class="btn-small">Save providers</button>
+        <span class="small">(applies to future runs)</span>
+      </form>
+      <script nonce="{{ csp_nonce() }}">
+      (function () {
+        var form = document.querySelector('#pair-providers form');
+        if (!form) return;
+        var mtx = form.querySelector('[data-pp-edit-matrix]');
+        form.querySelectorAll('[data-pp-edit-mode]').forEach(function (r) {
+          r.addEventListener('change', function () {
+            var pp = form.querySelector('[data-pp-edit-mode][value="per_pair"]');
+            if (mtx) mtx.hidden = !(pp && pp.checked);
+          });
+        });
+      })();
+      </script>
+    </details>
+    {% endif %}
+
+    {% if can_write %}
+    <details class="inline-edit" name="project-settings-edit">
+      <summary class="btnlink small">Save as template</summary>
+      <form method="post" action="/projects/{{ project.id }}/save-template" class="form inline-form mt">
+        {% include "_csrf.html" %}
+        <label>Template name <input type="text" name="name" placeholder="Template name" required /></label>
+        <label>Template scope <select name="scope">
+          <option value="global">Global (all customers)</option>
+          {% if project.customer_id %}<option value="customer">This customer only</option>{% endif %}
+        </select></label>
+        <label>Description (optional) <input type="text" name="description" placeholder="Description (optional)" /></label>
+        <button type="submit" class="btn-small">Save template</button>
+        <span class="small muted">Captures languages, provider, workflow, and segmentation as they are now.</span>
+      </form>
+    </details>
+    {% endif %}
+
+    {% if is_admin %}
+    <div class="edit-danger">
+    {# Archive / unarchive (residual sweep: archive verbs). Retires the project from the
+       default list + pickers and blocks new runs; data preserved + reversible. #}
+    {% if project.archived_at %}
+    <form method="post" action="/projects/{{ project.id }}/unarchive" class="inline-form">
+      {% include "_csrf.html" %}
+      <button type="submit" class="btn-small">Unarchive project</button>
+      <span class="small muted">Archived - hidden from the default list &amp; pickers, blocked from new runs.</span>
+    </form>
+    {% else %}
+    <form method="post" action="/projects/{{ project.id }}/archive" class="inline-form"
+          data-action-confirm="Archive this project? It is hidden from the default list and pickers and blocked from new runs, but preserved and reversible.">
+      {% include "_csrf.html" %}
+      <button type="submit" class="btn-small">Archive project</button>
+    </form>
+    {% endif %}
+    <a class="btnlink small danger-btn" href="/projects/{{ project.id }}/delete">Delete project…</a>
+    </div>
+    {% endif %}
+  </div>
+  </section>
+{% endset %}
+</section>
+
+{% set project_delivery %}
+{# --- delivery / download hero (P1, item 3): greets the user when done --- #}
+{% if show_download and export_locales and not is_key_project %}
+<section class="card download-hero" id="download">
+  <h2><span aria-hidden="true">⬇</span> Download translated files</h2>
+  {% if request.query_params.get('err') == 'export' %}
+    <p class="error" id="download-error">Nothing to export yet. The documents have no translated content.</p>
+  {% elif request.query_params.get('err') == 'export_held' %}
+    <p class="error" id="download-error">That locale is <b>held</b>: it has no delivered translation yet, so the file would be entirely source text. Finish or resume the run and translate/approve the segments first. To ship the source-filled file anyway, export that document individually with the <b>allow-held</b> override.</p>
+  {% elif request.query_params.get('err') == 'export_quarantined' %}
+    <p class="error" id="download-error">Export was <b>quarantined</b> for review: a document's inline-formatting tags could not be verified. Resolve it in the document's paragraph view, then export again.</p>
+  {% endif %}
+  <form method="get" action="/projects/{{ project.id }}/export" class="form" data-busy-release="3" data-export-dialog>
+    <fieldset class="modes">
+      <legend>Languages</legend>
+      {% for l in export_locales %}
+        <label class="radio">
+          <input type="checkbox" name="locales" value="{{ l.locale }}" checked />
+          <span>{{ l.locale }}</span>
+        </label>
+      {% endfor %}
+    </fieldset>
+    <button type="submit" data-busy-label="{{ t(request, 'busy.preparing_download') }}">Download selected</button>
+  </form>
+  <p class="help">Per-language quick download:
+    {% for l in export_locales %}
+      <a data-export-dialog href="/projects/{{ project.id }}/export?locales={{ l.locale }}">{{ l.locale }}</a>{% if not loop.last %} · {% endif %}
+    {% endfor %}
+    · <a data-export-dialog href="/projects/{{ project.id }}/export"><strong>Download all (ZIP)</strong></a>
+  </p>
+</section>
+{% endif %}
+
+{% endset %}
+{% set project_cards %}
+<div id="page-layout" class="page-layout" data-layout-page="project">
+<section class="card flat" data-card="overview">
+  <h2>Overview</h2>
+  {# Lead with the approved-% progress bar (the primary metric) so the readout has
+     a clear hierarchy; the resource counts below are secondary detail. #}
+  <div class="overview-progress">
+    <div class="prog"><div class="prog-bar" style="width:{{ stats.approved_pct }}%"></div></div>
+    <span class="muted small data-mono">{{ stats.approved_pct }}% approved · {{ stats.segments }} translations ({{ stats.source_segments }} segments x {{ stats.locale_count }} language{{ '' if stats.locale_count == 1 else 's' }}) · {{ stats.documents }} document{{ '' if stats.documents == 1 else 's' }}</span>
+  </div>
+  <div class="stats">
+    <div class="stat"><span class="statnum">{{ tm_count }}</span><span class="statlbl">segment TM</span></div>
+    <div class="stat"><span class="statnum">{{ ft_count }}</span><span class="statlbl">full-text TM</span></div>
+    <div class="stat"><span class="statnum">{{ glossary_count }}</span><span class="statlbl">glossary</span></div>
+    <div class="stat"><span class="statnum">{{ stats.runs }}</span><span class="statlbl">workflow runs</span></div>
+  </div>
+  {% if stats.status %}
+    <p class="muted">Segment status:
+      {% for k, v in stats.status.items() %}<span class="chip">{{ k }}: {{ v }}</span> {% endfor %}
+    </p>
+  {% endif %}
+  {{ vm.tm_leverage_bar(stats.tm_leverage, stats.segments, heading="TM leverage") }}
+  {# CV-1: the 7-band WORD-based leverage (repetitions/context/exact/fuzzy hi-mid-lo/new)
+     - the real vendor-cost model, surfaced project-wide from the segments' persisted
+     TM-match data. Complements the coarse 4-band segment-count bar above. #}
+  {% if leverage7 and leverage7.total_words %}
+  <p class="tmlev-heading">Word-based leverage (7-band)</p>
+  {{ vm.leverage7_bar(leverage7_rows, leverage7.total_words) }}
+  {% endif %}
+</section>
+
+{# CV-2: the project money-budget meter. Rendered MANAGER+ only (budget_state is None
+   for an under-ranked viewer, so the whole card is absent - no stub). Shows this
+   month's ENFORCED spend (AI + settled vendor human) against the cap, with the
+   committed-but-unpaid amount as a second meter marker. Managing the cap is admin-only
+   and lives on /routing; this page is read-only. #}
+{% if budget_state %}
+<section class="card" data-card="budget">
+  <h2>Monthly spend budget</h2>
+  {% set st = budget_state %}
+  {% if st.unlimited %}
+    <p class="spend-meter-figure data-mono">${{ '%.2f'|format(st.enforced_usd) }} spent this month
+      <span class="badge muted-badge">no cap</span></p>
+    <p class="muted small">No monthly USD budget is set for this project - spend is unlimited.
+      {% if is_admin %}Set one on the <a href="/routing">routing admin page</a>.{% endif %}</p>
+  {% else %}
+    {{ vm.budget_meter(
+         st.figure,
+         st.fill_pct, st.aria, over=st.over, tick_pct=st.committed_tick_pct,
+         tick_title="Committed (unpaid) vendor spend",
+         badge=('<span class="badge warn">over budget - new MT & vendor dispatches blocked</span>'
+                if st.over else '<span class="badge exact">under budget</span>')) }}
+    <p class="muted small">
+      AI ${{ '%.2f'|format(st.ai_usd) }} · settled vendor ${{ '%.2f'|format(st.human_settled_usd) }}
+      {% if st.committed_usd > 0 %}· committed (unpaid) ${{ '%.2f'|format(st.committed_usd) }} (shown, not enforced){% endif %}
+      · remaining ${{ '%.2f'|format(st.remaining_usd) }}
+    </p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if not is_key_project and not is_connected %}
+<section class="card" data-card="upload">
+  <h2>Upload a document</h2>
+  {% if request.query_params.get('err') == 'format' %}
+    <p class="error" id="doc-upload-file-error">Unsupported file type. Supported: DOCX, PDF, HTML, JSON, Markdown,
+      plain text, gettext PO, SRT/VTT and SSA/ASS subtitles, XLIFF, XLSX, MadCap Flare projects (.flprjzip) and CSV/TSV{% if feature_enabled('images') %},
+      plus SVG/PNG/JPG/JPEG images{% endif %}.</p>
+  {% elif request.query_params.get('err') == 'parse' %}
+    <p class="error" id="doc-upload-file-error">Choose a different file, or export this one again, then upload it.</p>
+  {% elif request.query_params.get('err') == 'toolarge_doc' %}
+    <p class="error" id="doc-upload-file-error">Choose a smaller file: this one exceeds the upload size limit.</p>
+  {% endif %}
+  {% if request.query_params.get('zip_msg') %}
+    <p class="ok" id="zip-batch-result" role="status">{{ request.query_params.get('zip_msg') }}</p>
+  {% endif %}
+  {% if zip_batches %}
+  <div id="zip-batches">
+    <h3>ZIP uploads</h3>
+    <p class="help">Download the translated files back as a ZIP with the same folders, one folder per language.</p>
+    <ul>
+    {% for b in zip_batches %}
+      <li><span>{{ b.archive }}</span> <span class="muted">({{ b.documents }} document{{ '' if b.documents == 1 else 's' }})</span>:
+        <a data-export-dialog href="/projects/{{ project.id }}/export?batch={{ b.id }}"><strong>all languages (ZIP)</strong></a>
+        {% for l in export_locales %} · <a data-export-dialog href="/projects/{{ project.id }}/export?batch={{ b.id }}&amp;locales={{ l.locale }}">{{ l.locale }}</a>{% endfor %}
+      </li>
+    {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+  <form method="post" action="/projects/{{ project.id }}/documents"
+        enctype="multipart/form-data" class="form" id="doc-upload-form"
+        data-max-upload-bytes="{{ max_upload_bytes }}">
+    {% include "_csrf.html" %}
+    <label>File
+      <span class="muted">(DOCX · PDF - scanned pages OCR'd with your engine · HTML · JSON · JSON5/JSONC ·
+        Markdown · TXT · PO · SRT/VTT · SSA/ASS · XLIFF · XLSX · Java .properties · Apple .strings · INI · RESJSON · Windows .rc · InDesign IDML · TOML · Visio · Apple .stringsdict/.xcstrings/.plist · MIF · ODT/ODS/ODP/ODG · server pages (PHP/PHTML/JSP/ASPX/ERB/SHTML) · PHP lang arrays · Email .eml · JS/TS locale modules · Angular XMB/XTB · MadCap Flare project zip · AsciiDoc · CSV/TSV · SCC · EBU STL · Linux .desktop · Haiku .catkeys · AutoCAD DXF · HTML Help (.hhc/.hhk/.hhp) · InCopy ICML · Xcode .xcloc · MDX · QuarkXPress Tags · reStructuredText · LaTeX · Wiki markup · XSLT{% if feature_enabled('images') %} · SVG/PNG/JPG/JPEG{% endif %} ·
+        ZIP of any of these: one document per file, folders kept)</span>
+      <input type="file" name="file" id="doc-upload-file"{{ fe.invalid_attrs(request, 'doc-upload-file', message_id='doc-upload-file-error') }}
+             accept=".arb,.docx,.eml,.pdf,.html,.htm,.xhtml,.json,.json5,.jsonc,.md,.markdown,.mdx,.txt,.po,.pot,.mo,.gmo,.rc,.srt,.ttml,.dfxp,.vtt,.ass,.ssa,.xaml,.xlf,.xliff,.xlsx,.xlsm,.xltx,.xltm,.docm,.dotx,.dotm,.pptx,.pptm,.potx,.potm,.ppsx,.ppsm,.properties,.strings,.ini,.resjson,.yaml,.yml,.idml,.sbv,.sub,.xml,.resx,.resw,.wxl,.ts,.dita,.ditamap,.bookmap,.dbk,.toml,.vsdx,.vsdm,.plist,.stringsdict,.xcstrings,.sdlxliff,.sdlxlf,.mqxliff,.mxliff,.dtd,.ftl,.mif,.stf,.odt,.ott,.ods,.ots,.odp,.otp,.odg,.otg,.php,.phtml,.jsp,.jspf,.aspx,.ascx,.erb,.shtml,.shtm,.stm,.ttx,.txlf,.txml,.sdlppx,.sdlrpx,.mqxlz,.xlz,.wsxz,.js,.mjs,.cjs,.mts,.cts,.xmb,.xtb,.flprjzip,.epub,.adoc,.asciidoc,.asc,.csv,.tsv,.tab,.scc,.stl,.catkeys,.desktop,.dxf,.hhc,.hhk,.hhp,.icml,.wcml,.xcloc,.xtg,.tag,.rst,.rest,.tex,.latex,.ltx,.wiki,.mediawiki,.wikitext,.dokuwiki,.xsl,.xslt,.zip{% if feature_enabled('images') %},.svg,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.gif,.webp{% endif %}"
+             required />
+    </label>
+    <p class="error" id="doc-upload-size-error" hidden></p>
+    <fieldset class="modes">
+      <legend>Translation mode</legend>
+      <label class="radio">
+        <input type="radio" name="mode" value="segmented" checked />
+        <span><strong>Segmented</strong> - sentence units, aligns with translation memory</span>
+      </label>
+      <label class="radio">
+        <input type="radio" name="mode" value="full_text" />
+        <span><strong>Full-text</strong> - whole document as one unit sent to the LLM</span>
+      </label>
+    </fieldset>
+    {# SPEC-context-metadata phase 1: optional, collapsed context section. Fields map
+       to the TranslationContext package validated by context_pkg and stored on the
+       document. #}
+    <details class="mt">
+      <summary>Translation context <span class="muted small">(optional)</span></summary>
+      <p class="help">Metadata about this document that improves translation
+        quality (audience, tone, domain). Stored with the document.</p>
+      <label>Domain <input type="text" name="ctx_domain" placeholder="software UI" /></label>
+      <label>Audience <input type="text" name="ctx_audience" placeholder="end customers, non-technical" /></label>
+      <label>Formality
+        <select name="ctx_formality">
+          <option value="">-</option>
+          <option value="formal">formal</option>
+          <option value="informal">informal</option>
+          <option value="neutral">neutral</option>
+        </select>
+      </label>
+      <label>Tone <input type="text" name="ctx_tone" placeholder="friendly, concise" /></label>
+      <label>Notes <input type="text" name="ctx_notes" placeholder="Product names stay in English." /></label>
+    </details>
+    {# Batch 6: CSV/TSV/XLSX column mapping (same spec as CLI --columns and /api columns). #}
+    <details class="mt">
+      <summary>Spreadsheet columns <span class="muted small">(CSV, TSV, XLSX; optional)</span></summary>
+      <p class="help">Which column holds the source text and which column each target
+        language is written into. Use header names or column numbers, separated by commas.
+        Columns you do not name are left exactly as they are. Leave empty to read a CSV/TSV
+        header row (source, target, or language codes such as en, de, fr).</p>
+      <label>Column mapping <input type="text" name="columns" id="doc-upload-columns" maxlength="2000"
+        placeholder="source=English, target.de=German, target.fr=fr, key=id, context=notes" /></label>
+    </details>
+    <button type="submit" data-busy-label="{{ t(request, 'busy.uploading') }}">Upload &amp; parse</button>
+  </form>
+  <script nonce="{{ csp_nonce() }}">
+  (function () {
+    // Hygiene wave 1 item 4: early client-side feedback matching the server's
+    // MAX_UPLOAD_BYTES cap (app/web/documents.py enforces the real limit - this is
+    // ONLY a nicer, earlier error than a round trip ending in ?err=toolarge_doc).
+    var form = document.getElementById('doc-upload-form');
+    if (!form) return;
+    var fileInput = document.getElementById('doc-upload-file');
+    var errEl = document.getElementById('doc-upload-size-error');
+    var maxBytes = parseInt(form.getAttribute('data-max-upload-bytes'), 10);
+    function fmtMB(bytes) {
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+    function tooLarge() {
+      return !!(maxBytes && fileInput.files && fileInput.files[0]
+                && fileInput.files[0].size > maxBytes);
+    }
+    // a11y T6: LocA11y (static/form_errors.js) marks the field aria-invalid, gives the
+    // message role="alert" and ties it to the field's aria-describedby.
+    function showOrClearError() {
+      var a11y = typeof window !== 'undefined' ? window.LocA11y : null;
+      if (tooLarge()) {
+        var msg = 'That file is ' + fmtMB(fileInput.files[0].size)
+          + ', which exceeds the ' + fmtMB(maxBytes) + ' upload size limit.'
+          + ' Use a smaller file, or split it into parts.';
+        if (a11y && a11y.fieldError) { a11y.fieldError(fileInput, msg, errEl); }
+        else { errEl.textContent = msg; errEl.hidden = false; }
+      } else if (a11y && a11y.clearFieldError) {
+        a11y.clearFieldError(fileInput, errEl);
+      } else {
+        errEl.hidden = true;
+        errEl.textContent = '';
+      }
+    }
+    fileInput.addEventListener('change', showOrClearError);
+    form.addEventListener('submit', function (ev) {
+      showOrClearError();
+      if (tooLarge()) ev.preventDefault();
+    });
+  })();
+  </script>
+</section>
+{% endif %}
+
+{# Documents sits directly after Upload a document and before Target languages
+: on a document project the file list is what you came to the
+   page for, so it sits next to the upload that fills it. It was first moved above
+   Members. Pure reorder: the section's contents are unchanged. #}
+{% if not is_key_project %}
+<section class="card flat" data-card="documents">
+  <h2>Documents</h2>
+  {% if documents %}
+    {% call m.data_table('Documents', [{"label": 'File'}, {"label": 'Mode'}, {"label": 'Status'}, {"label": 'Uploaded by'}, {"label": 'Uploaded'}]) %}
+
+        {% for d in documents %}
+          <tr>
+            <td><span class="cell-primary"><a href="/documents/{{ d.id }}">{{ d.filename }}</a></span></td>
+            <td><span class="chip">{{ d.mode }}</span></td>
+            <td>{% set _ds = doc_statuses.get(d.id, 'new') %}{{ m.status_badge(_ds, doc_status_labels.get(_ds, _ds)) }}</td>
+            <td class="muted small">{{ d.created_by or "-" }}</td>
+            <td class="muted data-mono">{{ d.created_at.strftime('%Y-%m-%d %H:%M') }} UTC</td>
+          </tr>
+        {% endfor %}
+
+{% endcall %}
+  {% else %}
+    {% if is_connected %}{{ m.empty_state("No documents yet - they appear after the first run of the source.") }}{% else %}{{ m.empty_state("No documents yet - upload one above.") }}{% endif %}
+  {% endif %}
+  {# Batch 13: Trados packages. An uploaded .sdlppx becomes one document per target
+     SDLXLIFF; this block lists the files the import skipped and builds the return package. #}
+  {% set sdl_docs = documents | selectattr('fmt', 'equalto', 'sdlrpx') | list %}
+  {% if sdl_docs %}
+  <div id="sdl-package">
+  <h3>Trados package</h3>
+  <p>{{ sdl_docs | length }} document(s) came from a Trados project package. Download a return
+    package (.sdlrpx) to open in Trados Studio (File &gt; Open Package): it holds the package's
+    project file and the translated SDLXLIFF files.</p>
+  <p><a class="button" id="sdl-return-download" href="/projects/{{ project.id }}/export?sdl_return_package=1">Download return package (.sdlrpx)</a></p>
+  {% for d in sdl_docs %}{% set meta = (d.skeleton or {}).get('sdl_package') or {} %}
+    {% if meta.get('skipped') %}
+      <details>
+        <summary>{{ meta.get('skipped_total') or meta.get('skipped') | length }} file(s) in {{ meta.get('package') or 'the package' }} were not imported</summary>
+        <ul>{% for s in meta.get('skipped') %}<li><span class="data-mono">{{ s.path }}</span>: {{ s.reason }}</li>{% endfor %}</ul>
+      </details>
+    {% endif %}
+  {% endfor %}
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="card" data-card="langs">
+  <h2>Target languages</h2>
+  <p class="help">Add a target language. Existing locales stay untouched; run
+    translate or a workflow to populate the new one.</p>
+  {% if request.query_params.get('langs_added') is not none %}
+    <p class="ok">Applied - {{ request.query_params.get('langs_added')|int }} new locale(s) added.
+      Run translate or a workflow to populate them.</p>
+  {% elif request.query_params.get('locale_added') is not none %}
+    <p class="ok">Added {{ request.query_params.get('locale_added')|int }} new locale(s).
+      Run translate or a workflow to populate them.</p>
+  {% elif request.query_params.get('locale_removed') %}
+    {% if project_is_bound %}
+    <p class="ok" id="locale-stopped-msg">{{ request.query_params.get('locale_removed') }} stops at the next run. Nothing was deleted: its translations, translation memory and glossary entries were kept.</p>
+    {% else %}
+    <p class="ok">Removed locale {{ request.query_params.get('locale_removed') }}.
+      Its translation memory and glossary entries were kept.</p>
+    {% endif %}
+  {% elif request.query_params.get('err') == 'langset' %}
+    <p class="error" id="langset-select-error">That language set could not be found.</p>
+  {% endif %}
+  {# a11y T6: the former catch-all branch here printed every other ?err= value raw
+     (codes such as toolarge_tmx, and free text) in this card. Every page error now
+     renders once, as a sentence, in the summary at the top of main (base.html). #}
+
+  {# --- Add individual languages via the searchable picker (P2, item 4) --- #}
+  <form method="post" action="/projects/{{ project.id }}/add-locale" class="form">
+    {% include "_csrf.html" %}
+    <fieldset class="lp-fieldset">
+      <legend>Add languages</legend>
+      {% set current = locales | map(attribute='locale') | list %}
+      {% if pairs_confined %}
+      <p class="help">Showing {{ customer.name }}'s active language pairs. Use
+        <em>Show all languages</em> for the full catalog.</p>
+      {% endif %}
+      {{ m.langpicker('locale', enabled_locales, all_locales, selected=current) }}
+      <p class="help">Already-added languages are pre-checked.</p>
+    </fieldset>
+    <button type="submit">Add selected languages</button>
+  </form>
+
+  {# --- Or apply a saved Language Set (unchanged) --- #}
+  {% if language_sets %}
+    <form method="post" action="/projects/{{ project.id }}/languages" class="form inline-form">
+      {% include "_csrf.html" %}
+      <label>Or apply a <a href="/languages">language set</a>
+        <select name="language_set_id" id="langset-select"{{ fe.invalid_attrs(request, 'langset-select', message_id='langset-select-error') }}>
+          {% for ls in language_sets %}
+            <option value="{{ ls.id }}">{{ ls.name }} ({{ (ls.target_locales or [])|join(', ') }})</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Apply set</button>
+    </form>
+  {% else %}
+    <p class="muted">No <a href="/languages">language sets</a> saved yet.</p>
+  {% endif %}
+</section>
+
+<div class="grid2">
+<section class="card" data-card="tm">
+  <h2>Translation memory</h2>
+  <p class="muted">
+    Segment TM: <strong>{{ tm_count }}</strong> entries ·
+    Full-text TM: <strong>{{ ft_count }}</strong> entries
+    {% if request.query_params.get('tm_imported') is not none %}
+      · <span class="ok">imported {{ request.query_params.get('tm_imported')|int }} units
+      {%- if request.query_params.get('tm_updated', '0') != '0' %}, updated {{ request.query_params.get('tm_updated')|int }}{% endif -%}
+      {%- if request.query_params.get('tm_skipped', '0') != '0' %}, skipped {{ request.query_params.get('tm_skipped')|int }} unchanged{% endif -%}
+      {%- if request.query_params.get('tm_skipped_refusal', '0') != '0' %}, skipped {{ request.query_params.get('tm_skipped_refusal')|int }} refusal(s){% endif -%}
+      {%- if request.query_params.get('tm_skipped_integrity', '0') != '0' %}, withheld {{ request.query_params.get('tm_skipped_integrity')|int }} with broken placeholders or inline tags (not saved to TM){% endif -%}
+      {%- if request.query_params.get('tm_withheld_rows') %}{% set _wr = request.query_params.get('tm_withheld_rows').split(',')[:20] %}{% if _wr|select('string')|map('int')|select('gt', 0)|list %} <span id="tm-withheld-rows">(withheld units, by position in the file: {% for r in _wr %}{% if r|int > 0 %}{{ r|int }}{% if not loop.last %}, {% endif %}{% endif %}{% endfor %}{% if request.query_params.get('tm_skipped_integrity', '0')|int > _wr|length %}, and more; the CLI and API list the first 20 with their reasons{% else %}; the CLI and API show the reason for each{% endif %})</span>{% endif %}{% endif -%}
+      {%- if request.query_params.get('tm_skipped_unreadable', '0') != '0' %}, could not read {{ request.query_params.get('tm_skipped_unreadable')|int }} SDLTM unit(s) (the CLI and API list them with their reasons){% endif -%}
+      {%- if request.query_params.get('tm_ack_loss', '0') != '0' %}, imported {{ request.query_params.get('tm_ack_loss')|int }} placeholder-loss unit(s) you confirmed{% endif -%}
+      {%- if request.query_params.get('tm_deleted', '0')|int > 0 %}, did not restore {{ request.query_params.get('tm_deleted')|int }} entr{{ 'y' if request.query_params.get('tm_deleted')|int == 1 else 'ies' }} someone deleted while the import ran (import the file again to store them){% endif -%}
+      {%- if request.query_params.get('tm_normalized', '0') != '0' %} (locales normalized to this project's pair){% endif -%}
+      </span>
+    {% endif %}
+    {% if request.query_params.get('err') == 'tmx' %}
+      · <span class="error-inline" id="tm-import-file-error">TMX import failed</span>
+    {% elif request.query_params.get('err') == 'tmx_locales' %}
+      · <span class="error-inline" id="tm-import-file-error">TMX import refused: that locale pair is not one this
+        project translates, so the entries could never be matched</span>
+    {% elif request.query_params.get('err') == 'toolarge_tmx' %}
+      · <span class="error-inline" id="tm-import-file-error">file too large: it exceeds the server's upload size limit</span>
+    {% endif %}
+  </p>
+  <form method="post" action="/projects/{{ project.id }}/tm/import"
+        enctype="multipart/form-data" class="form inline-form">
+    {% include "_csrf.html" %}
+    <label>Import TMX or SDLTM <input type="file" name="file" id="tm-import-file" accept=".tmx,.xml,.sdltm,.xlsx,.csv,.tsv" required{{ fe.invalid_attrs(request, 'tm-import-file', message_id='tm-import-file-error') }} /></label>
+    <label>Source <input type="text" name="source_locale" value="{{ project.source_locale }}" size="8" /></label>
+    <label>Target
+      <select name="target_locale">
+        {% for l in locales %}<option value="{{ l.locale }}">{{ l.locale }}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="inline"><input type="checkbox" name="acknowledge_placeholder_loss" value="1" /> For this import only: keep units even if a placeholder is dropped or added</label>
+    <button type="submit" data-busy-label="{{ t(request, 'busy.importing') }}">Import</button>
+  </form>
+  {% if export_locales %}
+    <p class="muted">Export:
+      {% for l in export_locales %}
+        <a href="/projects/{{ project.id }}/tm/export?source={{ project.source_locale }}&target={{ l.locale }}">{{ project.source_locale }}→{{ l.locale }}</a>{% if not loop.last %} · {% endif %}
+      {% endfor %}
+    </p>
+  {% endif %}
+
+  {# Attach an ALREADY-ESTABLISHED TM (feedback item 5). A REFERENCE, not a copy:
+     this project's lookups also match the attached project's entries; nothing is
+     duplicated and detaching restores the previous behaviour exactly. The choice
+     list is filtered SERVER-SIDE to the same customer/org; a viewer sees the
+     current sources read-only (same can_write gate as the import form above). #}
+  <h3>Translation memory sources</h3>
+  <p class="help">Reuse memory that already exists - this project's matches will also
+    come from the attached projects. Nothing is copied; detaching undoes it exactly.</p>
+  {% if request.query_params.get('tm_source_added') %}
+    {% set _n = request.query_params.get('tm_src_n', '0') | int %}
+    {% set _tot = request.query_params.get('tm_src_total', '0') | int %}
+    {% if _n < _tot %}
+      {# An attach across content types is accepted but the content-type layer of the
+         read scope still applies, so some (or all) of the source's entries can never
+         match here. Say the reachable number, not the source's own. #}
+      <p class="ok">Attached - note: {{ _n }} of {{ _tot }} entries are reachable for
+        this project's content type{% if _n == 0 %}, so
+        <strong>this source will not match anything</strong> until the content types
+        line up{% endif %}.</p>
+    {% else %}
+      <p class="ok">Translation memory attached ({{ _n }} entries reachable).</p>
+    {% endif %}
+  {% elif request.query_params.get('tm_source_removed') %}
+    <p class="ok">Translation memory detached.</p>
+  {% elif request.query_params.get('tm_source_absent') %}
+    <p class="muted">That project was not attached - nothing to detach.</p>
+  {% elif request.query_params.get('err') == 'tm_source' %}
+    <p class="error" id="tm-source-select-error">That project cannot be attached.</p>
+  {% endif %}
+  {% if tm_sources %}
+    {% call m.data_table('Translation memory', [{"label": 'Project'}, {"label": 'Entries'}, {"label": 'Pairs'}] + ([{"label": '', "actions": true}] if can_write else [])) %}
+
+        {% for s in tm_sources %}
+          <tr>
+            <td><a href="/projects/{{ s.source_project_id }}">{{ s.name }}</a></td>
+            <td class="data-mono">{{ s.entry_count }}{% if s.content_type_limited %}
+              <span class="muted small">of {{ s.total_count }} (content type)</span>{% endif %}</td>
+            <td class="muted small">{{ s.pairs | join(', ') or '-' }}</td>
+            {% if can_write %}
+              <td class="row-actions">
+                {% call m.row_menu('tsm-' ~ s.source_project_id, 'More actions for ' ~ s.name) %}
+                <form method="post" action="/projects/{{ project.id }}/tm-sources/remove">
+                  {% include "_csrf.html" %}
+                  <input type="hidden" name="source_project_id" value="{{ s.source_project_id }}" />
+                  <button type="submit" role="menuitem" class="rm-danger">Detach source</button>
+                </form>
+                {% endcall %}
+              </td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+
+{% endcall %}
+  {% else %}
+    <p class="muted">No attached sources - this project matches only its own memory.</p>
+  {% endif %}
+  {% if can_write %}
+    {% if tm_source_choices %}
+      <form method="post" action="/projects/{{ project.id }}/tm-sources/add" class="form inline-form">
+        {% include "_csrf.html" %}
+        <label>Attach memory from
+          <select name="source_project_id" id="tm-source-select"{{ fe.invalid_attrs(request, 'tm-source-select', message_id='tm-source-select-error') }}>
+            {% for c in tm_source_choices %}
+              <option value="{{ c.source_project_id }}">{{ c.name }} - {{ c.entry_count }} entries{% if c.pairs %} ({{ c.pairs | join(', ') }}){% endif %}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit">Attach</button>
+      </form>
+    {% else %}
+      <p class="muted">No other project of this customer (or a customer-less project) has
+        translation memory to attach. A project only appears here once it has at least one TM entry.</p>
+    {% endif %}
+  {% endif %}
+</section>
+
+<section class="card" data-card="glossary">
+  <h2>Glossary <span class="muted">/ termbase</span></h2>
+  <p class="muted">
+    <strong>{{ glossary_count }}</strong> term(s)
+    {% if request.query_params.get('gl_entries') %}
+      · <span class="ok">added {{ request.query_params.get('gl_entries')|int }} term(s), {{ request.query_params.get('gl_senses')|int }} sense(s){% if request.query_params.get('gl_changed') not in (none, '0') %}, {{ request.query_params.get('gl_changed')|int }} updated{% endif %}{% if request.query_params.get('gl_deleted', '0')|int > 0 %}, did not restore {{ request.query_params.get('gl_deleted')|int }} entr{{ 'y' if request.query_params.get('gl_deleted')|int == 1 else 'ies' }} someone deleted while the import ran (import the file again to store them){% endif %}</span>
+    {% endif %}
+    {% if request.query_params.get('gl_skipped') not in (none, '0') %}
+      · <span class="muted">{{ request.query_params.get('gl_skipped')|int }} TBX entr(ies) skipped - no matching language pair</span>
+    {% endif %}
+    {% if request.query_params.get('gl_added') %}
+      · <span class="ok">term added</span>
+    {% endif %}
+    {% if request.query_params.get('err') == 'glossary' %}
+      · <span class="error-inline" id="project-glossary-file-error">glossary import failed</span>
+    {% endif %}
+    {% if request.query_params.get('err') == 'glossary_add' %}
+      · <span class="error-inline" id="project-glossary-term-error">a source term is required</span>
+    {% endif %}
+    {% if request.query_params.get('err') == 'toolarge_glossary' %}
+      · <span class="error-inline" id="project-glossary-file-error">file too large: it exceeds the server's upload size limit</span>
+    {% endif %}
+  </p>
+  <h3>Add a term</h3>
+  <form method="post" action="/projects/{{ project.id }}/glossary/add" class="form inline-form">
+    {% include "_csrf.html" %}
+    <label>Source term <input type="text" name="source_term" id="project-glossary-term"
+        value="{{ request.query_params.get('add_term', '') }}" required{{ fe.invalid_attrs(request, 'project-glossary-term', message_id='project-glossary-term-error') }} /></label>
+    <label>Target term <input type="text" name="target_term" /></label>
+    <label>Target
+      <select name="target_locale">
+        {% for l in locales %}<option value="{{ l.locale }}">{{ l.locale }}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="radio"><input type="checkbox" name="dnt" value="1" /> <span>Do not translate</span></label>
+    <button type="submit">Add term</button>
+  </form>
+  {% include "_termbase_report.html" %}
+  <h3>Import CSV, TBX or MultiTerm XML</h3>
+  <form method="post" action="/projects/{{ project.id }}/glossary/import"
+        enctype="multipart/form-data" class="form inline-form">
+    {% include "_csrf.html" %}
+    <label>Import file <input type="file" name="file" id="project-glossary-file" accept=".csv,.tbx,.xml,.mtf,.xlsx,.tsv" required{{ fe.invalid_attrs(request, 'project-glossary-file', message_id='project-glossary-file-error') }} /></label>
+    <label>Source <input type="text" name="source_locale" value="{{ project.source_locale }}" size="8" /></label>
+    <label>Target
+      <select name="target_locale">
+        {% for l in locales %}<option value="{{ l.locale }}">{{ l.locale }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="submit" data-busy-label="{{ t(request, 'busy.importing') }}">Import</button>
+  </form>
+  <p class="muted">CSV columns (ten): the five core columns
+  <code>source_term, target_term, dnt, sense_label, context_cue</code>, plus five optional TBX-ish meta
+  columns <code>part_of_speech, definition, usage_example, subject_field, notes</code>. Import tolerates
+  any subset; export always emits the full header, so CSV is the lossless format.
+  A <code>.tbx</code> termbase (TBX 2.0/martif or TBX v3) imports natively -- terms plus
+  part of speech, definition, subject field and the Do-Not-Translate flag (when the term
+  has a target) for the locale pair above; TBX still carries no senses.
+  Download: <a href="/projects/{{ project.id }}/glossary/export">CSV</a> ·
+  <a href="/projects/{{ project.id }}/glossary/export?format=tbx">TBX</a></p>
+  {% if glossary_entries %}
+    {% call m.data_table('Glossary', [{"label": 'Term'}, {"label": 'Target'}, {"label": 'DNT'}, {"label": 'Senses'}]) %}
+
+        {% for g in glossary_entries %}
+          <tr>
+            <td{{ g.entry.source_locale|langattrs }}>{{ g.entry.source_term }}</td>
+            <td{% if g.entry.target_term %}{{ g.entry.target_locale|langattrs }}{% endif %}>{{ g.entry.target_term or '-' }}</td>
+            <td>{% if g.entry.dnt %}✓{% endif %}</td>
+            <td class="muted">
+              {% for s in g.senses %}<span class="chip">{{ s.sense_label }} → <span{{ g.entry.target_locale|langattrs }}>{{ s.target_term }}</span></span> {% endfor %}
+            </td>
+          </tr>
+        {% endfor %}
+
+{% endcall %}
+  {% endif %}
+  {% if glossary_next_cursor is not none %}
+  <a href="{{ request.url.include_query_params(glossary_cursor=glossary_next_cursor) }}">Next glossary terms</a>
+  {% endif %}
+  {% if request.query_params.get('glossary_cursor') %}
+  <a href="{{ request.url.include_query_params(glossary_cursor='') }}">First page</a>
+  {% endif %}
+
+  {# Attach an ALREADY-ESTABLISHED glossary (feedback item 5) - a project-level PIN
+     of an existing module glossary. An explicit pin applies to typed AND untyped
+     projects; a DRAFT one is listed but contributes nothing until approved. Choices
+     are filtered server-side to this project's customer/org. #}
+  <h3>Attached glossaries</h3>
+  <p class="help">Pin a glossary that already exists in this install; every run of this
+    project will match its terms. A workflow step that pins its own glossary still wins.</p>
+  {% if request.query_params.get('glossary_pinned') %}
+    <p class="ok">Glossary attached.</p>
+  {% elif request.query_params.get('glossary_unpinned') %}
+    <p class="ok">Glossary detached.</p>
+  {% elif request.query_params.get('glossary_pin_absent') %}
+    <p class="muted">That glossary was not attached - nothing to detach.</p>
+  {% elif request.query_params.get('err') == 'glossary_pin' %}
+    <p class="error" id="glossary-pin-select-error">That glossary cannot be attached.</p>
+  {% endif %}
+  {% if glossary_pins %}
+    {% call m.data_table('Attached glossaries', [{"label": 'Glossary'}, {"label": 'Status'}, {"label": 'Terms'}, {"label": 'Pairs'}] + ([{"label": '', "actions": true}] if can_write else [])) %}
+
+        {% for g in glossary_pins %}
+          <tr>
+            <td><a href="/glossaries/{{ g.glossary_id }}">{{ g.name }}</a></td>
+            <td>{{ m.status_badge(g.status, g.status | replace("_", " ") | capitalize) }}{% if not g.active %}
+              <span class="muted small">not applied until approved</span>{% endif %}
+              {% if g.type_note %}<span class="muted small">({{ g.type_note }};
+                pinned glossaries outrank this project's own)</span>{% endif %}</td>
+            <td class="data-mono">{{ g.term_count }}</td>
+            <td class="muted small">{{ g.pairs | join(', ') or '-' }}</td>
+            {% if can_write %}
+              <td class="row-actions">
+                {% call m.row_menu('gpm-' ~ g.glossary_id, 'More actions for ' ~ g.name) %}
+                <form method="post" action="/projects/{{ project.id }}/glossaries/remove">
+                  {% include "_csrf.html" %}
+                  <input type="hidden" name="glossary_id" value="{{ g.glossary_id }}" />
+                  <button type="submit" role="menuitem" class="rm-danger">Detach glossary</button>
+                </form>
+                {% endcall %}
+              </td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+
+{% endcall %}
+  {% else %}
+    {{ m.empty_state("No glossaries attached.") }}
+  {% endif %}
+  {% if can_write %}
+    {% if glossary_pin_choices %}
+      <form method="post" action="/projects/{{ project.id }}/glossaries/add" class="form inline-form">
+        {% include "_csrf.html" %}
+        <label>Attach glossary
+          <select name="glossary_id" id="glossary-pin-select"{{ fe.invalid_attrs(request, 'glossary-pin-select', message_id='glossary-pin-select-error') }}>
+            {% for c in glossary_pin_choices %}
+              <option value="{{ c.glossary_id }}">{{ c.name }} - {{ c.status }}, {{ c.term_count }} term(s){% if c.pairs %} ({{ c.pairs | join(', ') }}){% endif %}{% if c.type_note %} ({{ c.type_note }}){% endif %}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit">Attach</button>
+      </form>
+    {% else %}
+      <p class="muted">No glossary is available to attach -
+        <a href="/glossaries">create one</a> first.</p>
+    {% endif %}
+  {% endif %}
+</section>
+</div>
+
+{% if app_meta().auth_on %}
+<section class="card" data-card="members">
+  <h2>Members</h2>
+  <p class="help">Translators, reviewers and viewers see only their projects;
+    admins, managers and linguists see all.</p>
+  {% if request.query_params.get('member_msg') %}
+    <p class="{{ 'ok' if request.query_params.get('member_ok') == '1' else 'error' }}">
+      {{ request.query_params.get('member_msg') }}</p>
+  {% endif %}
+  {% if members %}
+    {% call m.data_table('Members', [{"label": 'Email'}, {"label": 'Role'}, {"label": 'Added by'}] + ([{"label": '', "actions": true}] if can_manage_members else [])) %}
+
+        {% for mem, u in members %}
+          <tr>
+            <td><span class="cell-primary">{{ u.email }}</span></td>
+            <td><span class="chip">{{ role_label(request, u.role) }}</span></td>
+            <td class="muted small">{{ mem.added_by or "-" }}</td>
+            {% if can_manage_members %}
+              <td class="row-actions">
+                {% call m.row_menu('mbm-' ~ u.id, 'More actions for ' ~ u.email) %}
+                <form method="post" action="/projects/{{ project.id }}/members/{{ u.id }}/remove">
+                  {% include "_csrf.html" %}
+                  <button type="submit" role="menuitem" class="rm-danger">Remove member</button>
+                </form>
+                {% endcall %}
+              </td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+
+{% endcall %}
+  {% else %}
+    <p class="muted">No members yet
+      {% if project.created_by %}- only <strong>{{ project.created_by }}</strong> and
+        privileged roles can see this project{% endif %}.</p>
+  {% endif %}
+  {% if can_manage_members %}
+    <form method="post" action="/projects/{{ project.id }}/members" class="form inline-form">
+      {% include "_csrf.html" %}
+      <label>Add member by email
+        <input type="text" name="email" placeholder="user@example.com" required />
+      </label>
+      <button type="submit">Add member</button>
+    </form>
+  {% endif %}
+</section>
+{% endif %}
+</div>
+{% endset %}
+{% macro section_label(key) -%}{{ tl(request, 'page.projects_create.' ~ key) }}{%- endmacro %}
+{% set sections = [
+  {'id': 'project-documents', 'label': 'Keys' if is_key_project else section_label('documents')},
+  {'id': 'project-languages', 'label': section_label('languages')},
+  {'id': 'project-memory', 'label': section_label('memory')},
+  {'id': 'project-glossary', 'label': section_label('glossary')}
+] %}
+{% if app_meta().auth_on %}{% set _ = sections.append({'id': 'project-members', 'label': section_label('members')}) %}{% endif %}
+{% set _ = sections.append({'id': 'project-settings', 'label': section_label('settings')}) %}
+{% call(section) m.tabs('project-sections', project.name, sections) %}
+  {% if section.id == 'project-documents' %}
+    {% if is_connected %}{% include "_project_source.html" %}{% endif %}{{ project_keys }}{{ project_delivery }}{{ project_cards }}
+  {% elif section.id == 'project-settings' %}
+    {{ project_settings }}
+  {% endif %}
+{% endcall %}
+{{ m.component_script() }}
+<script defer src="/static/project_sections.js?v={{ static_v('project_sections.js') }}"></script>
+{% with layout_page = 'project' %}{% include "_page_layout.html" %}{% endwith %}
+
+<script defer src="/static/export_dialog.js?v={{ static_v('export_dialog.js') }}"></script>
+{% endblock %}

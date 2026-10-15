@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ g.name }} - Style guide{% endblock %}
+{% block content %}
+<div class="guidance-page">
+
+<p class="muted small"><a href="/style-guides"><span aria-hidden="true">←</span> All style guides</a></p>
+{% set guidance_title %}{{ g.name }}{% endset %}
+{% set guidance_meta %}<p class="muted">
+    {% if g.status == 'approved' %}Approved by {{ g.approved_by or 'unknown' }}. Editing the body or scope reverts it to draft. Only approved guides are injected into prompts.
+    {% else %}This guide is a draft - approve it to make it eligible for injection into translation prompts.{% endif %}
+  </p>
+  <p class="muted small">Scope: {{ summary.scope }}</p>{% endset %}
+{% set guidance_status %}{% if g.status == 'approved' %}{{ m.status_badge('approved', 'Approved') }}
+    {% else %}{{ m.status_badge('draft', 'Draft') }}{% endif %}
+    {% if customer %}<span class="badge muted-badge">{{ customer.name }}</span>
+    {% else %}<span class="badge muted-badge">Org-global</span>{% endif %}{% endset %}
+{% set guidance_actions %}
+<button type="button" class="ghost layout-edit-btn" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+{% endset %}
+{{ m.page_header(guidance_title, meta=guidance_meta, status=guidance_status, secondary=guidance_actions) }}
+<nav class="guidance-sections" aria-label="{{ guidance_title | striptags }}">
+<a href="#guidance-1">Status</a>
+{% if can_edit %}<a href="#guidance-2">Scope</a>{% endif %}
+<a href="#guidance-3">Guide body</a>
+<a href="#guidance-4">What reaches the model</a>
+</nav>
+
+{# a11y T7: a ?err= error renders once, as a sentence, in the summary at the top of
+   main (base.html + _form_errors.html), never as a raw code here. #}
+
+<div id="page-layout" class="page-layout" data-layout-page="style_guide">
+<div class="grid2">
+{% call m.card(layout_key='status') %}
+  <h2 id="guidance-1">Status</h2>
+  {% if can_approve %}
+    {% if g.status == 'approved' %}
+    <form method="post" action="/style-guides/{{ g.id }}/unapprove">{% include "_csrf.html" %}
+      <button type="submit">Revert to draft</button></form>
+    {% else %}
+    <form method="post" action="/style-guides/{{ g.id }}/approve">{% include "_csrf.html" %}
+      <button type="submit">Approve style guide</button></form>
+    {% endif %}
+  {% else %}
+    <p class="help">Approval is limited to linguists and admins.</p>
+  {% endif %}
+{% endcall %}
+
+{% if can_edit %}
+{% call m.card(layout_key='rename') %}
+  <h2>Rename / delete</h2>
+  <form method="post" action="/style-guides/{{ g.id }}/rename" class="form inline-form">
+    {% include "_csrf.html" %}
+    <input type="text" name="name" aria-label="New name for {{ g.name }}" value="{{ g.name }}" size="24" required />
+    <button type="submit" class="small ghost">Rename</button>
+  </form>
+  <form method="post" action="/style-guides/{{ g.id }}/delete" class="form inline-form"
+        data-confirm-delete data-sg-name="{{ g.name }}">
+    {% include "_csrf.html" %}
+    <button type="submit" class="small ghost">Delete</button>
+  </form>
+{% endcall %}
+{% endif %}
+</div>
+
+{% if can_edit %}
+{% call m.card(layout_key='scope') %}
+  <h2 id="guidance-2">Scope</h2>
+  <form method="post" action="/style-guides/{{ g.id }}/scope" class="form">
+{% call m.form_section('guidance-fields-0', 'Scope') %}
+    {% include "_csrf.html" %}
+    <p class="help">Customer scope is fixed at creation. Editing content type or pair reverts approval to draft.</p>
+    {% if content_types %}
+    <label>Content type
+      <select name="content_type_id"><option value="">(any content type)</option>
+        {% for ct in content_types %}<option value="{{ ct.id }}"{% if ct.id == g.content_type_id %} selected{% endif %}>{{ ct.name }}{% if ct.customer_id is none %} (global){% endif %}</option>{% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    <div class="inline-form">
+      <label>Source locale
+        <select name="source_locale"><option value="">any</option>
+          {% for loc in locales %}<option value="{{ loc }}"{% if loc == g.source_locale %} selected{% endif %}>{{ label_for(loc) }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Target locale
+        <select name="target_locale"><option value="">any</option>
+          {% for loc in locales %}<option value="{{ loc }}"{% if loc == g.target_locale %} selected{% endif %}>{{ label_for(loc) }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+    <button type="submit">Save scope</button>
+  {% endcall %}
+</form>
+{% endcall %}
+
+{% call m.card(layout_key='body') %}
+  <h2 id="guidance-3">Guide body</h2>
+  <form method="post" action="/style-guides/{{ g.id }}/body" class="form">
+{% call m.form_section('guidance-fields-1', 'Guide body') %}
+    {% include "_csrf.html" %}
+    <label>Style guide text <textarea name="body" rows="14">{{ g.body }}</textarea></label>
+    <p class="help">Saving reverts an approved guide to draft (it must be re-approved before it is injected again).</p>
+    <button type="submit">Save body</button>
+  {% endcall %}
+</form>
+{% endcall %}
+{% else %}
+{% call m.card(layout_key='body') %}
+  <h2 id="guidance-3">Guide body</h2>
+  <pre class="code" style="white-space:pre-wrap">{{ g.body or '(empty)' }}</pre>
+{% endcall %}
+{% endif %}
+
+{% call m.card(layout_key='model_view') %}
+  <h2 id="guidance-4">What reaches the model</h2>
+  <p class="help">The exact fenced, sanitized, budget-capped block injected into the prompt when this guide resolves ({{ summary.body_chars }} body chars authored).</p>
+  {% if rendered %}
+  <pre class="code" style="white-space:pre-wrap; overflow-x:auto">{{ rendered }}</pre>
+  {% else %}
+  <p class="muted">This guide has no body yet, so it injects nothing.</p>
+  {% endif %}
+{% endcall %}
+</div>
+{% with layout_page = 'style_guide' %}{% include "_page_layout.html" %}{% endwith %}
+
+<script nonce="{{ csp_nonce() }}">
+// SECURITY (stored-XSS-safe, mirrors content_types.html): the delete confirm reads the
+// guide name from a data-* attribute via getAttribute() (decoded plain string) rather
+// than interpolating it into an inline handler.
+(function () {
+  document.querySelectorAll('form[data-confirm-delete]').forEach(function (f) {
+    f.addEventListener('submit', function (e) {
+      var name = f.getAttribute('data-sg-name') || 'this style guide';
+      if (window.LocAsk && window.LocAsk.guard) { window.LocAsk.guard(e, 'Delete style guide "' + name + '"? This cannot be undone.'); }
+      else { e.preventDefault(); }
+    });
+  });
+})();
+</script>
+
+</div>
+{% endblock %}

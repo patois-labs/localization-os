@@ -1,0 +1,88 @@
+# Factory spec for the GitLab connector: merge-request localization of resource files.
+# Second provider on the shared git-provider core (app/services/connectors/git_core.py).
+#
+# The semantic build lives in git_core.py (the loop, ownership, base-moved handling) and
+# gitlab.py (the REST v4 provider); this spec drives the mechanical parity touchpoints.
+#
+# Locked decisions (do not re-litigate):
+#   - TOPOLOGY = T3 (one target file per locale), translation unit = a KEY in a key project.
+#   - AUTH = access token paste with the `api` scope (the REST commits and merge request
+#     endpoints do not accept `write_repository`, which is Git-over-HTTP only). Project access
+#     token where the plan has them (self-managed, GitLab.com Premium and up), else a personal
+#     access token. Sent as PRIVATE-TOKEN to the validated https base URL only.
+#   - repo = the full project path, subgroups allowed (group/subgroup/project).
+#   - Licence: bb-io/GitLab has NO licence file (404): not opened, not referenced. Built from
+#     docs.gitlab.com only, so there is no bb_io block and no THIRD_PARTY_NOTICES entry.
+
+connector:
+  kind: gitlab
+  name: GitLab
+  class_name: GitLabConnector
+  module: gitlab
+  icon: "🦊"
+  cat: "Code hosting"
+  blurb: >-
+    Localize the resource files in a GitLab project (JSON, nested JSON, gettext PO, or a resource file with a key view such as .properties, .strings or YAML). Source
+    strings are imported into a key project, translated through the normal pipeline, and the
+    target-language files come back as ONE commit on a working branch with ONE merge request
+    per run. The base branch is never written directly.
+  docs_url: "https://docs.gitlab.com/api/rest/"
+  supports_oauth: false
+  archived: false
+
+  topology: T3
+  auth: [api_key]
+  api_version: "v4"
+  rich_text: none
+  regions: base_url
+  change_signals:
+    webhook_sig: null
+    poll_field: sha
+    stale_flag: null
+    thin_payload: false
+  anti_loop_label: false
+
+  retry_noun: file
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<source-file-path>"
+  api_docstring: >-
+    Localize the project's resource files into the connection's target locales and open
+    (or update) one merge request holding the target-language files (T3). article_ids are
+    source file paths and must match the connection's configured source path patterns.
+
+  article_noun_phrase: "a GitLab resource file"
+  cli_parser_help: >-
+    Localize GitLab resource files into the connection's locales as ONE commit on a working
+    branch and ONE merge request.
+
+  item_units:
+    scan: "the resource files in your project that match the source path patterns (JSON, gettext PO, or a resource file with a key view such as .properties, .strings or YAML)"
+    becomes: "one target-language file per locale, committed together on a working branch and opened as a single merge request against the base branch (the base branch is never written directly)"
+
+  help_row_body: "Localize GitLab resource files (JSON, nested JSON, gettext PO) into the connection's locales as ONE commit on a working branch and ONE merge request (T3). Body: <code>article_ids</code>/<code>article_id</code> (source file paths matching the configured patterns), <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Localize GitLab resource files into the connection's locales: the source files are imported into the connection's key project, translated, and the target-language files are committed together on a working branch with one merge request against the base branch (T3). `--article-ids` are source file paths matching the configured patterns."
+
+  cli_expected_desc: "localize GitLab resource files into per-locale files committed on a working branch with one merge request (T3 over the shared git-provider core; POST /api/connectors/{cid}/gitlab/translate parity)"
+
+  config_fields:
+    - {name: repo, label: "Project", help: "The full project path, for example acme/website or acme/team/website (subgroups allowed).", placeholder: "acme/website"}
+    - {name: base_branch, label: "Base branch", help: "The branch the merge request targets. It is never written directly.", required: false, placeholder: "main"}
+    - {name: source_paths, label: "Source file paths", help: "Comma-separated paths or patterns of the SOURCE-language files. Use {locale} for the language code, for example locales/{locale}.json or po/{locale}.po.", placeholder: "locales/{locale}.json"}
+    - {name: source_locale, label: "Source locale", help: "The language of the source files.", required: false, placeholder: "en-US"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated locale codes to produce.", required: false, placeholder: "fr-FR, de-DE"}
+    - {name: branch_pattern, label: "Working branch", help: "Branch the commit goes to. Must contain {connection}, which is replaced by the connection id (default loc/{connection}). Never the base, default or a protected branch.", required: false, placeholder: "loc/{connection}"}
+    - {name: base_url, label: "GitLab URL (self-managed)", help: "Leave empty for gitlab.com. For a self-managed server, its https address, for example https://gitlab.acme.com.", required: false, placeholder: "https://gitlab.com"}
+  secret_fields:
+    - {name: token, label: "Access token", help: "A project access token (Developer role or higher) or a personal access token with the api scope. write_repository alone does not work with the REST API.", secret: true, placeholder: "glpat-..."}
+  setup_steps:
+    - "In GitLab, open the project, Settings, Access tokens, Add new token (project access tokens need a self-managed server or GitLab.com Premium). On GitLab.com Free, use your avatar, Edit profile, Access, Personal access tokens, Generate token."
+    - "Choose the Developer role (project token) and the api scope, then copy the token."
+    - "Paste the token here, and set the source path pattern, for example locales/{locale}.json."
+  other_side: >-
+    Change detection is poll-based: run on a schedule. An unchanged source file makes no
+    commit. Review and merge the merge request in GitLab; this connector never merges it.

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2" xmlns:gs4tr="http://www.gs4tr.org/schema/xliff-ext">
+  <file original="guide.docx" source-language="en-US" target-language="de-DE" datatype="x-docx" tool-id="hand-written-fixture">
+    <body>
+      <trans-unit id="1"><source>Open the <bpt id="1">&lt;b&gt;</bpt>Settings<ept id="1">&lt;/b&gt;</ept> menu.</source><target state="needs-translation"></target></trans-unit>
+      <trans-unit id="2"><source>Then click <ph id="2">{0}</ph>.</source><target state="needs-review-translation" gs4tr:score="75">Dann klicken.</target></trans-unit>
+      <trans-unit id="3" gs4tr:locked="true"><source>Locked line.</source><target state="translated" gs4tr:score="100">Gesperrte Zeile.</target></trans-unit>
+      <trans-unit id="4"><source>Confirmed line.</source><target state="translated">Bestaetigte Zeile.</target></trans-unit>
+      <trans-unit id="5"><source>Left untranslated.</source></trans-unit>
+      <trans-unit id="6"><source>Reviewed line.</source><target state="signed-off">Gepruefte Zeile.</target></trans-unit>
+    </body>
+  </file>
+</xliff>

@@ -1,0 +1,271 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_custom_fields.html" as cfm %}
+{% block title %}Projects{% endblock %}
+{% block content %}
+{% if request.query_params.get('file_pending') %}
+<p class="warn" role="status">Project records deleted. Upload erasure is pending because storage deletion failed. It will be retried automatically.</p>
+{% endif %}
+{% if request.query_params.get('lab_datasets_preserved', '0') | int > 0 %}
+<p class="banner-warn" role="status">{{ request.query_params.get('lab_datasets_preserved') | int }} Lab snapshot(s) still hold this project's document text.</p>
+{% endif %}
+{% set new_project_action %}
+    <button type="button" class="primary" data-np-open
+            data-spotlight-anchor="project"
+            data-spotlight-title="{{ t(request, 'page.onboarding.step_project_title') }}"
+            data-spotlight-desc="{{ t(request, 'page.onboarding.spot_project_target') }}">+ New project</button>
+{% endset %}
+{% set projects_intro %}<p>Every translation project in your workspace. <a href="/help/documents">How projects work</a></p>{% endset %}
+{{ m.page_header("Projects", meta=projects_intro, primary=new_project_action) }}
+
+<section class="card flat" id="projects-list">
+  {% set qs = ('&q=' ~ (q|urlencode)) if q else '' %}{% set tqs = (('&type=' ~ (type_filter|urlencode)) if type_filter else '') ~ ('&intake=connected' if intake_filter else '') %}
+  {% set _filtered = status_filter != 'default' or archived_filter == 'only' or type_filter or intake_filter %}
+  <div class="list-toolbar">
+    <form class="list-search-form" method="get" action="/projects" role="search">
+      <label class="list-search"><span class="sr-only">Search projects</span>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+        <input type="search" name="q" value="{{ q or '' }}" placeholder="Search by name or customer" autocomplete="off" />
+      </label>
+      {% if status_filter != 'default' %}<input type="hidden" name="status" value="{{ status_filter }}" />{% endif %}
+      {% if type_filter %}<input type="hidden" name="type" value="{{ type_filter }}" />{% endif %}
+      {% if intake_filter %}<input type="hidden" name="intake" value="connected" />{% endif %}
+    </form>
+    <details class="filters"{% if _filtered %} open{% endif %}>
+      <summary><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 5h18l-7 8v6l-4-2v-4z"></path></svg> Filters</summary>
+      <div class="filters-panel">
+  {#- Custom project fields (SPEC-project-automation part C): one filter box per filterable
+      field plus the column picker. Filters are GET parameters f.<key>=<expression>. -#}
+  {% if cf_admin %}<p class="muted small"><a href="/settings/custom-fields">{{ 'Manage custom fields' if cf_defs else 'Add custom fields' }}</a></p>{% endif %}
+  {% if cf_defs %}
+  <form class="cf-filter-form" method="get" action="/projects">
+    <input type="hidden" name="status" value="{{ status_filter }}" />
+    {% if q %}<input type="hidden" name="q" value="{{ q }}" />{% endif %}
+    {% if type_filter %}<input type="hidden" name="type" value="{{ type_filter }}" />{% endif %}
+    {% if intake_filter %}<input type="hidden" name="intake" value="connected" />{% endif %}
+    {% if archived_filter != 'active' %}<input type="hidden" name="archived" value="{{ archived_filter }}" />{% endif %}
+    {% if cf_sort %}<input type="hidden" name="sort" value="{{ cf_sort }}" /><input type="hidden" name="dir" value="{{ cf_dir }}" />{% endif %}
+    {% for d in cf_defs if d.filterable %}
+      <label class="small">{{ d.label }}
+        <input type="text" name="f.{{ d.key }}" value="{{ cf_filters.get(d.key, '') }}" size="14"
+               placeholder="{{ 'e.g. >=2026-01-01' if d.type in ('number', 'date') else ('contains...' if d.type in ('text', 'long_text', 'url') else 'exact value') }}" /></label>
+    {% endfor %}
+    <button type="submit" class="small">Apply field filters</button>
+    {% if cf_filters %}<a class="btnlink small" href="/projects?status={{ status_filter }}{{ qs }}{{ tqs }}">Clear field filters</a>{% endif %}
+  </form>
+  {% if cf_note %}<p class="warn small" role="status">{{ cf_note }}</p>{% endif %}
+  <form class="cf-columns-form" method="post" action="/projects/columns">
+    {% include "_csrf.html" %}
+    <fieldset><legend class="small">Columns shown in the list</legend>
+    {% set _shown = cf_cols | map(attribute='key') | list %}
+    {% for d in cf_defs %}
+      <label class="checkbox small"><input type="checkbox" name="col" value="{{ d.key }}"{% if d.key in _shown %} checked{% endif %} /> {{ d.label }}</label>
+    {% endfor %}
+    </fieldset>
+    <button type="submit" class="small ghost">Save columns</button>
+  </form>
+  {% endif %}
+  {# --- status filter chips (P1, item 2). Default hides done/closed/cancelled. --- #}
+  <p class="chips filter-chips">
+    <a class="chip {% if status_filter == 'default' %}active{% endif %}"{% if status_filter == 'default' %} aria-current="true"{% endif %}
+       href="/projects?status=default{{ qs }}">Active (default)</a>
+    <a class="chip {% if status_filter == 'all' %}active{% endif %}"{% if status_filter == 'all' %} aria-current="true"{% endif %}
+       href="/projects?status=all{{ qs }}">All</a>
+    {% for s in status_all %}
+      <a class="chip {% if status_filter == s %}active{% endif %}"{% if status_filter == s %} aria-current="true"{% endif %}
+         href="/projects?status={{ s }}{{ qs }}{{ tqs }}">{{ status_labels.get(s, s) }}</a>
+    {% endfor %}
+  </p>
+  {#- Archive filter (residual sweep: archive verbs). Default hides archived projects; this
+      toggle reveals them (retire/restore view) and back. -#}
+  <p class="chips filter-chips">
+    {% if archived_filter == 'only' %}
+      <a class="chip active" href="/projects?status={{ status_filter }}{{ qs }}{{ tqs }}"><span aria-hidden="true">←</span> Back to active</a>
+      <span class="chip active">Archived only</span>
+    {% else %}
+      <a class="chip" href="/projects?status=all{{ qs }}{{ tqs }}&amp;archived=only">Show archived</a>
+    {% endif %}
+  </p>
+
+  {#- SPEC-key-based-projects section 6: the project TYPE filter. Rendered only while
+      the kill switch is on -- with one type in existence a "Documents / Keys" chip row
+      is noise, and with the switch off the whole affordance disappears. -#}
+  {% if feature_enabled('keys') %}
+  <p class="chips filter-chips">
+    <a class="chip {% if not type_filter %}active{% endif %}"
+       href="/projects?status={{ status_filter }}{{ qs }}">All types</a>
+    {% for pt in project_types %}
+      <a class="chip {% if type_filter == pt %}active{% endif %}"
+         href="/projects?status={{ status_filter }}{{ qs }}&type={{ pt }}">{{ 'Keys' if pt == 'key_based' else 'Documents' }}</a>
+    {% endfor %}
+  </p>
+  {% endif %}
+  {#- Connected projects: the source filter. "Connected" lists only projects whose content comes
+      from a connected system. -#}
+  {% if connected_enabled or intake_filter %}
+  <p class="chips filter-chips" id="intake-filter">
+    <a class="chip {% if not intake_filter %}active{% endif %}"{% if not intake_filter %} aria-current="page"{% endif %}
+       href="/projects?status={{ status_filter }}{{ qs }}{% if type_filter %}&type={{ type_filter|urlencode }}{% endif %}">All sources</a>
+    <a class="chip {% if intake_filter %}active{% endif %}"{% if intake_filter %} aria-current="page"{% endif %}
+       href="/projects?status={{ status_filter }}{{ qs }}{% if type_filter %}&type={{ type_filter|urlencode }}{% endif %}&intake=connected">Connected</a>
+  </p>
+  {% endif %}
+      </div>
+    </details>
+  </div>
+
+  {% if q %}
+    <p class="muted small">Filtered by "<strong>{{ q }}</strong>" - {{ total }} match(es).
+      <a href="/projects">Clear</a></p>
+  {% endif %}
+  <p><span class="count-chip">{{ total }} project{{ '' if total == 1 else 's' }}</span> <a class="help-hint" href="/help/documents" title="Documents and the editor guide" aria-label="Documents and the editor guide">?</a></p>
+  {% if rows %}
+    {% set _cols = [{"label": 'Project'}, {"label": 'Languages'}, {"label": 'Progress'}, {"label": 'Status'}, {"label": 'Due'}] %}
+    {% for c in cf_cols %}
+      {% set _next_dir = 'desc' if (cf_sort == 'f.' ~ c.key and cf_dir == 'asc') else 'asc' %}
+      {% set _lbl %}{% if c.filterable %}<a href="/projects?status={{ status_filter }}{{ qs }}{{ tqs }}{% for k, v in cf_filters.items() %}&amp;f.{{ k|urlencode }}={{ v|urlencode }}{% endfor %}&amp;sort=f.{{ c.key|urlencode }}&amp;dir={{ _next_dir }}" title="Sort by {{ c.label }}">{{ c.label }}{% if cf_sort == 'f.' ~ c.key %} <span aria-hidden="true">{{ '&uarr;'|safe if cf_dir == 'asc' else '&darr;'|safe }}</span><span class="sr-only">(sorted {{ 'ascending' if cf_dir == 'asc' else 'descending' }})</span>{% endif %}</a>{% else %}{{ c.label }}{% endif %}{% endset %}
+      {% set _ = _cols.append({"label": _lbl, "sort": (('ascending' if cf_dir == 'asc' else 'descending') if cf_sort == 'f.' ~ c.key else none)}) %}
+    {% endfor %}
+    {% set _ = _cols.append({"label": '', "actions": true}) %}
+    {% call m.data_table('All projects', _cols, css_class='projects-table') %}
+
+        {% for r in rows %}
+          {% set st = r.project.status %}
+          <tr>
+            {#- A-F8: the Keys badge is a LINK to /projects/<id>/keys, which 404s with
+                the switch off, so it gates on the switch too. -#}
+            <td>
+              <span class="cell-primary"><a class="trunc" href="/projects/{{ r.project.id }}" style="max-width:32ch">{{ r.project.name }}</a></span>
+              <span class="cell-secondary">{% if r.project.customer_id %}<span class="trunc" style="max-width:26ch">{{ r.customer }}</span>{% else %}<span class="badge warn" title="This project has no customer - assign one on the project page">No customer</span>{% endif %}</span>
+              {%- if r.project.project_type == 'key_based' and feature_enabled('keys') %}
+              <a class="badge beta" href="/projects/{{ r.project.id }}/keys"
+                 title="Key-based project - open the key grid">Keys</a>{% elif r.project.intake == 'connected' %}{% set _src = src_labels.get(r.project.id) or {} %}<span class="cell-tag">Connected</span> <span class="badge {{ 'muted-badge' if _src.get('bound') else 'warn' }}" data-source-badge>{{ _src.get('label') or 'Not connected yet' }}</span>{% elif r.project.project_type != 'key_based' %}<span class="cell-tag">Documents</span>{% endif %}</td>
+            <td>
+              <span class="data-mono">{{ r.project.source_locale }}</span>
+              <span class="cell-secondary">to <span class="data-mono">{{ r.locales|join(', ') or '-' }}</span></span></td>
+            <td><div class="prog"><div class="prog-bar" style="width:{{ r.approved_pct }}%"></div></div>
+              <span class="cell-secondary">{{ r.approved_pct }}% approved</span>
+              <div class="cell-secondary">{% if r.segments %}<span title="Each segment is counted once per target language">{{ r.segments }} translations ({{ r.source_segments }} segments x {{ r.locale_count }} language{{ '' if r.locale_count == 1 else 's' }})</span>{% else %}No segments yet{% endif %}{% if r.project.project_type == 'key_based' %}<span title="A key project has no documents - the bar shows approved key VALUES"> - keys</span>{% else %} - {{ r.docs }} doc{{ '' if r.docs == 1 else 's' }}{% endif %}</div></td>
+            <td class="status-cell">
+              {# A project with no content yet is not "in translation" (#563): the stored
+                 lifecycle stays, only what it reads as changes until there is something to translate. #}
+              {% if st == 'in_translation' and not r.segments %}{{ m.status_badge('new', 'No content yet', 'status') }}
+              {% else %}{% set _tone = 'exact' if st == 'completed' else ('status' if st in ('closed', 'cancelled') else 'run') %}{{ m.status_badge(st, status_labels.get(st, st), _tone) }}{% endif %}
+              {% if r.due_status == 'overdue' %}
+                <span class="badge fuzzy" title="Due {{ r.project.due_date.strftime('%Y-%m-%d') }}">Overdue</span>
+              {% elif r.due_status == 'due_soon' %}
+                <span class="badge fuzzy" title="Due {{ r.project.due_date.strftime('%Y-%m-%d') }}">Due soon</span>
+              {% endif %}
+            </td>
+            <td class="data-mono">{% if r.project.due_date %}{{ r.project.due_date.strftime('%Y-%m-%d') }}{% else %}<span class="muted">No date</span>{% endif %}</td>
+            {% for c in cf_cols %}<td>{{ cfm.cf_value(c, cf_values.get(r.project.id, {}).get(c.key)) }}</td>{% endfor %}
+            <td class="row-actions">
+              {% call m.row_menu('pm-' ~ r.project.id, 'More actions for ' ~ r.project.name) %}
+                <a role="menuitem" href="/projects/{{ r.project.id }}">Open project</a>
+                {% if st in ('completed', 'closed') %}<a role="menuitem" href="/projects/{{ r.project.id }}/export" title="Download translated files">Download translated files</a>{% endif %}
+              {% endcall %}
+            </td>
+          </tr>
+        {% endfor %}
+
+{% endcall %}
+    {% if pages and pages > 1 %}
+      {{ m.pager('/projects', page, pages, total, 'projects', ('&status=' ~ (status_filter|urlencode)) ~ tqs ~ qs ~ cf_qs) }}
+    {% endif %}
+  {% else %}
+    {% set empty_message %}{% if q %}No projects match "{{ q }}".{% else %}No projects yet - <a href="/projects#new" data-np-open>New project</a> to create one.{% endif %}{% endset %}{{ m.empty_state(empty_message) }}
+  {% endif %}
+</section>
+
+<section class="card" id="templates">
+  <h2>Create from template</h2>
+  {% if tpl_warn %}<p class="error">{{ tpl_warn }}</p>{% endif %}
+  {% if templates %}
+  <form method="post" action="/projects/from-template" class="form inline-form">
+    {% include "_csrf.html" %}
+    <label>Template <select name="template_id">
+      {% for t in templates %}
+      <option value="{{ t.id }}">{{ t.name }} ({{ t.source_locale }} → {{ (t.target_locales or [])|length }} lang{{ 's' if (t.target_locales or [])|length != 1 }}{% if t.customer_id %}, customer #{{ t.customer_id }}{% endif %})</option>
+      {% endfor %}
+    </select></label>
+    <label>New project name <input type="text" name="name" placeholder="New project name" required /></label>
+    {# A project requires a customer. For a customer-scoped template leave this blank
+       (its own customer is used); a GLOBAL template needs one picked here. #}
+    <label>Customer
+      <select name="customer_id">
+        <option value="">- template's customer / pick one -</option>
+        {% for c in customers %}
+        <option value="{{ c.id }}"{% if customers|length == 1 %} selected{% endif %}>{{ customer_label(c) }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% if connected_enabled %}<label class="check"><input type="checkbox" name="connected" value="1" /> Connected project <span class="muted small">(content comes from a connected system; you pick the source on the project page. Nothing is bound or scheduled.)</span></label>{% endif %}
+    <button type="submit">Create from template</button>
+  </form>
+  <p class="help">A project needs a customer. Global templates: pick one above.</p>
+  <details class="mt">
+    <summary>Manage templates</summary>
+    {% call m.data_table('Manage templates', [{"label": 'Name'}, {"label": 'Scope'}, {"label": 'Languages'}, {"label": 'Provider'}, {"label": '', "actions": true}]) %}
+
+      {% for t in templates %}
+      <tr>
+        <td><span class="trunc" style="max-width:26ch">{{ t.name }}</span>{% if t.description %} <span class="muted">- {{ t.description }}</span>{% endif %}</td>
+        <td>{% if t.customer_id %}customer #{{ t.customer_id }}{% else %}global{% endif %}</td>
+        <td class="data-mono">{{ t.source_locale }} → {{ (t.target_locales or [])|join(', ') }}</td>
+        <td>{{ t.default_provider }}</td>
+        <td>
+          {% if can_manage %}
+          <form method="post" action="/templates/{{ t.id }}/rename" class="rowform">
+            {% include "_csrf.html" %}
+            <input type="text" name="name" aria-label="New name for {{ t.name }}" value="{{ t.name }}" size="16" required />
+            <button type="submit" class="btn-small">Rename</button>
+          </form>
+          {# SECURITY: the name rides in a data-* attribute (safe HTML-attribute
+             context) and confirm() runs from a static addEventListener handler
+             below - NEVER interpolated into an inline on* JS string (that would be
+             stored XSS: the browser HTML-decodes the escaped quote before the JS
+             parser runs, so a crafted name breaks out). #}
+          <form method="post" action="/templates/{{ t.id }}/delete" class="rowform"
+                data-confirm-delete-tpl data-tpl-name="{{ t.name }}">
+            {% include "_csrf.html" %}
+            <button type="submit" class="small danger-btn">Delete</button>
+          </form>
+          {% else %}
+          <span class="muted small">-</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+
+{% endcall %}
+  </details>
+  {% else %}
+  {% set empty_message %}No templates yet - open a project and use <em>Save as template</em>
+    to capture its languages, provider, workflow, and segmentation for reuse.{% endset %}{{ m.empty_state(empty_message) }}
+  {% endif %}
+</section>
+
+<script nonce="{{ csp_nonce() }}">
+// SECURITY (stored-XSS fix): the template delete confirm() reads the name from a
+// data-* attribute via getAttribute() and concatenates it into the confirm() argument
+// at runtime - never interpolated into an inline on* handler (which the browser would
+// HTML-decode before the JS parser runs, letting a crafted name break out).
+(function () {
+  document.querySelectorAll('form[data-confirm-delete-tpl]').forEach(function (f) {
+    f.addEventListener('submit', function (e) {
+      var name = f.getAttribute('data-tpl-name') || 'this template';
+      if (window.LocAsk && window.LocAsk.guard) { window.LocAsk.guard(e, 'Delete template "' + name + '"?'); }
+      else { e.preventDefault(); }
+    });
+  });
+})();
+</script>
+
+{# SPEC-ask-draft section 4: the grounded "Ask about this page" panel. This is the
+   DOCUMENTS module's landing page (projects are the containers documents live in),
+   so it carries the documents card's panel and the "?" link above. Hidden (and its
+   route 404s) when the assist_enabled kill switch is off, and hidden for a caller
+   who cannot POST. #}
+{% with assist_module = 'documents' %}{% include "_assist_panel.html" %}{% endwith %}
+
+{% endblock %}

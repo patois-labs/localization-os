@@ -1,0 +1,12 @@
+{# SPEC Workflow Studio Wave C: the Workflows-area tab strip (Dashboard | Building
+   blocks). Reuses the app's existing .tabs/.tab pill pattern (style.css) - no new
+   CSS. `active_tab` is 'dashboard' (default) or 'building-blocks'; callers that omit
+   it get the dashboard highlighted. English labels, matching this area's existing
+   hardcoded-English convention (workflows.html / the former templates.html). #}
+{% set _tab = active_tab | default('dashboard') %}
+<nav class="tabs wf-area-tabs" aria-label="Workflows sections">
+  <a class="tab {% if _tab == 'dashboard' %}active{% endif %}" href="/workflows"
+     {% if _tab == 'dashboard' %}aria-current="page"{% endif %}>Dashboard</a>
+  <a class="tab {% if _tab == 'building-blocks' %}active{% endif %}" href="/workflows/building-blocks"
+     {% if _tab == 'building-blocks' %}aria-current="page"{% endif %}>Building blocks</a>
+</nav>

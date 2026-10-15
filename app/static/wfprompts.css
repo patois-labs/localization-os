@@ -1,0 +1,8 @@
+/* #630: locked, editable prompts on the workflow page. Tokens only; no new colours. */
+.ux-workflows .wfl-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
+.ux-workflows .wfl { margin-bottom: var(--space-2); }
+.ux-workflows .wfl > form.wfl-restore { display: inline-block; margin-top: var(--space-2); }
+.ux-workflows .wfl-status { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-1) 0; }
+.ux-workflows textarea[data-lock-field][readonly] { background: var(--panel-2); border-style: dashed; cursor: default; }
+.ux-workflows .wf-pagepanel[hidden] { display: none; }
+.ux-workflows .wf-pagepanel > .card:first-child { margin-top: var(--space-3); }

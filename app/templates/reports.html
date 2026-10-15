@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_viz_macros.html" as vm %}
+{% import "_form_errors.html" as fe %}
+{% block error_summary %}{{ fe.error_summary(request, err|default(none), field=err_field|default(none)) }}{% endblock %}
+{% block title %}Reports{% endblock %}
+{% block content %}
+<div class="insight-page insight-reports">
+
+{% set insight_title %}Reports{% endset %}
+{% set insight_meta %}<p class="muted">Pipeline health across all projects.</p>{% endset %}
+{% set insight_actions %}
+<button type="button" class="ghost" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+{% endset %}
+{{ m.page_header(insight_title, meta=insight_meta, secondary=insight_actions) }}
+<nav class="insight-sections" aria-label="Reports">
+<a href="#insight-tm-leverage">TM leverage</a>
+<a href="#insight-report-builder">Report builder</a>
+</nav>
+
+
+<div class="kpis">
+  <div class="kpi"><span class="kpi-num">{{ segments }}</span><span class="kpi-lbl">Segments</span></div>
+  <div class="kpi"><span class="kpi-num">{{ avg_lqa if avg_lqa is not none else '-' }}</span><span class="kpi-lbl">Avg LQA</span></div>
+  <div class="kpi"><span class="kpi-num">{{ tm_total }}</span><span class="kpi-lbl">Segment TM</span></div>
+  <div class="kpi"><span class="kpi-num">{{ ft_total }}</span><span class="kpi-lbl">Full-text TM</span></div>
+  <div class="kpi"><span class="kpi-num">{{ gloss_total }}</span><span class="kpi-lbl">Glossary terms</span></div>
+</div>
+
+<div id="page-layout" class="page-layout" data-layout-page="reports">
+<section class="card" data-card="leverage">
+  <h2 id="insight-tm-leverage">TM leverage</h2>
+  <p class="muted small">How much of this work reused translation memory vs had no
+    TM match at all (machine-translated, typed, or imported), across every
+    project you can see.</p>
+  {{ vm.tm_leverage_bar(tm_leverage, segments) }}
+</section>
+
+{% macro bars(title, data, layout_key=none) %}
+<section class="card"{% if layout_key %} data-card="{{ layout_key }}"{% endif %}>
+  <h2>{{ title }}</h2>
+  {% if data %}
+    {% set mx = data.values()|max %}
+    {% for k, v in data.items() %}
+      <div class="barrow"><span class="barlbl">{{ k }}</span>
+        <div class="bar"><div class="bar-fill" style="width:{{ (100 * v / mx)|round }}%"></div></div>
+        <span class="barval">{{ v }}</span></div>
+    {% endfor %}
+  {% else %}{{ m.empty_state('No data yet.') }}{% endif %}
+</section>
+{% endmacro %}
+
+<div class="grid2">
+  {{ bars("Segment status", status, layout_key='status') }}
+  {{ bars("MT provider usage (workflow steps)", provider_usage, layout_key='providers') }}
+  {{ bars("LQA findings by severity", sev, layout_key='severity') }}
+  {{ bars("Workflow run outcomes", run_status, layout_key='runs') }}
+</div>
+</div>
+{% with layout_page = 'reports' %}{% include "_page_layout.html" %}{% endwith %}
+{# Wave 2 Errata E2 / LOW-4: the LQA counts (histogram + Avg LQA) include accumulated
+   workflow-step findings that survive a re-score, so a count can rise over time with no
+   new scoring. Disclosed here for an operator who never opens the qa report. #}
+<p class="muted small">LQA findings above include accumulated workflow-step history that
+  survives a re-score, so these counts can rise over time with no new scoring.</p>
+
+{{ bars("Target languages", lang) }}
+
+<section class="card">
+  <h2 id="insight-report-builder">Report builder</h2>
+  <p class="muted">Cost, tokens and volume across projects, from finished translation
+  jobs <strong>and</strong> workflow runs (each provider call is counted once).
+  Download as CSV. Word counts are <strong>derived</strong> from translated
+  segment source text (no stamped counter yet).</p>
+  <form method="get" action="/reports/run" class="report-form">
+    <div class="report-fields">
+      <label>Report
+        <select name="kind" id="report-kind"{{ fe.invalid_attrs(request, 'report-kind', when=(err_field|default(none) == 'report-kind')) }}>
+          {# CV-4: the cost kind is manager+ (spend data); hidden for an under-ranked
+             ident (the server also 403s a crafted ?kind=cost). #}
+          {% for k, cols in kinds %}
+          {% if k != 'cost' or can_cost %}
+          <option value="{{ k }}" {% if q and q.kind == k %}selected{% endif %}>{{ k }}</option>
+          {% endif %}
+          {% endfor %}
+        </select>
+      </label>
+      <label>Group by
+        <select name="group_by" id="report-group-by">
+          {# Wave 2 §4.4: each option carries the kinds that support it (data-kinds); a
+             small script hides the options an unsupported kind cannot use so the form
+             never offers a pair the server would degrade. The `actor` axis is manager+ -
+             omitted entirely for an under-ranked ident (the server also 403s it). #}
+          {% for gb in group_bys %}
+          {% if gb != 'actor' or can_actor %}
+          <option value="{{ gb }}"
+                  data-kinds="{% for k, axes in supported_group_bys.items() %}{% if gb in axes %}{{ k }} {% endif %}{% endfor %}"
+                  {% if q and q.group_by == gb %}selected{% endif %}>{{ gb }}</option>
+          {% endif %}
+          {% endfor %}
+        </select>
+        {# L7: the vendor axis is a dispatch-leg scorecard with its OWN columns - the
+           report kind does not change it. dimension/actor are the Wave 2 quality axes. #}
+        <small class="muted">vendor is a scorecard (its own columns); dimension/actor are quality axes (qa/postedit). The form filters axes to the chosen kind.</small>
+      </label>
+      <label>From
+        <input type="date" name="from" id="report-from" value="{{ q.date_from if q and q.date_from else '' }}"{{ fe.invalid_attrs(request, 'report-from', when=(err_field|default(none) == 'report-from')) }}>
+      </label>
+      <label>To
+        <input type="date" name="to" id="report-to" value="{{ q.date_to if q and q.date_to else '' }}"{{ fe.invalid_attrs(request, 'report-to', when=(err_field|default(none) == 'report-from')) }}>
+      </label>
+      <label>Customer
+        <select name="customer_id">
+          <option value="">All</option>
+          {% for c in customers %}
+          <option value="{{ c.id }}" {% if q and q.customer_id == c.id %}selected{% endif %}>{{ customer_label(c) }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Project
+        <select name="project_id">
+          <option value="">All</option>
+          {% for p in projects %}
+          <option value="{{ p.id }}" {% if q and q.project_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Provider
+        <select name="provider">
+          <option value="">All</option>
+          {% for pr in providers %}
+          <option value="{{ pr }}" {% if q and q.provider == pr %}selected{% endif %}>{{ pr }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    <div class="report-actions">
+      <button type="submit" data-busy-label="{{ t(request, 'busy.running') }}">Run report</button>
+    </div>
+  </form>
+
+  {# a11y T7: a refused run renders once, as a sentence, in the page error summary. #}
+
+  {% if report %}
+  <div class="report-results">
+    {# SPEC-wave2 §6: `_caveats()` (service) is the SINGLE on-screen source of every
+       reconciliation note - the workflow/provider/locale/vendor prose blocks that used to
+       be hand-written here are gone, so the web page, the CSV footer and the /api caveats
+       field can never drift. Rendered whenever the report carries any caveat. #}
+    {% if report.caveats %}
+    <ul class="muted small report-caveats">
+      {% for c in report.caveats %}<li>{{ c }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+    <div class="report-results-head">
+      <span class="muted">{{ report.rows|length }} row(s)</span>
+      <a class="btn"
+         href="/reports/run?format=csv&kind={{ q.kind }}&group_by={{ q.group_by }}{% if q.date_from %}&from={{ q.date_from }}{% endif %}{% if q.date_to %}&to={{ q.date_to }}{% endif %}{% if q.customer_id %}&customer_id={{ q.customer_id }}{% endif %}{% if q.project_id %}&project_id={{ q.project_id }}{% endif %}{% if q.provider %}&provider={{ q.provider }}{% endif %}">Download CSV</a>
+    </div>
+    <div class="tablewrap">
+      <div class="data-table-region" role="region" aria-label="Report builder" tabindex="0">
+<table class="report-table data-table">
+        <thead>
+          <tr>{% for c in report.columns %}<th scope="col">{{ c.replace('_', ' ') }}</th>{% endfor %}</tr>
+        </thead>
+        <tbody>
+          {% for row in report.rows %}
+          <tr>{% for c in report.columns %}<td>{{ row[c] }}</td>{% endfor %}</tr>
+          {% else %}
+          <tr><td colspan="{{ report.columns|length }}" class="muted">No data in scope for this query.</td></tr>
+          {% endfor %}
+        </tbody>
+        {% if report.rows %}
+        <tfoot>
+          <tr>{% for c in report.columns %}<td>{{ totals[c] }}</td>{% endfor %}</tr>
+        </tfoot>
+        {% endif %}
+      </table>
+</div>
+    </div>
+  </div>
+  {% endif %}
+</section>
+
+<script nonce="{{ csp_nonce() }}">
+// SPEC-wave2 §6: filter the group-by options to the axes the chosen kind supports, so an
+// unsupported (kind, axis) pair is never offered. Server-side the pair still degrades to
+// none with a caveat, so this is a cosmetic mirror (graceful when JS is off: all show).
+(function () {
+  var kind = document.getElementById('report-kind');
+  var gb = document.getElementById('report-group-by');
+  if (!kind || !gb) return;
+  function sync() {
+    var k = kind.value;
+    var opts = gb.options;
+    for (var i = 0; i < opts.length; i++) {
+      var kinds = (opts[i].getAttribute('data-kinds') || '').split(' ');
+      var ok = kinds.indexOf(k) !== -1;
+      opts[i].hidden = !ok;
+      opts[i].disabled = !ok;
+    }
+    if (gb.selectedOptions.length && gb.selectedOptions[0].disabled) gb.value = 'none';
+  }
+  kind.addEventListener('change', sync);
+  sync();
+})();
+</script>
+
+</div>
+{% endblock %}

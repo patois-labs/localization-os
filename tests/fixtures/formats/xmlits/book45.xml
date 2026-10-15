@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE book PUBLIC "-//OASIS//DTD DocBook XML V4.5//EN" "http://www.oasis-open.org/docbook/xml/4.5/docbookx.dtd">
+<book lang="en">
+  <title>Admin Manual</title>
+  <chapter id="c1">
+    <title>Backups</title>
+    <para>Back up <filename>/etc/app.conf</filename> every <emphasis>day</emphasis>.</para>
+    <screen>$ app backup --all</screen>
+  </chapter>
+</book>

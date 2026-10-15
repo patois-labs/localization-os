@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ project.name }} - Automation{% endblock %}
+{% block content %}
+<p><a href="/projects/{{ project.id }}" class="back"><span aria-hidden="true">&larr;</span> {{ project.name }}</a></p>
+
+{% set automation_meta %}<p class="muted">Where this project's content comes from and goes back to, and when it runs. Times are UTC; your local time is shown next to each one.</p>{% endset %}
+{{ m.page_header("Automation", meta=automation_meta) }}
+
+{% if msg %}
+<p class="{{ 'notice' if ok == '1' else 'error' }}" role="{{ 'status' if ok == '1' else 'alert' }}" id="automation-msg">{{ msg }}</p>
+{% endif %}
+
+{% if not auto.bound %}
+<section class="card" id="automation-source" aria-labelledby="automation-source-h">
+  <h2 id="automation-source-h">Content source</h2>
+  <p>This project has no content source yet. Pick the connection it pulls content from and writes translations back to.</p>
+  {% if can_manage %}
+    {% if choices %}
+    <form method="post" action="/projects/{{ project.id }}/automation/bind" class="form" id="automation-bind-form">
+      {% include "_csrf.html" %}
+      <label for="automation-connection">Connection
+        <select name="connection_id" id="automation-connection" required>
+          <option value="">- pick a connection -</option>
+          {% for c in choices %}
+          <option value="{{ c.id }}">{{ c.name }} ({{ c.kind }}){% if c.feeds_project_id %} - also feeds another project{% endif %}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" name="clone" value="1" /> Give this project its own copy of the connection (same credential, its own tracking)</label>
+      <label for="automation-scope">Narrow this project's scope <span class="muted small">(optional, one <code>setting=value</code> per line)</span>
+        <textarea name="scope" id="automation-scope" rows="3" placeholder="max_articles=200"></textarea>
+      </label>
+      <p class="muted small">One connection can feed several projects. When it already feeds another project, this project automatically gets its own copy of it, and an item that another project already owns is skipped here instead of being overwritten.</p>
+      <button type="submit">Use this connection</button>
+    </form>
+    {% else %}
+    <p class="muted">There is no connection this project can use yet. <a href="/connectors">Add a connection</a>, then come back.</p>
+    {% endif %}
+  {% else %}
+    <p class="muted">A manager or admin can set the content source.</p>
+  {% endif %}
+</section>
+{% else %}
+
+<section class="card" id="automation-source" aria-labelledby="automation-source-h">
+  <h2 id="automation-source-h">Content source</h2>
+  <p>
+    <strong>{{ auto.connection_name }}</strong> <span class="badge muted-badge">{{ kind_label or auto.connection_kind }}</span>
+    <span class="badge {{ 'exact' if auto.connection_status == 'connected' else 'warn' }}">{{ auto.connection_status or 'new' }}</span>
+    <a href="/connectors/connection/{{ auto.run_connection_id }}" class="small">Open the connection</a>
+  </p>
+  {% if auto.own_copy %}<p class="muted small">This project runs on its own copy of the connection, because the connection feeds other projects too. The credential stays in step with the original.</p>{% endif %}
+  {% if auto.shared_with_projects %}<p class="muted small">Also used by {{ auto.shared_with_projects|length }} other project(s).</p>{% endif %}
+  {% if auto.scope %}<p class="muted small">Scope for this project: {% for k, v in auto.scope.items() %}<code>{{ k }}={{ v }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
+  {% for w in auto.warnings %}<p class="notice notice-warn small" role="status">{{ w }}</p>{% endfor %}
+  {% if auto.owned_elsewhere %}
+  <p class="small" id="automation-owned-elsewhere">Items another project already owns on this connection (a project owns an item, per language, from the first run that reaches it):
+    {% for o in auto.owned_elsewhere %}<a href="/projects/{{ o.project_id }}">{{ o.name or ('project ' ~ o.project_id) }}</a> ({{ o.pairs }}){% if not loop.last %}, {% endif %}{% endfor %}.
+    Those items are skipped here, never overwritten.</p>
+  {% endif %}
+  {% if auto.handover_take or auto.handover_give %}
+  <div id="automation-handover">
+    {% for h in auto.handover_take %}
+    <form method="post" action="/projects/{{ project.id }}/automation/handover" class="inline-form handover-take">
+      {% include "_csrf.html" %}
+      <input type="hidden" name="from_project_id" value="{{ h.project_id }}" />
+      <span class="small">This project is waiting for {{ h.pairs }} item(s) that <a href="/projects/{{ h.project_id }}">{{ h.name or ('project ' ~ h.project_id) }}</a> owns.</span>
+      {% if can_manage %}<button type="submit" class="btn-small">Take over ownership</button>{% endif %}
+    </form>
+    {% endfor %}
+    {% for h in auto.handover_give %}
+    <form method="post" action="/projects/{{ project.id }}/automation/handover" class="inline-form handover-give">
+      {% include "_csrf.html" %}
+      <input type="hidden" name="to_project_id" value="{{ h.project_id }}" />
+      <span class="small"><a href="/projects/{{ h.project_id }}">{{ h.name or ('project ' ~ h.project_id) }}</a> is waiting for {{ h.pairs }} item(s) this project owns.</span>
+      {% if can_manage %}<button type="submit" class="btn-small">Hand over ownership</button>{% endif %}
+    </form>
+    {% endfor %}
+    <p class="muted small">Handing over moves the write-back ownership of those items; the project that receives them writes them from its next run on. It waits while a run is in progress.</p>
+  </div>
+  {% endif %}
+  {% if auto.shared_with_hidden %}<p class="muted small">{{ auto.shared_with_hidden }} more project(s) you cannot see also use this connection.</p>{% endif %}
+  {% if can_manage %}
+  <form method="post" action="/projects/{{ project.id }}/automation/unbind" class="inline-form">
+    {% include "_csrf.html" %}
+    <button type="submit" class="btn-small ghost">Remove the content source</button>
+    <span class="muted small">Stops the schedule. The connection and its tracking are kept.</span>
+  </form>
+  {% endif %}
+</section>
+
+<section class="card" id="automation-schedule" aria-labelledby="automation-schedule-h">
+  <h2 id="automation-schedule-h">Schedule</h2>
+  {% if not scheduler_enabled %}<p class="notice notice-warn" role="status">Scheduled runs are switched off for this whole install (the global scheduler switch), so nothing below will fire until it is back on. Run now still works.</p>{% endif %}
+  <p>
+    {% if auto.paused %}<span class="badge warn">paused</span>{% elif auto.enabled %}<span class="badge exact">on</span>{% else %}<span class="badge muted-badge">off</span>{% endif %}
+    {{ auto.schedule }} &middot; {{ auto.mode }} pull
+    {% if auto.run_cap_usd %}&middot; run cap ${{ '%.2f'|format(auto.run_cap_usd) }}{% endif %}
+  </p>
+  {% if auto.paused %}<p class="notice notice-warn" role="status">Paused: {{ auto.paused_reason or 'by a person' }}.</p>{% endif %}
+  {% if auto.next_at and auto.enabled and not auto.paused %}<p class="small">Next run: <time class="local-dt" datetime="{{ auto.next_at }}">{{ auto.next_at }}</time> <span class="muted local-dt-zone">(UTC)</span></p>{% endif %}
+  <p class="small muted">Times of day:
+    {% for t in auto.times %}<span class="utc-time" data-utc="{{ t }}" data-ref="{{ auto.next_at or '' }}">{{ t }} UTC</span>{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}
+  </p>
+
+  {% if can_manage %}
+  <form method="post" action="/projects/{{ project.id }}/automation/schedule" class="form" id="automation-schedule-form">
+    {% include "_csrf.html" %}
+    <fieldset>
+      <legend>When</legend>
+      <label class="check"><input type="radio" name="kind" value="times" {% if not auto.interval_minutes %}checked{% endif %} /> At times of day (UTC)</label>
+      <label for="automation-times">Times <span class="muted small">24-hour UTC, comma separated, e.g. <code>09:00, 14:30</code></span>
+        <input type="text" name="times" id="automation-times" value="{{ auto.times|join(', ') }}" maxlength="200" />
+      </label>
+      <fieldset class="days">
+        <legend class="small">Days of the week <span class="muted">(none ticked = every day)</span></legend>
+        {% for d in days %}
+        <label class="check inline"><input type="checkbox" name="days" value="{{ loop.index0 }}" {% if loop.index0 in auto.days %}checked{% endif %} /> {{ d }}</label>
+        {% endfor %}
+      </fieldset>
+      <label class="check"><input type="radio" name="kind" value="interval" {% if auto.interval_minutes %}checked{% endif %} /> Every N minutes</label>
+      <label for="automation-interval">Interval in minutes <span class="muted small">(15 to 10080)</span>
+        <input type="number" name="interval_minutes" id="automation-interval" min="0" max="10080" value="{{ auto.interval_minutes or '' }}" />
+      </label>
+    </fieldset>
+    <label for="automation-mode">What a run does
+      <select name="mode" id="automation-mode">
+        <option value="delta" {% if auto.mode == 'delta' %}selected{% endif %}>Delta: only new or changed content</option>
+        <option value="full" {% if auto.mode == 'full' %}selected{% endif %} {% if not auto.full_pull_supported %}disabled{% endif %}>Full: translate and write everything again (TM matches are free)</option>
+      </select>
+    </label>
+    {% if not auto.full_pull_supported %}<p class="muted small">A full pull is not available for this kind of connection.</p>{% endif %}
+    <p class="muted small">A full pull rewrites every target, including copies someone edited in the other tool where the connection does not protect edits. Review rules and draft or live settings still apply.</p>
+    <label for="automation-pause-after">Pause after this many failed runs in a row
+      <input type="number" name="auto_pause_after" id="automation-pause-after" min="1" max="50" value="{{ auto.auto_pause_after }}" />
+    </label>
+    {% if can_cost %}
+    <label for="automation-cap">Per-run spend cap in USD <span class="muted small">(empty = no cap; the project's monthly budget{% if budget_limit %} of ${{ '%.2f'|format(budget_limit) }}{% endif %} still applies)</span>
+      <input type="number" step="0.01" min="0" name="run_cap_usd" id="automation-cap" value="{{ auto.run_cap_usd if auto.run_cap_usd else '' }}" />
+    </label>
+    {% endif %}
+    <label class="check"><input type="checkbox" name="enabled" value="1" {% if auto.enabled %}checked{% endif %} /> Run on this schedule</label>
+    <label class="check"><input type="checkbox" name="move_schedule" value="1" /> If the connection has its own interval schedule, replace it with this one</label>
+    <p class="muted small">Turning a schedule on never starts a run right away; the first run is the next slot.</p>
+    <button type="submit">Save schedule</button>
+  </form>
+
+  <div class="row-actions">
+    <form method="post" action="/projects/{{ project.id }}/automation/run" class="inline-form" id="automation-run-form">
+      {% include "_csrf.html" %}
+      <label for="automation-run-mode" class="sr-only">Run mode</label>
+      <select name="mode" id="automation-run-mode">
+        <option value="">Use the schedule's mode ({{ auto.mode }})</option>
+        <option value="delta">Delta</option>
+        {% if auto.full_pull_supported %}<option value="full">Full refresh</option>{% endif %}
+      </select>
+      <button type="submit" {% if active_job_id %}aria-describedby="automation-running"{% endif %}>Run now</button>
+    </form>
+    {% if active_job_id %}<span id="automation-running" class="muted small">A run is in progress (<a href="/jobs/{{ active_job_id }}">job {{ active_job_id }}</a>).</span>{% endif %}
+    {% if auto.paused %}
+    <form method="post" action="/projects/{{ project.id }}/automation/resume" class="inline-form">
+      {% include "_csrf.html" %}
+      <button type="submit">Resume</button>
+    </form>
+    {% else %}
+    <form method="post" action="/projects/{{ project.id }}/automation/pause" class="inline-form">
+      {% include "_csrf.html" %}
+      <label for="automation-pause-reason" class="sr-only">Reason</label>
+      <input type="text" name="reason" id="automation-pause-reason" maxlength="200" placeholder="Reason (optional)" />
+      <button type="submit" class="ghost">Pause</button>
+    </form>
+    {% endif %}
+  </div>
+  {% else %}
+  <p class="muted small">A manager or admin can change the schedule and run the project.</p>
+  {% endif %}
+</section>
+
+<section class="card" id="automation-runs" aria-labelledby="automation-runs-h">
+  <h2 id="automation-runs-h">Run history</h2>
+  {% if auto.last_status %}
+  <p class="small">Last run: <strong>{{ auto.last_status }}</strong>{% if auto.last_at %} at <time class="local-dt" datetime="{{ auto.last_at }}">{{ auto.last_at }}</time>{% endif %}{% if auto.last_message %} - {{ auto.last_message }}{% endif %}
+    {% if auto.consecutive_failures %}<span class="badge warn">{{ auto.consecutive_failures }} failed in a row</span>{% endif %}</p>
+  {% endif %}
+  {% if runs %}
+  <div class="table-wrap">
+  <table class="data">
+    <caption class="sr-only">Recent automation runs, newest first</caption>
+    <thead><tr>
+      <th scope="col">When</th><th scope="col">Why</th><th scope="col">Mode</th><th scope="col">Result</th>
+      <th scope="col">Written</th><th scope="col">Held for review</th><th scope="col">Skipped</th><th scope="col">Failed</th>
+      {% if can_cost %}<th scope="col">Cost</th>{% endif %}
+    </tr></thead>
+    <tbody>
+    {% for r in runs %}
+    <tr>
+      <td><time class="local-dt" datetime="{{ r.started_at }}">{{ r.started_at }}</time></td>
+      <td>{{ r.trigger or '-' }}</td>
+      <td>{{ r.mode or '-' }}</td>
+      <td>{% if r.kind == 'handover' %}<span class="small">{{ r.message }}</span>{% else %}<a href="/jobs/{{ r.job_id }}">{{ r.status }}</a>{% endif %}{% if r.trigger == 'catch_up' %} <span class="badge muted-badge" title="Scheduled runs were missed, so this one run covered everything missed">catch-up{% if r.missed_slots > 1 %} ({{ r.missed_slots }} missed){% endif %}</span>{% endif %}{% if r.spend_cap_hit %} <span class="badge warn">run cap hit</span>{% endif %}{% if r.blocked %} <span class="badge warn">blocked: owned by another project</span>{% elif r.claim_conflicts %} <span class="badge muted-badge" title="Owned by another project">{{ r.claim_conflicts }} owned elsewhere</span>{% endif %}{% if r.limit == 'budget' %} <span class="badge warn">project budget reached</span>{% endif %}</td>
+      <td class="num">{{ r.created + r.updated }}</td>
+      <td class="num">{{ r.held_back + r.partial_held }}</td>
+      <td class="num">{{ r.skipped }}</td>
+      <td class="num">{{ r.failed_items }}</td>
+      {% if can_cost %}<td class="num data-mono">{% if r.cost_usd is not none %}${{ '%.4f'|format(r.cost_usd) }}{% else %}-{% endif %}</td>{% endif %}
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No automation runs yet.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<script src="/static/project_automation.js?v={{ static_v('project_automation.js') }}" defer></script>
+{% endblock %}

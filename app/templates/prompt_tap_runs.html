@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Runs - {{ names.ledger }}{% endblock %}
+
+{% block content %}
+<div class="insight-page insight-prompt_tap_runs">
+{% include "_ledger_status.html" %}
+{% set insight_title %}{{ names.ledger }} - runs{% endset %}
+{% set insight_meta %}<p class="muted">Every completion call {{ brand }} made, grouped by the
+  <strong>translation run</strong> it belonged to - one row per run, newest first. Drill
+  into a run to see its calls grouped by step then unit. Bodies are withheld here (lengths,
+  a content hash and a short head); the full payloads open on a run's page.</p>
+  <p class="help"><a href="/prompt-tap"><span aria-hidden="true">&larr;</span> Back to the {{ names.ledger }}</a></p>
+  {% if not enabled %}
+  <p class="help">Raw call capture is <strong>off</strong> - older runs still show, but new
+  per-call payloads are not written until you turn it on from the
+  <a href="/prompt-tap">{{ names.ledger }}</a>.</p>
+  {% endif %}{% endset %}
+{% set insight_actions %}{% endset %}
+{{ m.page_header(insight_title, meta=insight_meta, secondary=insight_actions) }}
+
+<section class="card">
+  <form method="get" action="/prompt-tap/runs" class="form filterbar">
+    <label class="small">Since
+      <input type="date" name="since" value="{{ run_filters.since }}" />
+    </label>
+    <label class="small">Until
+      <input type="date" name="until" value="{{ run_filters.until }}" />
+    </label>
+    <label class="small check">
+      <input type="checkbox" name="failures" value="1" {{ 'checked' if run_filters.failures else '' }} />
+      Has failures
+    </label>
+    <button type="submit" class="small">Filter</button>
+    <a href="/prompt-tap/runs" class="small ghost btnlink">Reset</a>
+  </form>
+
+  {% if not runs %}
+    {% set insight_empty %}No translation runs recorded yet. Run a workflow or a batch
+    translation and it appears here, newest first.{% endset %}{{ m.empty_state(insight_empty) }}
+  {% else %}
+    {% call m.data_table(insight_title, [{'label': 'Run'}, {'label': 'Kind'}, {'label': 'Calls'}, {'label': 'Failed'}, {'label': 'Engines'}, {'label': 'Spend'}, {'label': 'Tokens'}, {'label': 'Started'}]) %}
+        {% for r in runs %}
+        <tr>
+          <td><a href="/prompt-tap/runs/{{ r.run_id }}" class="mono">{{ r.run_id }}</a></td>
+          <td>{{ r.kind }}</td>
+          <td>{{ r.calls }}</td>
+          <td>{% if r.failures %}<span class="err">{{ r.failures }}</span>{% else %}0{% endif %}</td>
+          <td class="small">{{ (r.engines or []) | join(', ') or '-' }}</td>
+          <td class="mono">{% if r.spend_usd is not none %}${{ '%.6f'|format(r.spend_usd) }}{% else %}-{% endif %}</td>
+          <td class="mono small">{{ r.tokens_in }}/{{ r.tokens_out }}</td>
+          <td class="small muted">{{ (r.first_ts or '')[:19]|replace('T', ' ') }}</td>
+        </tr>
+        {% endfor %}
+      {% endcall %}
+  {% endif %}
+</section>
+</div>
+{% endblock %}

@@ -1,0 +1,5 @@
+{
+  "pii": ["presidio-analyzer", "spacy"],
+  "ocr": ["rapidocr", "onnxruntime"],
+  "sqlcipher": ["sqlcipher3==0.6.2"]
+}

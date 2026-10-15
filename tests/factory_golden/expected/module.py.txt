@@ -1,0 +1,169 @@
+"""WidgetCMS connector — a T2 consumer of the connector framework.
+
+GENERATED SKELETON (scripts/factory) — a STARTING POINT, not a finished connector.
+Every NotImplementedError below marks irreducibly SEMANTIC work (inventory §7b): fill it
+against the platform's REAL API, then delete this banner. Run the §3 defect taxonomy
+as you go - every question there found a real bug.
+
+TOPOLOGY — T2. The topology label selects the SHAPE of the write, NOT a
+reusable implementation: of the five framework-era hand-builds, only WordPress (T3) used a
+stock strategy class unmodified; Contentful, Shopify and HubSpot each subclassed
+LocaleMappingStrategy directly because the platform's real write/versioning model did not
+fit the stock class. RE-DERIVE the write against WidgetCMS's real model before
+trusting `SubResourceStrategy` — treat it as the starting point it is.
+
+PROVENANCE: endpoint shapes are reference-and-reimplemented from bb-io/WidgetCMS
+(copyright Blackbird, MIT). See THIRD_PARTY_NOTICES.md.
+"""
+from __future__ import annotations
+
+import logging
+
+import httpx  # noqa: F401 (kept: real HTTP paths will need it)
+
+from app.services.connectors import flow, harvest, webhooks  # noqa: F401 (harvest/webhooks: parity imports)
+from app.services.connectors.base import (
+    Connector, ConnectorError, ConnectorSpec, FieldSpec, PulledItem, _validate_target,
+    content_hash as _content_hash, harvest_context_field, to_int,  # noqa: F401
+)
+from app.services.connectors.contract import (
+    AuthKind, Capability, ChangeSignals, ConnectorPlugin, RichText, Topology,
+)
+from app.services.connectors.strategy import ABSENT, SubResourceStrategy, WriteResult  # noqa: F401
+from app.services.connectors.tracking import SelectionTracker
+
+log = logging.getLogger("loc_tms.connectors")
+
+API_VERSION = "v2"
+
+
+SPEC = ConnectorSpec(
+    kind="widgetcms",
+    name="WidgetCMS",
+    icon="🧰",
+    cat="Headless CMS",
+    blurb="Translate WidgetCMS entries into any language. Fixture connector for the factory golden test; not a real integration.",
+    config_fields=[
+        FieldSpec("base_url", "Base URL", "Your WidgetCMS root.", placeholder="https://widgetcms.example"),
+        FieldSpec("content_types", "Content type IDs", "Comma-separated type IDs.", placeholder="articles, pages"),
+        FieldSpec("target_locales", "Target locales", "Comma-separated locale codes.", required=False, placeholder="fr, de"),
+        harvest_context_field(),
+    ],
+    secret_fields=[
+        FieldSpec("api_token", "API token", "A read+write token, sent as Bearer.", secret=True, placeholder="a long token"),
+    ],
+    setup_steps=[
+        "Create an API token with read + write access.",
+        "Enable localization and add your target locales.",
+    ],
+    other_side="Poll-based change detection; unchanged entries are suppressed by content hash.",
+    docs_url="https://widgetcms.example/api",
+    supports_oauth=False,
+)
+
+
+class WidgetCMSConnector(Connector, ConnectorPlugin):
+    spec = SPEC
+
+    capability = Capability(
+        key="widgetcms",
+        topology=Topology.T2,
+        auth=(AuthKind.API_KEY,),
+        api_version="v2",
+        rich_text=RichText.NONE,
+        regions="base_url",
+        change_signals=ChangeSignals(
+            webhook_sig=None, poll_field="updatedAt",
+            stale_flag=None, thin_payload=False),
+        anti_loop_label=False,
+    )
+
+    def __init__(self, config, secret, *, transport=None):
+        super().__init__(config, secret, transport=transport)
+        # STRATEGY STARTING POINT (T2). The stock class is instantiated so the
+        # skeleton is runnable, but topology predicts the SHAPE of the write, not a reusable
+        # implementation (3 of 5 hand-builds needed a bespoke LocaleMappingStrategy subclass).
+        # Re-derive write_target/exists_target against WidgetCMS's real write and
+        # versioning model; subclass LocaleMappingStrategy here if the stock class does not fit.
+        self.strategy = SubResourceStrategy(source_locale_of=lambda conn, rec: self._source_locale())
+        # Shared field-selection + held-back bookkeeping (replaces the repeated
+        # _sel_selected/_sel_skipped/_sel_warned + held-back accumulator shape).
+        self.sel = SelectionTracker(noun="field", label="widgetcms", loud_markers=("rich content",))
+
+    def _source_locale(self) -> str:
+        # TODO: return the connection's authoring/source locale (never written as a target).
+        raise NotImplementedError("widgetcms._source_locale")
+
+    # ---------------------------------------------------------------- verbs
+    def test(self) -> tuple[bool, str]:
+        # TODO: cheapest authenticated probe (e.g. list locales / whoami). Report the
+        # exact failure (bad scope/host/token) — hermetic tests cannot prove real scopes.
+        raise NotImplementedError("widgetcms.test")
+
+    def containers(self) -> list[dict]:
+        # TODO: the browseable scope units (spaces/collections/content types) for the UI.
+        raise NotImplementedError("widgetcms.containers")
+
+    def discover_articles(self, cap: int | None = None,
+                          article_ids: list | None = None) -> list[dict]:
+        # TAXONOMY A: any caller-supplied id/type in `article_ids` MUST be validated against
+        #   this connection's configured scope, fail-closed, and tested with '..', '%2e%2e',
+        #   unicode, NUL, CR/LF, '?'/'#', and a PREFIX of a configured value.
+        # TAXONOMY E: distribute the shared `cap` across containers ROUND-ROBIN so one
+        #   container cannot starve the rest (assert DISTRIBUTION in the test, not the total).
+        raise NotImplementedError("widgetcms.discover_articles")
+
+    def extract(self, article: dict):
+        # TAXONOMY D: is selection schema-driven or heuristic (is the schema even reachable
+        #   with our token)? Record every selected + skipped name via self.sel; test BOTH
+        #   directions (junk selected AND real copy skipped). Loud-skip structural types.
+        raise NotImplementedError("widgetcms.extract")
+
+    # ----------------------------------------------------- generic Connector API
+    def pull(self) -> list[PulledItem]:
+        raise NotImplementedError("widgetcms.pull")
+
+    def push(self, items: list[PulledItem]) -> tuple[int, str]:
+        raise ConnectorError("WidgetCMS writes per-locale variants - use 'Translate now'.")
+
+    def detect_change(self, conn=None):
+        return []
+
+
+# ===========================================================================
+# Translate flow — thin hooks over the shared engine (flow.run_translate_flow).
+# Fill each hook, then delete the NotImplementedError. See strapi.py for a worked T2
+# example, wordpress.py for T3, contentful.py for T1.
+# ===========================================================================
+def _widgetcms_prepare(ctx, art):
+    # TAXONOMY B/F: for EVERY field, on BOTH create and update, what is written when the
+    #   translation is withheld? Prove the stored translation survives (use
+    #   ctx.connector.sel.record_held_back for the report).
+    raise NotImplementedError("widgetcms._prepare")
+
+
+def _widgetcms_is_suppressed(connector, aid, loc):
+    # TAXONOMY C: does this existence probe read the SAME version/state the write writes?
+    #   What is the steady state on the SECOND run? (Strapi's draft/published split was H4.)
+    return connector.strategy.exists_target(connector, aid, loc)
+
+
+def _widgetcms_build_payload(prep, loc, seg0_target, mapping):
+    raise NotImplementedError("widgetcms._build_payload")
+
+
+def widgetcms_translate(cid: int, article_ids: list | None = None,
+                     target_locales=None, actor: str = "", transport=None,
+                     only_pairs: set | None = None, source: str = "manual") -> tuple[bool, str, dict]:
+    """Translate WidgetCMS content into one or more locales via the T2
+    strategy. Thin wrapper over flow.run_translate_flow; poll-only with content-hash
+    suppression. only_pairs restricts the write loop to exactly those (id, locale) pairs."""
+    spec = flow.TranslateFlowSpec(
+        kind="widgetcms", no_conn_msg="No such WidgetCMS connection.",
+        hash_key="widgetcms_hashes", probe_label="WidgetCMS",
+        prepare=_widgetcms_prepare,
+        is_suppressed=_widgetcms_is_suppressed, build_payload=_widgetcms_build_payload,
+        compute_draft=lambda cfg: True)
+    return flow.run_translate_flow(spec, cid, article_ids=article_ids,
+                                   target_locales=target_locales, actor=actor,
+                                   transport=transport, only_pairs=only_pairs, source=source)

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>StringsTable</key>
+	<string>Root</string>
+	<key>PreferenceSpecifiers</key>
+	<array>
+		<dict>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+			<key>Title</key>
+			<string>Sync</string>
+			<key>FooterText</key>
+			<string>Notes sync when the app is open.</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSMultiValueSpecifier</string>
+			<key>Key</key>
+			<string>sync_interval</string>
+			<key>Title</key>
+			<string>Sync interval</string>
+			<key>Titles</key>
+			<array>
+				<string>Every hour</string>
+				<string>Every day</string>
+			</array>
+			<key>Values</key>
+			<array>
+				<string>hourly</string>
+				<string>daily</string>
+			</array>
+			<key>DefaultValue</key>
+			<string>hourly</string>
+		</dict>
+	</array>
+</dict>
+</plist>

@@ -1,0 +1,380 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ names.ledger }}{% endblock %}
+
+{# --- one captured call, rendered compactly (shared by a run's nested calls) ------ #}
+{% macro tap_call(r, rkey) %}
+  {% set oc = r.outcome %}
+  {% if oc == 'ok' %}{% set ost, olbl = 'completed', 'ok' %}
+  {% elif oc == 'refused-by-spend-cap' %}{% set ost, olbl = 'failed', 'refused (spend cap)' %}
+  {% else %}{% set ost, olbl = 'error', oc %}{% endif %}
+  {% set req = r.request if r.request is mapping else {} %}
+  {% set meta = r.meta if r.meta is mapping else {} %}
+  <li class="tap-call">
+    <div class="tap-call-head">
+      {{ m.status_badge(ost, olbl) }}
+      <span class="chip">{{ r.provider or '?' }}{% if r.provider_kind and r.provider_kind != r.provider %} · {{ r.provider_kind }}{% endif %}</span>
+      {% if r.model %}<span class="chip">{{ r.model }}</span>{% endif %}
+      {% if r.task %}<span class="chip">{{ r.task }}</span>{% endif %}
+      {% if req.get('max_tokens') is not none %}<span class="chip">max_tokens: {{ req.max_tokens }}</span>{% endif %}
+      {% if r.get('redacted') %}<span class="chip">secret redacted</span>{% endif %}
+      {% if r.get('attempt') %}<span class="chip">attempt: {{ r.attempt }}</span>{% endif %}
+      {% if r.get('cost_usd') is not none %}<span class="chip mono">cost ${{ '%.6f'|format(r.cost_usd) }}</span>{% endif %}
+      {# run-190 Item B/C: the per-call failure SHAPE (metadata only) so the shape of a
+         thinking burn / truncation is visible on the page. #}
+      {% if r.get('finish_reason') %}<span class="chip mono">finish: {{ r.finish_reason }}</span>{% endif %}
+      {% if r.get('error_class') %}<span class="chip mono">error class: {{ r.error_class }}</span>{% endif %}
+      {% if r.get('output_chars') is not none %}<span class="chip mono">{{ r.output_chars }} chars</span>{% endif %}
+      {% if r.get('elapsed_ms') is not none %}<span class="chip mono">{{ r.elapsed_ms }} ms</span>{% endif %}
+      {% if r.get('reasoning_tokens') is not none %}<span class="chip mono">reasoning: {{ r.reasoning_tokens }} tok</span>{% endif %}
+      <span class="muted small tap-call-ts">{{ r.ts }}</span>
+      <a class="small ghost btnlink" href="/prompt-tap/download?record={{ rkey }}"
+         title="Download this one record as pretty-printed JSON">Download</a>
+    </div>
+    {% if meta and (meta.step_key or meta.get('segment_index') is not none) %}
+    <div class="tap-call-meta small muted">
+      {% if meta.step_key %}<span>step <code>{{ meta.step_key }}</code></span>{% endif %}
+      {% if meta.get('segment_index') is not none %}<span>seg {{ meta.segment_index }}</span>{% endif %}
+    </div>
+    {% endif %}
+    {% if r.error %}<p class="err small">{{ r.error }}</p>{% endif %}
+    <details class="adv">
+      <summary>Request payload</summary>
+      <pre class="code" role="region" aria-label="Request payload" tabindex="0">{{ r.request | tojson(indent=2) }}</pre>
+    </details>
+    {% if r.response %}
+    <details class="adv">
+      <summary>Response{% if r.response.truncated %} <span class="muted small">(truncated to {{ response_cap }} of {{ r.response.chars }} chars)</span>{% endif %}{% if r.usage %} · usage{% endif %}</summary>
+      <pre class="code" role="region" aria-label="Response" tabindex="0">{{ r.response.text }}</pre>
+      {% if r.usage %}<pre class="code" role="region" aria-label="usage" tabindex="0">{{ r.usage | tojson(indent=2) }}</pre>{% endif %}
+    </details>
+    {% endif %}
+  </li>
+{% endmacro %}
+
+{% block content %}
+<div class="insight-page insight-prompt_tap">
+{% set insight_title %}{{ names.ledger }}{% endset %}
+{% set insight_meta %}<p class="muted">Every completion call {{ brand }} makes, organized under the
+  <strong>translation action</strong> it belonged to: one entry per click, its
+  language-pair runs nested inside, and each run's individual calls inside those - the
+  exact request payload, response, tokens and cost, captured as it went out.</p>
+  {% if saved %}<p class="ok">Saved.</p>{% endif %}{% endset %}
+{% set insight_actions %}{% endset %}
+{{ m.page_header(insight_title, meta=insight_meta, secondary=insight_actions) }}
+<nav class="insight-sections" aria-label="{{ names.ledger }}">
+  {% if ledger_controls_available %}<a href="#insight-envelope-recording-settings">Envelope recording settings</a>{% endif %}
+  <a href="#insight-capture">Capture</a>
+  <a href="#insight-runs">Runs</a>
+  <a href="#insight-all-calls">All calls</a>
+</nav>
+{% include "_ledger_status.html" %}
+{# gate round-2 LOW-3: the flash is a SIGNED, one-shot session value (see admin.ledger_purge),
+   not a query parameter, so a crafted link cannot forge this destructive-action confirmation. #}
+{% if purge_flash %}
+<div class="card ok" role="status">
+  {% if purge_flash.applied %}Purge applied.{% else %}Purge preview (nothing deleted).{% endif %}
+  Cutoff {{ purge_flash.cutoff }}:
+  {{ purge_flash.actions }} actions,
+  {{ purge_flash.runs }} runs,
+  {{ purge_flash.raw_files }} raw files.
+</div>
+{% endif %}
+{% if ledger_controls_available %}
+<section class="card">
+  <h2 id="insight-envelope-recording-settings">Envelope recording settings</h2>
+  <p>Envelope metadata defaults ON. Raw payload capture is separately opt-in.
+  These audited admin controls use the same typed-phrase ceremony on the web and the host CLI;
+  the equivalent /api controls additionally require remote administration enabled.</p>
+  {% if ledger_status.envelopes_enabled %}
+  <form method="post" action="/prompt-tap/envelopes/off">
+    {% include "_csrf.html" %}
+    <label>Type <code>disable envelope recording</code> <input name="confirm" required autocomplete="off"></label>
+    <label>Reason (optional) <input name="reason"></label>
+    <button type="submit">Disable envelope recording</button>
+  </form>
+  {% else %}
+  <form method="post" action="/prompt-tap/envelopes/on">
+    {% include "_csrf.html" %}
+    <button type="submit">Enable envelope recording</button>
+  </form>
+  {% endif %}
+  <details><summary>Guarded purge</summary>
+    <p>Deletes terminal envelopes finished before the UTC cutoff and their raw files.
+    Running and paused envelopes are protected. Preview first; check Apply to delete.</p>
+    <form method="post" action="/prompt-tap/purge">
+      {% include "_csrf.html" %}
+      <label>Before <input name="before" type="date" required></label>
+      <label>Type <code>purge envelopes before YYYY-MM-DD</code> with that date
+        <input name="confirm" required autocomplete="off"></label>
+      <label><input type="checkbox" name="apply" value="1"> Apply deletion</label>
+      <button type="submit">Run purge ceremony</button>
+    </form>
+  </details>
+</section>
+{% endif %}
+
+
+
+
+<section class="card">
+  <h2 id="insight-capture">Capture</h2>
+  <p class="help">
+    {% if enabled %}
+      Capturing is <strong>on</strong>. {{ total }} record{{ '' if total == 1 else 's' }} stored
+      ({{ legacy_total }} legacy/clearable, {{ run_capture_total }} run-capture).
+      Run envelopes have their own recording control above; raw per-call files
+      are only written while it is on. API keys and secrets live below this seam, so they
+      are never in a request record <strong>by construction</strong>; on the response/error
+      channel - which an upstream provider or model controls - known key shapes are scrubbed
+      best-effort before each record is written.
+    {% else %}
+      Raw call capture is <strong>off</strong>. Envelopes continue unless separately disabled; the
+      NEW individual request/response payloads are not written until you turn it on.
+      Existing raw files are retained; their age-out is FROZEN while capture is off.
+      The 30-day default is not a guaranteed maximum; running or paused files are also protected.
+    {% endif %}
+  </p>
+  {% if ledger_controls_available %}
+  <div class="row-actions">
+    <form method="post" action="/prompt-tap/toggle" class="inline-form">
+      {% include "_csrf.html" %}
+      <input type="hidden" name="enabled" value="{{ '0' if enabled else '1' }}" />
+      <button type="submit" class="small">{{ 'Turn off' if enabled else 'Turn on' }}</button>
+    </form>
+    {% if legacy_total %}
+    <form method="post" action="/prompt-tap/clear" class="inline-form"
+          data-action-confirm="Clear the {{ legacy_total }} legacy capture record{{ '' if legacy_total == 1 else 's' }}? Run-capture files are not cleared. This cannot be undone.">
+      {% include "_csrf.html" %}
+      <button type="submit" class="small ghost">Clear legacy captures</button>
+    </form>
+    {% endif %}
+  </div>
+  {% else %}
+  <p class="help">Under multi-org the capture switch and the legacy clear are host-operator actions: run <code>prompt-tap on</code>, <code>prompt-tap off</code> or <code>prompt-tap clear</code> from the CLI on the host.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2 id="insight-runs">Runs <span class="muted small">- grouped by translation action, newest first</span></h2>
+  <p class="help">Prefer a flatter, run-first view?
+    <a href="/prompt-tap/runs">Browse by translation run</a> - one row per run (classic or
+    advanced), drilling into its calls grouped by step then unit.</p>
+  <form method="get" action="/prompt-tap" class="form filterbar">
+    <label class="small">Project
+      <input type="number" name="action_project" value="{{ action_filters.project if action_filters.project is not none else '' }}" />
+    </label>
+    <label class="small">Document
+      <input type="number" name="action_document" value="{{ action_filters.document if action_filters.document is not none else '' }}" />
+    </label>
+    <label class="small">Batch
+      <input type="number" name="action_batch" value="{{ action_filters.batch if action_filters.batch is not none else '' }}" />
+    </label>
+    <label class="small">Status
+      <select name="action_status">
+        <option value="" {{ 'selected' if not action_filters.status else '' }}>any</option>
+        {% for st in ('running', 'completed', 'failed', 'paused', 'abandoned', 'orphaned') %}
+        <option value="{{ st }}" {{ 'selected' if action_filters.status == st else '' }}>{{ st }}</option>
+        {% endfor %}
+      </select>
+      <span class="small muted">abandoned = dropped mid-run OR cancelled by an operator; orphaned = owner process died before finalizing</span>
+    </label>
+    <label class="small">Since
+      <input type="date" name="action_since" value="{{ action_filters.since }}" />
+    </label>
+    <label class="small">Until
+      <input type="date" name="action_until" value="{{ action_filters.until }}" />
+    </label>
+    <label class="small check">
+      <input type="checkbox" name="action_failures" value="1" {{ 'checked' if action_filters.failures else '' }} />
+      Has failures
+    </label>
+    <button type="submit" class="small">Filter</button>
+    <a href="/prompt-tap" class="small ghost btnlink">Reset</a>
+  </form>
+
+  {% if not actions %}
+    {% set insight_empty %}No translation runs recorded yet. Run a workflow or a batch
+    translation and it appears here as one entry, newest first.{% endset %}{{ m.empty_state(insight_empty) }}
+  {% else %}
+    <ol class="tap-actions">
+      {% for a in actions %}
+        <li class="tap-action">
+          <details {% if loop.first %}open{% endif %}>
+            <summary class="tap-action-sum">
+              <span class="tap-action-lead">
+                {{ m.status_badge(a.status, m.status_label(a.status)) }}
+                <span class="tap-action-title">
+                  {% if a.project_name %}{{ a.project_name }}{% elif a.project_id is not none %}project #{{ a.project_id }}{% else %}ad-hoc{% endif %}
+                  {% if a.document_name %}<span class="muted"> · {{ a.document_name }}</span>{% elif a.document_id is not none %}<span class="muted"> · doc #{{ a.document_id }}</span>{% endif %}
+                </span>
+                <span class="chip soft">{{ a.kind }}</span>
+                {% if a.batch_id is not none %}<span class="chip soft">batch #{{ a.batch_id }}</span>{% endif %}
+                {% if a.capture_withheld %}<span class="chip" title="Per-call capture for this action was withheld because prompt_tap/actions/ hit its disk budget; the envelope kept recording but the call files stopped growing. Totals may under-count.">capture withheld</span>{% endif %}
+                {% if a.totals and a.totals.enrichment_truncated %}<span class="chip" title="This action's glossary-adherence enrichment hit the segment cap and was truncated; the adherence sample is partial.">enrichment truncated</span>{% endif %}
+                {% if a.totals and a.totals.spend_source == 'estimated_from_usage' %}<span class="chip" title="Some calls' spend was estimated from usage (a legacy record without a recorded per-call cost), not read from the ledger.">spend estimated</span>{% endif %}
+              </span>
+              <span class="tap-action-locales mono">
+                {% if a.source_locale %}{{ a.source_locale }} →{% endif %}
+                {{ a.requested_locales | join(', ') if a.requested_locales else '-' }}
+              </span>
+              <span class="tap-metrics muted small">
+                <span>{{ a.runs | length }} run{{ '' if a.runs|length == 1 else 's' }}</span>
+                {% if a.totals %}
+                  <span>{{ a.totals.calls }} call{{ '' if a.totals.calls == 1 else 's' }}</span>
+                  {% if a.totals.spend_usd is not none %}<span class="mono" title="AI (model) spend">AI ${{ '%.4f'|format(a.totals.spend_usd) }}</span>{% endif %}
+                  {% if a.totals.human_spend_usd %}<span class="mono" title="Human (vendor) spend - {{ a.totals.human_spend_source }}">Human ${{ '%.2f'|format(a.totals.human_spend_usd) }} <span class="chip">{{ a.totals.human_spend_source }}</span></span>{% endif %}
+                  {% if a.totals.failures %}<span class="danger-text">{{ a.totals.failures }} failed</span>{% endif %}
+                {% endif %}
+                {% if a.started_iso %}<span class="mono" title="{{ a.started_at }}">{{ a.started_iso[:19]|replace('T',' ') }}</span>{% endif %}
+              </span>
+            </summary>
+
+            <div class="tap-runs">
+              {% if a.workflow_name %}<p class="tap-wf small muted">{{ 'advanced' if a.kind == 'advanced' else 'workflow' }} <code>{{ a.workflow_name }}</code>{% if a.initiator %} · by {{ a.initiator }}{% endif %}{% if a.surface %} · {{ a.surface }}{% endif %}</p>{% endif %}
+              {% if a.vendor_legs %}
+              <p class="small muted tap-vendor-legs">Vendor legs:
+                {% for leg in a.vendor_legs %}
+                <span class="chip" title="{{ leg.endpoint_host }}{% if leg.protocol != 'native' %} · {{ leg.protocol }}{% endif %} · est ${{ '%.2f'|format(leg.estimate_cost_usd or 0) }}{% if leg.actual_cost_usd is not none %} · actual ${{ '%.2f'|format(leg.actual_cost_usd) }}{% endif %}">#{{ leg.id }} {{ leg.vendor }} · {{ leg.status }} · {{ leg.returned_ids }}/{{ leg.dispatched_ids }}</span>
+                {% endfor %}
+              </p>
+              {% endif %}
+              {% for run in a.runs %}
+                <details class="tap-run">
+                  <summary class="tap-run-sum">
+                    {{ m.status_badge(run.status, m.status_label(run.status)) }}
+                    <span class="tap-run-locale mono">{{ run.target_locale or '-' }}</span>
+                    <span class="tap-run-metrics muted small">
+                      <span>{{ run.summary.calls }} call{{ '' if run.summary.calls == 1 else 's' }}</span>
+                      {% if run.summary.failures %}<span class="danger-text">{{ run.summary.failures }} failed</span>{% endif %}
+                      {% if run.summary.spend_usd is not none %}<span class="mono">${{ '%.4f'|format(run.summary.spend_usd) }}</span>{% endif %}
+                      {% if run.summary.tokens_out is not none %}<span class="mono">{{ run.summary.tokens_in }}/{{ run.summary.tokens_out }} tok</span>{% endif %}
+                    </span>
+                  </summary>
+                  {% if run.calls %}
+                    <ol class="tap-calls">
+                      {% for c in run.calls %}{{ tap_call(c, c.get('_record_key') or '') }}{% endfor %}
+                    </ol>
+                    {% if run.more %}
+                      <p class="muted small tap-more">Showing the newest {{ calls_cap }} of
+                      {{ run.call_count }} calls for this run. Use Export for the full set.</p>
+                    {% endif %}
+                  {% else %}
+                    <p class="muted small tap-empty-run">No raw call payloads for this run
+                    {% if not enabled %}(raw capture is off - the envelope still recorded it){% else %}(they may have aged out){% endif %}.</p>
+                  {% endif %}
+                </details>
+              {% endfor %}
+              {% if a.orphan_calls %}
+                <details class="tap-run">
+                  <summary class="tap-run-sum">
+                    <span class="chip soft">unattached</span>
+                    <span class="tap-run-metrics muted small">{{ a.orphan_calls | length }} call(s) with no run</span>
+                  </summary>
+                  <ol class="tap-calls">
+                    {% for c in a.orphan_calls %}{{ tap_call(c, c.get('_record_key') or '') }}{% endfor %}
+                  </ol>
+                </details>
+              {% endif %}
+            </div>
+          </details>
+        </li>
+      {% endfor %}
+    </ol>
+  {% endif %}
+</section>
+
+<section class="card">
+  <details class="tap-flat">
+    <summary><h2 class="inline-h2" id="insight-all-calls">All calls <span class="muted small">- flat, newest first (includes eval / ad-hoc / legacy)</span></h2></summary>
+
+    <form method="get" action="/prompt-tap" class="form filterbar">
+      <label class="small">Provider
+        <input type="text" name="provider" value="{{ filters.provider }}" placeholder="claude / local / mock" />
+      </label>
+      <label class="small">Workflow
+        <input type="number" name="workflow_id" value="{{ filters.workflow_id if filters.workflow_id is not none else '' }}" />
+      </label>
+      <label class="small">Run
+        <input type="number" name="workflow_run_id" value="{{ filters.workflow_run_id if filters.workflow_run_id is not none else '' }}" />
+      </label>
+      <label class="small">Document
+        <input type="number" name="document_id" value="{{ filters.document_id if filters.document_id is not none else '' }}" />
+      </label>
+      <button type="submit" class="small">Filter</button>
+      <a href="/prompt-tap" class="small ghost btnlink">Reset</a>
+    </form>
+
+    {% if not records %}
+      {% set insight_empty %}{% if enabled %}No captures match.{% else %}Raw capture is off - turn it on above, then run a translation.{% endif %}{% endset %}{{ m.empty_state(insight_empty) }}
+    {% else %}
+      <p class="help ptap-dl">
+        Download{% if query %} this selection{% endif %}
+        <a class="small ghost btnlink" href="/prompt-tap/download{% if query %}?{{ query }}{% endif %}">.jsonl</a>
+        <a class="small ghost btnlink" href="/prompt-tap/download?format=json{% if query %}&amp;{{ query }}{% endif %}">.json</a>
+        <span class="muted">- {{ matching }} matching record{{ '' if matching == 1 else 's' }}{% if matching > download_limit %},
+          capped at {{ download_limit }} (newest first; the filename says so){% endif %}. One record per line,
+          same fields as below{% if matching > page_rows %} - note this page lists only the newest {{ page_rows }},
+          so the download has more{% endif %}.</span>
+      </p>
+      <ol class="ptap-list">
+        {% for r in records %}
+          {% set rkey = keys[loop.index0] %}
+          {% set oc = r.outcome %}
+          {% if oc == 'ok' %}{% set ost, olbl = 'completed', 'ok' %}
+          {% elif oc == 'refused-by-spend-cap' %}{% set ost, olbl = 'failed', 'refused (spend cap)' %}
+          {% else %}{% set ost, olbl = 'error', oc %}{% endif %}
+          <li class="ptap-rec">
+            <div class="ptap-head">
+              {{ m.status_badge(ost, olbl) }}
+              <span class="chip">{{ r.provider or '?' }}{% if r.provider_kind and r.provider_kind != r.provider %} · {{ r.provider_kind }}{% endif %}</span>
+              {% if r.model %}<span class="chip">{{ r.model }}</span>{% endif %}
+              {% if r.task %}<span class="chip">{{ r.task }}</span>{% endif %}
+              {% set req = r.request if r.request is mapping else {} %}
+              {% if req.get('max_tokens') is not none %}<span class="chip">max_tokens: {{ req.max_tokens }}</span>{% endif %}
+              {% if r.get('redacted') %}<span class="chip">secret redacted</span>{% endif %}
+              {% if r.get('attempt') %}<span class="chip">attempt: {{ r.attempt }}</span>{% endif %}
+              {% if r.get('cost_usd') is not none %}<span class="chip">cost ${{ '%.6f'|format(r.cost_usd) }}</span>{% endif %}
+              {# run-190 Item B/C: the per-call failure SHAPE chips, mirroring the tap_call
+                 macro so the flat "All calls" view shows the same finish/error-class/output
+                 diagnostics as the grouped Runs view. #}
+              {% if r.get('finish_reason') %}<span class="chip mono">finish: {{ r.finish_reason }}</span>{% endif %}
+              {% if r.get('error_class') %}<span class="chip mono">error class: {{ r.error_class }}</span>{% endif %}
+              {% if r.get('output_chars') is not none %}<span class="chip mono">{{ r.output_chars }} chars</span>{% endif %}
+              {% if r.get('elapsed_ms') is not none %}<span class="chip mono">{{ r.elapsed_ms }} ms</span>{% endif %}
+              {% if r.get('reasoning_tokens') is not none %}<span class="chip mono">reasoning: {{ r.reasoning_tokens }} tok</span>{% endif %}
+              <span class="muted small ptap-ts">{{ r.ts }}</span>
+              <a class="small ghost btnlink" href="/prompt-tap/download?record={{ rkey }}"
+                 title="Download this one record as pretty-printed JSON">Download</a>
+            </div>
+            {% set meta = r.meta if r.meta is mapping else {} %}
+            {% if meta %}
+            <div class="ptap-meta small muted">
+              {% if meta.get('workflow_id') is not none %}<span><a href="/workflows/{{ meta.workflow_id }}">workflow #{{ meta.workflow_id }}</a></span>{% endif %}
+              {% if meta.step_key %}<span>step <code>{{ meta.step_key }}</code></span>{% endif %}
+              {% if meta.get('workflow_run_id') is not none %}<span><a href="/runs/{{ meta.workflow_run_id }}">run #{{ meta.workflow_run_id }}</a></span>{% endif %}
+              {% if meta.get('document_id') is not none %}<span><a href="/documents/{{ meta.document_id }}">doc #{{ meta.document_id }}</a></span>{% endif %}
+              {% if meta.get('segment_index') is not none %}<span>seg {{ meta.segment_index }}</span>{% endif %}
+            </div>
+            {% endif %}
+            {% if r.error %}<p class="err small">{{ r.error }}</p>{% endif %}
+            <details class="adv">
+              <summary>Request payload</summary>
+              <pre class="code" role="region" aria-label="Request payload" tabindex="0">{{ r.request | tojson(indent=2) }}</pre>
+            </details>
+            {% if r.response %}
+            <details class="adv">
+              <summary>Response{% if r.response.truncated %} <span class="muted small">(truncated to {{ response_cap }} of {{ r.response.chars }} chars)</span>{% endif %}{% if r.usage %} · usage{% endif %}</summary>
+              <pre class="code" role="region" aria-label="Response" tabindex="0">{{ r.response.text }}</pre>
+              {% if r.usage %}<pre class="code" role="region" aria-label="usage" tabindex="0">{{ r.usage | tojson(indent=2) }}</pre>{% endif %}
+            </details>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ol>
+    {% endif %}
+  </details>
+</section>
+
+</div>
+{% endblock %}

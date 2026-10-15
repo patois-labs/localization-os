@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<catalog xmlns:its="http://www.w3.org/2005/11/its" its:version="2.0">
+  <its:rules version="2.0">
+    <its:translateRule selector="//product/@label" translate="yes"/>
+    <its:translateRule selector="//sku" translate="no"/>
+    <its:withinTextRule selector="//b | //br" withinText="yes"/>
+    <its:locNoteRule selector="//desc">
+      <its:locNote>Max 80 characters.</its:locNote>
+    </its:locNoteRule>
+  </its:rules>
+  <product label="Desk lamp" code="L-1">
+    <sku>L-100-BLK</sku>
+    <desc>A <b>bright</b> lamp<br/>for your desk.</desc>
+    <legal its:translate="no">Made in EU</legal>
+    <verbatim xml:space="preserve">Line one
+    indented   line</verbatim>
+  </product>
+</catalog>

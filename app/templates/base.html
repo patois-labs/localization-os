@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+{# Onboarding-spotlight eligibility (admin/linguist): hoisted ONCE - reused by
+   the head driver.css link, the account-menu Get started entry, and the bottom script
+   block, so an authenticated render does a single lookup instead of three. #}
+{% set ob_elig = onboarding_eligible(request) %}
+{% import "_form_errors.html" as fe %}
+{# a11y T11 (WCAG 3.1.1 / 3.1.2): most page copy is English in every interface language,
+   so the page is declared English unless the page template opts in with a top-level
+   "set ui_translated = true" (all of its text comes from the catalog). The chrome that IS
+   translated (skip link, sidebar, top bar controls, banners, busy and session messages)
+   carries the interface language through _ui_lang_attr, which is empty whenever the two
+   agree (always, with the default English interface). verify_a11y_static C27. #}
+{% set _ui_lang = ui_lang(request) %}
+{% set _page_lang = _ui_lang if ui_translated is defined and ui_translated else 'en' %}
+{% set _ui_lang_attr %}{% if _ui_lang != _page_lang %} lang="{{ _ui_lang }}"{% endif %}{% endset %}
+<html lang="{{ _page_lang }}"{{ theme_attrs(request) }}>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  {# a11y T6 (3.3.1): "Error:" leads the title when the page carries an error, so it is
+     the first thing a screen reader announces on load. #}
+  <title>{% if page_error(request, err|default(none)) %}{{ t(request, 'errors.title_prefix') }} {% endif %}{% set _raw_title %}{% block title %}{% endblock %}{% endset %}{{ compose_title(_raw_title) }}</title>
+  {# No-FOUC theme bootstrap: runs synchronously BEFORE the stylesheet so the saved
+     theme is applied before first paint (no flash). A saved light or dark choice wins;
+     no saved choice ("Match my computer") follows the OS; no JS leaves the attribute off,
+     which is the dark default. This block is copied byte-identically into the standalone
+     auth shells (login/accept/setup/error) - verify_ui_shell asserts they never diverge. #}
+  <script nonce="{{ csp_nonce() }}">
+    (function () {
+      try {
+        var el = document.documentElement;
+        var p = el.getAttribute('data-theme-pref');  // ADR 0063: the signed-in account's choice
+        var t = (p === 'light' || p === 'dark' || p === 'system') ? p : localStorage.getItem('loc_theme');
+        if (t === 'light' || t === 'dark') el.setAttribute('data-theme', t);
+        else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) el.setAttribute('data-theme', 'light');  // #564 p1: no saved choice follows the OS
+      } catch (e) {}
+    })();
+  </script>
+  {# No-flash sidebar UX bootstrap (feat/sidebar-ux): applies the saved collapse
+     state (class on <html>) and the saved custom width (--sidebar-w on :root)
+     BEFORE first paint, so the sidebar never renders wide-then-snap. Values are
+     per-browser (localStorage); absent/invalid -> defaults, exactly as before.
+     The reorder pass runs later in sidebar_ux.js (needs the DOM).
+
+     SB-05 (fail-open): the collapsed presentation in style.css is gated on
+     `html.sb-js`. We pre-set sb-js HERE on every load, for two reasons: to keep the
+     rail from flashing wide-then-narrow for a collapsed user, and so the phone
+     layout (app_shell.css `html:not(.sb-js)` no-script fallback, a stacked
+     full-width nav) is never painted for a JS-capable browser before sidebar_ux.js
+     runs at the end of <body>. It is SAFE because the end-of-<body> guard below
+     strips sb-js if sidebar_ux.js never runs, so a 404'd/throwing script can never
+     leave the user locked in a control-less rail, and the fallback applies again.
+     Width is applied unconditionally: with sb-js stripped the sidebar just renders
+     expanded at that width, which is fully usable. #}
+  <script nonce="{{ csp_nonce() }}">
+    (function () {
+      try {
+        var el = document.documentElement;
+        el.classList.add('sb-js');
+        if (localStorage.getItem('lsSidebarCollapsed') === '1') {
+          el.classList.add('sb-collapsed');
+        }
+        var w = parseInt(localStorage.getItem('lsSidebarWidth'), 10);
+        if (w >= 180 && w <= 420) el.style.setProperty('--sidebar-w', w + 'px');
+      } catch (e) {}
+    })();
+  </script>
+  {# Global JS state defined in <head> so it exists BEFORE any body/content/include
+     script runs (BUG 1: the former model fetch in the new-project dialog +
+     workflows.html read window.CSRF_TOKEN while it was still undefined -> the picker's
+     first fetch sent 'X-CSRF-Token: undefined' -> 403 -> "could not fetch models").
+     These are plain global assignments from Jinja globals (no DOM dependency), so
+     the head is the correct, race-free home. #}
+  <script nonce="{{ csp_nonce() }}">
+    // Client-side i18n strings for the current locale (js.* namespace, en-merged).
+    window.I18N = {{ i18n_js(request)|tojson }};
+    // Session-bound CSRF token; JS fetch POSTs send it as the X-CSRF-Token header.
+    window.CSRF_TOKEN = {{ csrf_token(request)|tojson }};
+    // Scope session-cached provider model names to this login session. The token
+    // rotates with session.clear(), preventing cross-login/org UI reuse; the
+    // endpoint still enforces authorization and organization ownership itself.
+    window.LOC_MODEL_CACHE_SCOPE = window.CSRF_TOKEN;
+  </script>
+  {# a11y T9: session limits, only for a signed-in user with the wall on and a limit set. #}
+  {% set _st = session_timeout_config(request) %}
+  {% if _st %}<meta name="loc-session-idle" content="{{ _st.idle }}" /><meta name="loc-session-max" content="{{ _st.max }}" /><meta name="loc-session-uid" content="{{ _st.uid }}" />{% endif %}
+  <script src="/static/model_catalog.js?v={{ static_v('model_catalog.js') }}"></script>
+  {# Busy indicators: loaded in <head> so window.LocBusy exists before any page
+     script runs; its submit listener lives on `document`, so no DOM is needed yet. #}
+  <script src="/static/handlers.js?v={{ static_v('handlers.js') }}"></script>
+  <script src="/static/busy.js?v={{ static_v('busy.js') }}"></script>
+  <script src="/static/rowmenu.js?v={{ static_v('rowmenu.js') }}"></script>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v={{ static_v('favicon.svg') }}" />
+  {# Preload the first-paint-critical self-hosted face (Public Sans: body and headings) so
+     text does not FOIT/FOUT on the first render. Mono is data-only, so it loads on demand.
+     crossorigin is required even same-origin: fonts are always fetched in CORS-anonymous
+     mode, so the preload must match or it double-fetches. This href must stay
+     BYTE-IDENTICAL to the @font-face src URL in style.css (a static file that can't
+     template a ?v= param), so no cache-buster here - the font files are immutable; if one
+     ever changes, rename the file. #}
+  <link rel="preload" href="/static/fonts/public-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
+  {# Onboarding spotlight (SPEC-onboarding-tour Phase 2): driver.js's own CSS,
+     loaded ONLY for eligible (admin/linguist) users - the only ones who can
+     trigger a spotlight - and BEFORE style.css so the token overrides in
+     style.css win the cascade. Vendored + immutable (no ?v, like the fonts). #}
+  {% if ob_elig %}
+  <link rel="stylesheet" href="/static/vendor/driver/driver.css" />
+  {% endif %}
+  <link rel="stylesheet" href="/static/style.css?v={{ static_v('style.css') }}" />
+  {# App-shell owned geometry; shared tokens remain in style.css. #}
+  <link rel="stylesheet" href="/static/app_shell.css?v={{ static_v('app_shell.css') }}" />
+  {# Command palette component #}
+  <link rel="stylesheet" href="/static/command_palette.css?v={{ static_v('command_palette.css') }}" />
+</head>
+{% set p = request.url.path %}
+{% set meta = app_meta() %}
+{% set me = current_user(request) %}
+<body>
+{% include "_busy.html" %}
+{# App-shell: capture once so the server can avoid duplicating a main H1 even
+   without JavaScript. Pages without an H1 retain the legacy topbar title. #}
+{% set _shell_page_content %}{% block content %}{% endblock %}{% endset %}
+{# Skip-to-content (a11y, SB-08): first focusable element, off-screen until
+   focused (style.css .skip-link), so keyboard users jump the sidebar + its
+   injected collapse/edit controls straight to the page's main region. #}
+<a href="#main-content" class="skip-link"{{ _ui_lang_attr }}>{{ t(request, 'chrome.skip_to_content') }}</a>
+<div class="app">
+  <aside class="sidebar" id="app-sidebar"{{ _ui_lang_attr }}>
+    <button type="button" class="nav-close" data-nav-close>{{ t(request, 'chrome.close_menu') }}</button>
+    <a href="/" class="brand"><span class="mark" aria-hidden="true">◐</span> {{ meta.org }}</a>
+    <a href="/projects#new" class="newbtn" data-np-open><span class="nav-glyph" aria-hidden="true">+</span> {{ t(request, 'nav.new_project') }}</a>
+
+    {% set _shell_nav %}
+    <nav class="side-nav" data-administration-label="{{ t(request, 'nav.group_administration') }}" data-projects-label="{{ t(request, 'nav.projects') }}" data-assets-label="{{ t(request, 'page.app_shell.language_assets') }}" aria-label="{{ t(request, 'chrome.main_nav') }}">
+      <div class="nav-group" data-nav-key="workspace">{{ t(request, 'nav.group_workspace') }}</div>
+      <a href="/" class="{{ 'on' if p == '/' }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" /></svg></span> {{ t(request, 'nav.dashboard') }}</a>
+      <a href="/projects" class="{{ 'on' if p.startswith('/projects') or p.startswith('/documents') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h7l2 3h9v11H3zM3 6V4h7l2 2" /></svg></span> {{ t(request, 'nav.projects') }}</a>
+      <a href="/customers" class="{{ 'on' if p.startswith('/customers') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 21V3h12v18M16 9h4v12M7 7h2m2 0h2M7 11h2m2 0h2M8 21v-5h4v5" /></svg></span> {{ t(request, 'nav.customers') }}</a>
+      {% if feature_enabled('queries') %}<a href="/queries" class="{{ 'on' if p.startswith('/queries') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 4h18v13H9l-6 4zM7 8h10M7 12h6" /></svg></span> {{ t(request, 'nav.queries') }}</a>{% endif %}
+      {% if feature_enabled('worklist') %}<a href="/my-work" class="{{ 'on' if p.startswith('/my-work') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 4H4v17h16V4h-4M8 2h8v5H8zM7 12l2 2 3-4M14 12h3M7 18h10" /></svg></span> {{ t(request, 'nav.my_work') }}</a>{% endif %}
+
+      <div class="nav-group" data-nav-key="automation">{{ t(request, 'nav.group_automation') }}</div>
+      <a href="/workflows" class="{{ 'on' if p.startswith('/workflows') or p.startswith('/runs') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 2h8v5H8zM2 17h7v5H2zM15 17h7v5h-7zM12 7v5H5v5m7-5h7v5" /></svg></span> {{ t(request, 'nav.workflows') }}</a>
+      <a href="/glossaries" class="{{ 'on' if p.startswith('/glossaries') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 5C9 2 4 3 2 4v16c4-2 7-1 10 1 3-2 6-3 10-1V4c-2-1-7-2-10 1v16" /></svg></span> {{ t(request, 'nav.glossaries') }}</a>
+      <a href="/style-guides" class="{{ 'on' if p.startswith('/style-guides') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 3h11v18H4zM8 7h3M8 11h3M18 4l3 1-4 13-3 3 0-4z" /></svg></span> {{ t(request, 'nav.style_guides') }}</a>
+      <a href="/content-types" class="{{ 'on' if p.startswith('/content-types') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 3h8l10 10-8 8L3 11zM7 7h1" /></svg></span> {{ t(request, 'nav.content_types') }}</a>
+      <a href="/tm" class="{{ 'on' if p == '/tm' or p.startswith('/tm/') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 6a9 9 0 1 1-1 10M4 2v5h5M9 10h6m-3 0v7m-3 0h6" /></svg></span> {{ t(request, 'nav.translation_memory') }}</a>
+      {# SPEC Workflow Studio Wave C: the top-level "Templates" nav item is RETIRED - its
+         page folded into the Workflows area as the "Building blocks" tab
+         (/workflows/building-blocks). /templates 302s there so no bookmark dies. #}
+      <a href="/connectors" class="{{ 'on' if p.startswith('/connectors') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 2v5m8-5v5M5 7h14v4a7 7 0 0 1-14 0zM12 18v4" /></svg></span> {{ t(request, 'nav.connectors') }}</a>
+      {% if feature_enabled('vendors') %}<a href="/vendors" class="{{ 'on' if p.startswith('/vendors') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 21V10l6 3V7l6 4V3h5v18zM6 17h2m3 0h2m3 0h2" /></svg></span> {{ t(request, 'nav.vendors') }}</a>{% endif %}
+      {% if feature_enabled('images') %}<a href="/images" class="{{ 'on' if p.startswith('/images') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 3h18v18H3zM3 18l6-7 4 4 3-3 5 6M15 7h2" /></svg></span> {{ t(request, 'nav.images') }}</a>{% endif %}
+      <a href="/languages" class="{{ 'on' if p.startswith('/languages') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 4h10M8 2v2m-4 3c1 5 4 7 9 9M11 4c0 6-3 10-8 12M13 22l4-12 4 12m-7-4h6" /></svg></span> {{ t(request, 'nav.language_sets') }}</a>
+      <a href="/jobs" class="{{ 'on' if p.startswith('/jobs') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 2h6M12 2v4M18 6l2-2M12 9v5l3 2M12 6a8 8 0 1 0 0 16 8 8 0 0 0 0-16" /></svg></span> {{ t(request, 'nav.jobs') }}</a>
+      {% if feature_enabled('data_export') %}<a href="/exports" class="{{ 'on' if p.startswith('/exports') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 12v9h16v-9M12 16V2M7 7l5-5 5 5" /></svg></span> {{ t(request, 'nav.data_export') }}</a>{% endif %}
+
+      <div class="nav-group" data-nav-key="intelligence">{{ t(request, 'nav.group_intelligence') }}</div>
+      {% if can_tune_ai(me) %}<a href="/setup-ai" class="{{ 'on' if p.startswith('/setup-ai') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 2l3 7 7 3-7 3-3 7-3-7-7-3 7-3zM19 2v4m-2-2h4" /></svg></span> {{ t(request, 'nav.setup_ai') }}</a>{% endif %}
+      {# ADMIN-ONLY: the tap is a raw-content firehose across all customers (a bound
+         linguist must not reach it). English literal, matching the setup_ai convention. #}
+      {% if me and me.role == 'admin' %}<a href="/prompt-tap" class="{{ 'on' if p.startswith('/prompt-tap') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 3h16v18H4zM8 7h8M8 11h8M8 15h4M8 18h6" /></svg></span> {{ names.ledger }}</a>{% endif %}
+      {# The ledger feature name is a COINED (admin-renameable) brand name, so it renders
+         from the branding registry ({{ names.ledger }}; app/branding.py,
+         SPEC-brand-as-config §D8) rather than a per-locale i18n entry:
+         a proper name is deliberately identical in every locale. #}
+      {% if feature_enabled('reports') %}<a href="/reports" class="{{ 'on' if p.startswith('/reports') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 3v18h19M7 17v-5h3v5M13 17V8h3v9M19 17V4h3v13" /></svg></span> {{ t(request, 'nav.reports') }}</a>{% endif %}
+      {# R2-3: a customer-bound (non-admin) user gets a read-only, customer-scoped
+         audit view here (admins reach the fuller /audit under Administration). #}
+      {% if me and me.role != 'admin' and me.customer_id %}<a href="/audit" class="{{ 'on' if p.startswith('/audit') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 2h12v20H6zM9 6h6M9 10h6M9 14h3M9 18h6" /></svg></span> {{ t(request, 'nav.audit_log') }}</a>{% endif %}
+
+      {% if me and me.role == 'admin' %}
+      <div class="nav-group" data-nav-key="administration">{{ t(request, 'nav.group_administration') }}</div>
+      <a href="/users" class="{{ 'on' if p.startswith('/users') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6M2 21v-5a6 6 0 0 1 12 0v5M16 3a3 3 0 0 1 0 6m1 4a5 5 0 0 1 5 5v3" /></svg></span> {{ t(request, 'nav.users') }}</a>
+      {% if feature_enabled('routing') %}<a href="/routing" class="{{ 'on' if p.startswith('/routing') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 3v12a5 5 0 0 0 5 5h11M4 8h16M16 4l4 4-4 4m0 4l4 4-4 3" /></svg></span> {{ t(request, 'nav.routing') }}</a>{% endif %}
+      <a href="/security" class="{{ 'on' if p.startswith('/security') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 2l9 4v6c0 5-5 8-9 10-4-2-9-5-9-10V6zM8 12l3 3 5-6" /></svg></span> {{ t(request, 'nav.security') }}</a>
+      <a href="/audit" class="{{ 'on' if p.startswith('/audit') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 2h12v20H6zM9 6h6M9 10h6M9 14h3M9 18h6" /></svg></span> {{ t(request, 'nav.audit_log') }}</a>
+      {% endif %}
+
+      <div class="nav-group" data-nav-key="system">{{ t(request, 'nav.group_system') }}</div>
+      <a href="/account" class="{{ 'on' if p.startswith('/account') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8M4 22v-3a8 8 0 0 1 16 0v3" /></svg></span> {{ t(request, 'nav.my_account') }}</a>
+      {% if me and me.role == 'admin' %}<a href="/settings" class="{{ 'on' if p == '/settings' or (p.startswith('/settings/') and not p.startswith('/settings/enterprise')) }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h18M3 12h18M3 18h18M7 3v6m10 0v6M9 15v6" /></svg></span> {{ t(request, 'nav.settings') }}</a>{% endif %}
+      {% if me and me.role == 'admin' %}<a href="/settings/enterprise" class="{{ 'on' if p.startswith('/settings/enterprise') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M2 8l10-6 10 6zM4 10v9m5-9v9m6-9v9m5-9v9M2 22h20" /></svg></span> {{ t(request, 'nav.enterprise') }}</a>{% endif %}
+      <a href="/help" class="{{ 'on' if p.startswith('/help') }}"><span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20M8 8a4 4 0 0 1 8 0c0 3-4 3-4 6m0 3v1" /></svg></span> {{ t(request, 'nav.help') }}</a>
+    </nav>
+    {% endset %}
+    {{ _shell_nav }}
+    {# Read the active item's actual server-rendered group without duplicating permission or path rules. #}
+    {% set _shell_ancestor = namespace(label='') %}
+    {% for section in _shell_nav.split('<div class="nav-group"')[1:] %}
+      {% if 'class="on"' in section %}
+        {% set _shell_ancestor.label = section.split('>', 1)[1].split('</div>', 1)[0]|striptags %}
+      {% endif %}
+    {% endfor %}
+
+    <div class="side-foot">
+      <div class="prov-dots"{% if _ui_lang != 'en' %} lang="en"{% endif %}>
+        {# A local engine is "configured" from its server URL alone (nothing probes it), so
+           it never claims to be live; a cloud engine is live once it has a key (#561). #}
+        {% for name, live in meta.providers_live.items() %}
+          {% set _state = ('configured, not probed' if name == 'local' else 'live') if live else ('no server URL' if name == 'local' else 'no key') %}
+          <span class="dot {{ ('configured' if name == 'local' else 'live') if live else 'mock' }}" title="{{ name }}: {{ _state }}"><span aria-hidden="true">{{ name[0]|upper }}</span><span class="sr-only">{{ name }}: {{ _state }}</span></span>
+        {% endfor %}
+      </div>
+      <span class="muted">{{ t(request, 'nav.mt_engines') }}</span>
+    </div>
+  </aside>
+
+  <div class="nav-backdrop" data-nav-backdrop></div>
+
+  <div class="main">
+    <header class="topbar2">
+      <button type="button" class="hamburger"{{ _ui_lang_attr }} data-nav-toggle aria-controls="app-sidebar"
+              aria-label="{{ t(request, 'chrome.toggle_nav') }}" aria-expanded="false"><span aria-hidden="true">☰</span></button>
+      <div class="crumbs"{% if '<h1' in _shell_page_content|lower %}{{ _ui_lang_attr }}{% endif %} data-shell-ancestors="{{ t(request, 'nav.group_workspace') }}">{% if '<h1' in _shell_page_content|lower %}{{ _shell_ancestor.label }}{% else %}{{ page_title_text(self.title()) }}{% endif %}</div>
+      <div class="topactions">
+        {% block actions %}{% endblock %}
+        <details class="usermenu"{{ _ui_lang_attr }}>
+          <summary aria-haspopup="true" aria-expanded="false" title="{{ t(request, 'chrome.profile') }}">
+            <span class="avatar">{{ (me.name or me.email or meta.org)[0]|upper }}</span>
+            {% if meta.auth_on %}<span class="um-id"><span class="um-name">{{ me.name or me.email }}</span><span class="um-role">{{ role_label(request, me.role) }}</span></span>{% endif %}
+            <span class="um-caret" aria-hidden="true">▾</span>
+          </summary>
+          <div class="um-panel">
+            <div class="um-head">
+              <div class="um-name">{{ me.name or me.email or t(request, 'chrome.system') }}</div>
+              <div class="muted small">{% if meta.auth_on %}{{ me.email }} · {{ role_label(request, me.role) }}{% else %}{{ t(request, 'chrome.auth_off') }}{% endif %}</div>
+            </div>
+            <div role="menu" aria-label="{{ t(request, 'chrome.profile') }}">
+            <a href="/account" role="menuitem"><span aria-hidden="true">⚙</span> {{ t(request, 'chrome.account_settings') }}</a>
+            {# "Get started" lives here for an account that has not dismissed the checklist; once
+               dismissed it is switched back on from Account settings (SPEC-onboarding-tour D5). #}
+            {% if ob_elig and get_started_visible(request) %}<a href="/?tour=1" role="menuitem" class="ob-open" data-tour-open{{ _ui_lang_attr }}><span aria-hidden="true">◎</span> {{ t(request, 'chrome.get_started') }}</a>{% endif %}
+            {% if can_tune_ai(me) %}<a href="/setup-ai" role="menuitem"><span aria-hidden="true">✨</span> {{ t(request, 'nav.setup_ai') }}</a>{% endif %}
+            {% if me and me.role == 'admin' %}<a href="/users" role="menuitem"><span aria-hidden="true">👤</span> {{ t(request, 'nav.users') }}</a>{% endif %}
+            {% if me and me.role == 'admin' %}<a href="/settings" role="menuitem"><span aria-hidden="true">⚙</span> {{ t(request, 'nav.settings') }}</a>{% endif %}
+            <a href="/help" role="menuitem"><span aria-hidden="true">❔</span> {{ t(request, 'nav.help') }}</a>
+            <div class="um-sep" role="separator"></div>
+            <div role="group" aria-label="{{ t(request, 'chrome.theme_label') }}" class="um-themes"{{ _ui_lang_attr }}>
+              <div class="um-group-label" aria-hidden="true">{{ t(request, 'chrome.theme_label') }}</div>
+              <button type="button" role="menuitemradio" aria-checked="false" class="um-item" data-theme-set="light"><span aria-hidden="true" class="um-check"></span> {{ t(request, 'chrome.theme_light') }}</button>
+              <button type="button" role="menuitemradio" aria-checked="false" class="um-item" data-theme-set="dark"><span aria-hidden="true" class="um-check"></span> {{ t(request, 'chrome.theme_dark') }}</button>
+              <button type="button" role="menuitemradio" aria-checked="false" class="um-item" data-theme-set="system"><span aria-hidden="true" class="um-check"></span> {{ t(request, 'chrome.theme_system') }}</button>
+            </div>
+            {% if meta.auth_on %}
+              <div class="um-sep" role="separator"></div>
+              {# #251: sign-out is a POST with the CSRF token (it ends every session of the
+                 account), so the menu item is the form's submit button. #}
+              <form method="post" action="/auth/logout" class="um-form" role="none">{% include "_csrf.html" %}<button type="submit" role="menuitem" class="um-item um-danger"><span aria-hidden="true">⎋</span> {{ t(request, 'chrome.sign_out') }}</button></form>
+            {% endif %}
+            </div>
+          </div>
+        </details>
+      </div>
+      <form method="get" action="/search" class="topsearch-form" role="search"{{ _ui_lang_attr }}>
+        <label class="sr-only" for="topsearch-q">{{ t(request, 'chrome.search_placeholder') }}</label>
+        <input id="topsearch-q" class="topsearch" type="search" name="q"
+               value="{{ request.query_params.get('q', '') }}"
+               placeholder="{{ t(request, 'chrome.search_placeholder') }}" autocomplete="off" maxlength="100" />
+        {# The search UI is the Ctrl+K dialog: clicking or typing here opens it (command_palette.js). Without JS this form submits to the /search results page. #}
+        <button type="button" class="search-hint" data-command-palette-open hidden aria-haspopup="dialog" aria-controls="command-palette" aria-label="Ctrl+K: {{ t(request, 'page.app_shell.palette_title') }}"><kbd>Ctrl+K</kbd></button>
+      </form>
+    </header>
+    {% if meta.mock_fallback %}
+    <div class="warnbar" role="alert"{{ _ui_lang_attr }}>
+      {{ t(request, 'chrome.mock_warn_html', provider=meta.default_provider)|safe }}
+      {% if can_tune_ai(me) %}<a href="/setup-ai">{{ t(request, 'chrome.mock_warn_link') }}</a>{% endif %}
+    </div>
+    {% elif meta.mock_demo %}
+    {# The mock was chosen on purpose: say so on every page, never silently (#561). #}
+    <div class="warnbar mockbar" role="status"{{ _ui_lang_attr }}>
+      {{ t(request, 'chrome.mock_demo_html')|safe }}
+      {% if can_tune_ai(me) %}<a href="/setup-ai">{{ t(request, 'chrome.mock_warn_link') }}</a>{% endif %}
+    </div>
+    {% endif %}
+    {% if meta.spend_cap_tripped %}
+    <div class="warnbar spendbar" role="alert"{{ _ui_lang_attr }}>
+      {% if can_see_ai_spend(me) %}{{ t(request, 'chrome.spend_cap_html', spent='%.2f'|format(meta.spend_spent), cap='%.2f'|format(meta.spend_cap))|safe }}{% else %}{{ t(request, 'chrome.spend_cap_short') }}{% endif %}
+      {% if can_tune_ai(me) %}<a href="/setup-ai">{{ t(request, 'chrome.spend_cap_link') }}</a>{% endif %}
+      {# The banner only ever shows once the cap IS tripped, so this compact meter
+         is always the at/over-cap (danger) state - full red bar; the exact numbers
+         are already in the text above (never color-alone). See DESIGN.md §5. #}
+      <div class="prog" aria-hidden="true"><div class="prog-bar" style="width:100%"></div></div>
+    </div>
+    {% endif %}
+    <main class="content{% if wide_page is defined and wide_page %} content-wide{% endif %}" id="main-content" tabindex="-1">
+      {# a11y T6: the page error summary is the first child of <main> (the warnbars above
+         stay outside main). A page that shows its error elsewhere overrides the block. #}
+      {% block error_summary %}{{ fe.error_summary(request, err|default(none)) }}{% endblock %}
+      {{ _shell_page_content }}
+    </main>
+  </div>
+</div>
+{% include "_new_project_dialog.html" %}
+<script src="/static/mobilenav.js?v={{ static_v('mobilenav.js') }}"></script>
+<script src="/static/sidebar_ux.js?v={{ static_v('sidebar_ux.js') }}"></script>
+{# Command palette component #}
+{% include "_command_palette.html" %}
+<script src="/static/command_palette.js?v={{ static_v('command_palette.js') }}"></script>
+{# SB-05 fail-open guard: sidebar_ux.js sets window.__locSidebarUxReady once it has
+   built the collapse control + label spans. If that script 404'd or threw (this
+   inline script still runs; a failed external script does not block later scripts),
+   strip sb-js so the sb-js-gated collapsed rail can never trap the user in a
+   control-less 56px rail; the sidebar then renders fully usable expanded. #}
+<script nonce="{{ csp_nonce() }}">
+  if (!window.__locSidebarUxReady) { document.documentElement.classList.remove('sb-js'); }
+</script>
+<script src="/static/usermenu.js?v={{ static_v('usermenu.js') }}"></script>
+<script src="/static/a11y_shell.js?v={{ static_v('a11y_shell.js') }}"></script>
+<script src="/static/form_errors.js?v={{ static_v('form_errors.js') }}"></script>
+{% if _st %}{% include "_session_timeout.html" %}
+<script src="/static/session_timeout.js?v={{ static_v('session_timeout.js') }}"></script>{% endif %}
+{# Onboarding spotlight (SPEC-onboarding-tour Phase 2), eligible users only.
+   The labels blob feeds driver.js the translated button text (no hardcoded
+   English in the JS); driver.js.iife.js is the vendored MIT lib; onboarding.js
+   wires the "Show me" affordance + the ?spotlight= target-page highlight. Loaded
+   AFTER the DOM + driver.js so both are ready. Progressive enhancement: absent
+   these, the Phase-1 checklist links keep working. #}
+{% if ob_elig %}
+<script nonce="{{ csp_nonce() }}" type="application/json" data-spotlight-labels>{{ {'go': t(request, 'page.onboarding.spot_go'), 'done': t(request, 'page.onboarding.spot_done'), 'close': t(request, 'page.onboarding.spot_close')}|tojson }}</script>
+<script src="/static/vendor/driver/driver.js.iife.js"></script>
+<script src="/static/onboarding.js?v={{ static_v('onboarding.js') }}"></script>
+{% endif %}
+<script src="/static/theme.js?v={{ static_v('theme.js') }}"></script>
+</body>
+</html>

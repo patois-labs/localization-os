@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+{% import "_macros.html" as m %}
+{% import "_form_errors.html" as fe %}
+<html lang="en"{{ theme_attrs(request) }}>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <title>{% if page_error(request, error) %}{{ t(request, 'errors.title_prefix') }} {% endif %}{{ compose_title('Two-step sign-in') }}</title>
+  {# No-FOUC theme bootstrap (same as the sign-in page). #}
+  <script nonce="{{ csp_nonce() }}">
+    (function () {
+      try {
+        var el = document.documentElement;
+        var p = el.getAttribute('data-theme-pref');  // ADR 0063: the signed-in account's choice
+        var t = (p === 'light' || p === 'dark' || p === 'system') ? p : localStorage.getItem('loc_theme');
+        if (t === 'light' || t === 'dark') el.setAttribute('data-theme', t);
+        else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) el.setAttribute('data-theme', 'light');  // #564 p1: no saved choice follows the OS
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/style.css?v={{ static_v('style.css') }}" />
+  <script src="/static/busy.js?v={{ static_v('busy.js') }}"></script>
+</head>
+<body class="authbody auth-account">
+{% include "_busy.html" %}
+  {# TOTP train (HECVAT AAAI-17). The person is NOT signed in on this page: the password
+     step left only a short-lived pending state (app/web/auth_mfa.py). #}
+  <main class="authcard">
+    <div class="brand-big"><span class="mark" aria-hidden="true">◐</span> {{ app_meta().org }}</div>
+    {% set auth_title %}Two-step sign-in{% endset %}
+    {{ m.page_header(auth_title) }}
+    <p class="muted">Your password for <strong>{{ email }}</strong> is correct. Now enter the 6-digit code your authenticator app shows for this account.</p>
+    <p class="notice" id="mfa-time-limit">For your security, finish this step within {{ minutes }} minutes (by {{ deadline }}). If the time runs out you are sent back to the sign-in page and can simply sign in again.</p>
+    {{ fe.error_summary(request, error, field=(error_field or none)) }}
+    <form method="post" action="/auth/mfa" class="form">
+      {% include "_csrf.html" %}
+      <label>Authentication code <input type="text" name="code" id="mfa-code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" required{% if not recovery_open %} autofocus{% endif %}{{ fe.invalid_attrs(request, 'mfa-code', 'mfa-code-help', when=(error_field|default('') == 'mfa-code')) }} /></label>
+      <p class="help" id="mfa-code-help">6 digits. A new code appears every 30 seconds; each code works once.</p>
+      <button type="submit" data-busy-label="{{ t(request, 'busy.checking') }}">Verify and sign in</button>
+    </form>
+    <details class="mt"{% if recovery_open %} open{% endif %}>
+      <summary>Lost your phone? Use a recovery code</summary>
+      <form method="post" action="/auth/mfa" class="form">
+        {% include "_csrf.html" %}
+        <label>Recovery code <input type="text" name="recovery" id="mfa-recovery" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="20" required{% if recovery_open %} autofocus{% endif %}{{ fe.invalid_attrs(request, 'mfa-recovery', 'mfa-recovery-help', when=(error_field|default('') == 'mfa-recovery')) }} /></label>
+        <p class="help" id="mfa-recovery-help">One of the ten codes you saved when you set up two-step sign-in, like abcde-fgh23. Each works once. If you have none left, ask an administrator to reset two-step sign-in for you.</p>
+        <button type="submit" class="ghost" data-busy-label="{{ t(request, 'busy.checking') }}">Use recovery code</button>
+      </form>
+    </details>
+    <form method="post" action="/auth/mfa/cancel" class="help mt">{% include "_csrf.html" %}<button type="submit" class="btnlink">Start over with a different account</button></form>
+  </main>
+<script src="/static/form_errors.js?v={{ static_v('form_errors.js') }}"></script>
+</body>
+</html>

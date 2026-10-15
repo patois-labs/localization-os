@@ -1,0 +1,19 @@
+{#- Editable page layouts (train L1, SPEC-project-layout-editor-2026-09).
+    Include RIGHT AFTER a page's movable area (the element with id="page-layout" and
+    data-layout-page set to the page key, whose cards are sections carrying a data-card
+    attribute naming each card), with
+    `layout_page` set to that key:
+
+        {% with layout_page = 'project' %}{% include "_page_layout.html" %}{% endwith %}
+
+    It renders (1) the two live regions the edit mode speaks into, present at load
+    (4.1.3: a region inserted later is often missed); (2) the caller's OWN resolved
+    layout for this page type as INERT JSON (|tojson escapes <, > and &, so a card key
+    or title can never close the script element; no inline executable JS, CSP
+    unchanged); (3) the plain, non-deferred engine script, which applies a saved layout
+    before first paint by moving the real card nodes. No JS / no saved layout = the
+    markup above, in the default order, unchanged (fail-open). -#}
+<p id="layoutAnnounce" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+<p id="layoutAlert" class="sr-only" role="alert" aria-atomic="true"></p>
+<script nonce="{{ csp_nonce() }}" type="application/json" id="page-layout-data">{{ page_layout(request, layout_page)|tojson }}</script>
+<script src="/static/page_layout.js?v={{ static_v('page_layout.js') }}"></script>

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Vendor Studio{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><a href="/">Vendor Studio</a> <span class="tag">LSP</span></div>
+  {% if session %}
+  <form class="persona" method="post" action="/persona">
+    <label>Role
+      <select name="role" data-persona-role>
+        {% for r in ["PM", "Translator", "Reviewer"] %}
+        <option value="{{ r }}" {% if session.role == r %}selected{% endif %}>{{ r }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <input name="name" value="{{ session.name }}" placeholder="display name">
+    <button type="submit">Set</button>
+  </form>
+  <nav>
+    <a href="/">Inbox</a>
+    <a href="/settings/qa">QA settings</a>
+    <a href="/wirelog">Wire log</a>
+    <form method="post" action="/logout" class="inline nav-logout"><button type="submit">Log out</button></form>
+  </nav>
+  {% endif %}
+</header>
+<main>
+  {% block body %}{% endblock %}
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

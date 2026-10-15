@@ -1,0 +1,75 @@
+# Factory spec for the REBUILT Confluence connector (connector parity). Describes the shipped,
+# un-archived connector: `generate.py check scripts/factory/specs/confluence.yaml` must pass.
+# Confluence keeps its original page_ids/space_key/cql request shape and its confluence-translate
+# verb (existing connections, the webhook job and the MCP route all use them), so the touchpoint
+# prose below carries those shapes.
+
+connector:
+  kind: confluence
+  name: Confluence
+  class_name: ConfluenceConnector
+  icon: "📖"
+  cat: "Knowledge base / help center"
+  blurb: >-
+    Translate Confluence pages (help articles, runbooks, policies) into any language. Each
+    translation is created as a child page, so the original stays intact.
+  docs_url: "https://developer.atlassian.com/cloud/confluence/rest/v2/intro/"
+  supports_oauth: true
+  archived: false
+
+  topology: T3
+  auth: [api_key, oauth3lo]
+  api_version: "v2"
+  rich_text: html
+  regions: base_url
+  change_signals:
+    webhook_sig: hmac-sha256
+    poll_field: version.number
+    stale_flag: null
+    thin_payload: true
+  anti_loop_label: false
+
+  retry_noun: page
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<page-id>"
+  api_docstring: >-
+    Translate Confluence page(s) on the fly into one or more languages, creating a
+    localized child page per language (T3, tracked in the id map).
+
+  article_noun_phrase: "a Confluence"
+  cli_parser_help: >-
+    Translate Confluence pages into the connection's locales as localized child pages.
+
+  item_units:
+    scan: "the space's pages"
+    becomes: "a localized child page"
+
+  help_row_body: "Translate Confluence page(s). Body: <code>page_ids</code>/<code>page_id</code>, <code>space_key</code>, <code>cql</code>, <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Translate Confluence pages into localized child pages."
+
+  cli_expected_desc: "translate Confluence pages into localized child pages"
+
+  # No bb-io code was read for this rebuild: built from Atlassian's v2 OpenAPI and docs only,
+  # so there is no bb_io block and no THIRD_PARTY_NOTICES entry.
+
+  config_fields:
+    - {name: base_url, label: "Site URL", help: "Your Atlassian site, e.g. https://your-team.atlassian.net.", placeholder: "https://your-team.atlassian.net"}
+    - {name: space_key, label: "Space key", help: "Default space and SCOPE.", required: false, placeholder: "HELP"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated languages to create.", required: false, placeholder: "es-MX, de-DE"}
+  secret_fields:
+    - {name: api_token, label: "API token", help: "Created at id.atlassian.com/manage-profile/security/api-tokens.", secret: true, placeholder: "ATATT3xFfGF0"}
+  setup_steps:
+    - "Create an API token at id.atlassian.com, Security, API tokens."
+    - "Set the Site URL and a Space key."
+  other_side: >-
+    Change detection is poll-based (or an HMAC-signed page-updated webhook): unchanged pages
+    are suppressed by content hash.
+
+  # Confluence keeps its own request shape (page_ids / space_key / cql) on the API route, the
+  # CLI verb, the store delegator and a richer harvest mapper (space + ancestors + labels).
+  hand_shaped: [store.delegator, harvest.mappers, api.routes, cli.handlers]

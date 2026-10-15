@@ -1,0 +1,362 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ v.name }} - Vendor{% endblock %}
+{% block content %}
+<div class="connections-page">
+
+<p class="muted small"><a href="/vendors"><span aria-hidden="true">←</span> Vendors</a></p>
+{% set header_actions %}
+<button type="button" class="ghost layout-edit-btn" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+{% endset %}
+{% set header_status %}{% if v.archived %}{{ m.status_badge('archived', 'Archived', 'warn') }}{% endif %}{% endset %}
+{{ m.page_header(v.name, meta=v.description, status=header_status, secondary=header_actions) }}
+
+{# a11y T7: a ?err= error renders once, as a sentence, in the summary at the top of
+   main (base.html + _form_errors.html), never as a raw code here. #}
+{% if request.query_params.get('saved') %}
+  <p class="ok">Saved.</p>
+{% endif %}
+{% if request.query_params.get('notice') %}
+  <p class="notice">{{ request.query_params.get('notice') }}</p>
+{% endif %}
+
+{# --- basics ------------------------------------------------------------- #}
+<div class="connections-layout">
+<nav class="connections-section-nav" aria-label="{{ v.name }} sections">
+  <a href="#vendor-basics">Basics</a>
+  <a href="#vendor-credentials">Credentials</a>
+  <a href="#vendor-rates">MSA rate card</a>
+  <a href="#vendor-dispatch">Dispatch options</a>
+  <a href="#vendor-customers">Linked customers</a>
+  <a href="#vendor-open">Open dispatches</a>
+  {% if returned_legs %}<a href="#vendor-delivered">Delivered (reworkable)</a>{% endif %}
+  <a href="#vendor-lifecycle">Lifecycle</a>
+</nav>
+<div id="page-layout" class="page-layout" data-layout-page="vendor">
+{% call m.card(layout_key='basics') %}
+  <h2 id="vendor-basics">Basics</h2>
+  <form method="post" action="/vendors/{{ v.id }}" class="form">
+    {% include "_csrf.html" %}
+    {% set field_label_1 %}Basics{% endset %}
+{% call m.form_section("vendor_detail-fields-1", field_label_1) %}
+      <label>Name <input type="text" name="name" value="{{ v.name }}" required /></label>
+      <label>Description <input type="text" name="description" value="{{ v.description }}" placeholder="(optional)" /></label>
+      <label>Endpoint URL <input type="text" name="endpoint_url" value="{{ v.endpoint_url }}" placeholder="https://vendor.example.com/intake" />
+        <span class="muted small">Moving it to another server (scheme, host or port) clears the saved signing secret and auth token; re-enter them below.</span></label>
+      <label>Transport protocol
+        <select name="protocol">
+          {% for p in protocols %}<option value="{{ p }}"{% if p == (v.protocol or 'native') %} selected{% endif %}>{{ p }}</option>{% endfor %}
+        </select>
+      </label>
+    {% endcall %}
+    <p class="help small">The transport is how a dispatch reaches the vendor and how its
+    return arrives. <code>native</code> uses our own signed JSON contract (webhook / poll /
+    manual re-upload). Per-LSP adapters are a later wave; whatever the transport, a return
+    always re-enters through the same guarded write seam.</p>
+    <button type="submit">Save</button>
+  </form>
+{% endcall %}
+
+{# --- credentials (write-only) ------------------------------------------ #}
+{% call m.card(layout_key='credentials') %}
+  <h2 id="vendor-credentials">Credentials <span class="muted small">· leave blank to keep the stored value</span></h2>
+  <p class="help">The signing secret + auth token are stored encrypted and are never shown
+  back. {% if v.has_secret %}{{ m.status_badge('new', 'Credentials are set.') }}{% else %}<span class="muted">No credentials stored yet.</span>{% endif %}</p>
+  <form method="post" action="/vendors/{{ v.id }}/secret" class="form">
+    {% include "_csrf.html" %}
+    {% set field_label_2 %}Credentials{% endset %}
+{% call m.form_section("vendor_detail-fields-2", field_label_2) %}
+      <label>Signing secret
+        <input type="password" name="signing_secret" value="" placeholder="{{ '•••••• (stored)' if v.has_secret else '' }}" autocomplete="new-password" />
+      </label>
+      <label>Auth token
+        <input type="password" name="auth_token" value="" placeholder="{{ '•••••• (stored)' if v.has_secret else '' }}" autocomplete="new-password" />
+      </label>
+    {% endcall %}
+    <button type="submit">Save credentials</button>
+  </form>
+{% endcall %}
+
+{# --- MSA rate card ------------------------------------------------------ #}
+{% call m.card(layout_key='rates') %}
+  <h2 id="vendor-rates">MSA rate card <span class="muted small">· cost per word by TM-match band</span></h2>
+  <p class="help">Covered bands (100%+ / context / repetitions) default to 0.0 - a vendor
+  only bills them when its MSA explicitly charges for matches.</p>
+  <form method="post" action="/vendors/{{ v.id }}/rate-card" class="form">
+    {% include "_csrf.html" %}
+    {% set field_label_3 %}MSA rate card{% endset %}
+{% call m.form_section("vendor_detail-fields-3", field_label_3) %}
+      <label>Currency <input type="text" name="currency" value="{{ v.rate_card.currency }}" size="6" /></label>
+      {% call m.data_table('MSA rate card · cost per word by TM-match band', [{'label': 'Band'}, {'label': 'XLIFF state-qualifier'}, {'label': 'Cost / word'}]) %}
+
+          {% for b in bands %}
+          <tr>
+            <td>{{ b }}{% if b in covered_bands %} <span class="muted small">(covered)</span>{% endif %}</td>
+            <td class="muted small">{{ band_labels.get(b, '') }}</td>
+            <td><input type="number" step="any" min="0" name="band_{{ b }}" aria-label="Rate for {{ b }}" value="{{ v.rate_card.bands.get(b, 0.0) }}" style="width:8em" /></td>
+          </tr>
+          {% endfor %}
+
+{% endcall %}
+    {% endcall %}
+    <button type="submit">Save rate card</button>
+  </form>
+{% endcall %}
+
+{# --- dispatch options (VP-0) -------------------------------------------- #}
+{% call m.card(layout_key='dispatch') %}
+  <h2 id="vendor-dispatch">Dispatch options</h2>
+  <p class="help">Fine-tune what a dispatch to this vendor carries. Every dispatched segment
+  is still packaged and its id still returns; these options only shape the payload.</p>
+  <form method="post" action="/vendors/{{ v.id }}/dispatch-options" class="form">
+    {% include "_csrf.html" %}
+    {% set field_label_4 %}Dispatch options{% endset %}
+{% call m.form_section("vendor_detail-fields-4", field_label_4) %}
+      <label class="checkbox">
+        <input type="checkbox" name="omit_locked_targets" value="1"
+               {% if v.config.get('omit_locked_targets') %}checked{% endif %} />
+        Omit targets on locked segments
+      </label>
+      <p class="help small">When on, a locked segment (100% TM / context / repetition) ships
+      its source + a locked marker but an empty target - the vendor never receives the
+      leveraged text. Off (default): the leveraged target ships, visible-but-locked.</p>
+      <label class="checkbox">
+        <input type="checkbox" name="requires_quote_approval" value="1"
+               {% if v.config.get('requires_quote_approval') %}checked{% endif %} />
+        Require quote approval before work
+      </label>
+      <p class="help small">Wave E R3: when on, a dispatch to this vendor parks <em>QUOTED</em>
+      and awaits a quote (recorded here or submitted over the wire) and then an operator
+      <strong>approval</strong> before work proceeds and any return is admitted. Off (default):
+      dispatch parks DISPATCHED and the vendor may begin immediately.
+      <strong>Only enable this for a vendor whose system implements
+      <code>POST /webhooks/vendor-quotes</code></strong> (or whose operator records the quote
+      here manually); a vendor that ignores <code>quote_requested</code> and simply delivers
+      will have its delivery <strong>refused</strong> until the quote is approved.</p>
+    {% endcall %}
+    <button type="submit">Save options</button>
+  </form>
+{% endcall %}
+
+{# --- customer links ----------------------------------------------------- #}
+{% call m.card(layout_key='customers') %}
+  <h2 id="vendor-customers">Linked customers</h2>
+  <p class="help">A vendor is only offered on an external step within a customer it is
+  linked to (fail-closed).</p>
+  {% if linked %}
+  {% call m.data_table('Linked customers', [{'label': 'Customer'}, {'label': '', 'actions': true}]) %}
+
+      {% for c in linked %}
+      <tr>
+        <td><span class="cell-primary">{{ c.name }}</span></td>
+        <td class="row-actions">
+          {% call m.row_menu('vlm-' ~ c.id, 'More actions for ' ~ c.name) %}
+          <form method="post" action="/vendors/{{ v.id }}/unlink-customer">
+            {% include "_csrf.html" %}
+            <input type="hidden" name="customer_id" value="{{ c.id }}" />
+            <button type="submit" role="menuitem" class="rm-danger" aria-label="Unlink {{ c.name }}">Unlink</button>
+          </form>
+          {% endcall %}
+        </td>
+      </tr>
+      {% endfor %}
+
+{% endcall %}
+  {% else %}
+    {{ m.empty_state('Not linked to any customer yet.') }}
+  {% endif %}
+  {% if available %}
+  <form method="post" action="/vendors/{{ v.id }}/link-customer" class="form inline-form">
+    {% include "_csrf.html" %}
+    <label>Link a customer
+      <select name="customer_id">
+        {% for c in available %}<option value="{{ c.id }}">{{ customer_label(c) }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="submit">Link</button>
+  </form>
+  {% else %}
+    <p class="muted small">No more customers available to link.</p>
+  {% endif %}
+{% endcall %}
+
+{# --- open dispatch legs + the guarded return (Wave B) ------------------- #}
+{% call m.card(layout_key='open_dispatches') %}
+  <h2 id="vendor-open">Open dispatches</h2>
+  <p class="help">Work this vendor is holding. A return normally arrives on its own (the
+  signed callback, or a poll when the vendor exposes one); this panel is the manual
+  fallback. A leg tagged <strong>manual delivery</strong> has no wire at all - nothing was
+  sent: download its XLIFF, hand it to the vendor out-of-band, and the return comes back
+  through the upload box below. However it arrives, the payload is judged identically: every dispatched
+  segment id must come back exactly once, and every returned string goes through the
+  same guarded write seam as a machine translation - tags, glossary/DNT, language, number
+  and refusal checks all apply. A conversational refusal or a hard TM lock WITHHOLDS the
+  text (nothing is stored, the segment is routed to review); the softer lanes
+  (glossary/DNT/language/number/length/tag) STORE the text and then flag the segment
+  needs_review. A return that just echoes the source is treated as “not translated” and
+  never overwrites an existing translation.</p>
+  {% if legs %}
+  {% call m.data_table('Open dispatches', [{'label': '#'}, {'label': 'Run'}, {'label': 'Locale'}, {'label': 'Segments'}, {'label': 'Outstanding'}, {'label': 'Host'}, {'label': 'Estimate'}, {'label': 'Expires'}, {'label': '', 'actions': true}]) %}
+
+    {% for d in legs %}
+      <tr>
+        <td>{{ d.id }}</td>
+        <td><a href="/runs/{{ d.workflow_run_id }}">run {{ d.workflow_run_id }}</a></td>
+        <td>{{ d.target_locale }}</td>
+        <td>{{ d.segment_count }}</td>
+        <td>{{ d.outstanding_ids }} of {{ d.dispatched_ids }}{% if d.status == 'quoted' %} {{ m.status_badge('quoted', 'QUOTED') }}{% endif %}{% if d.rework_round %} <span class="badge" title="rework round {{ d.rework_round }}{% if d.rework_of %}, superseding dispatch {{ d.rework_of }}{% endif %}">rework #{{ d.rework_round }}{% if d.rework_of %} of #{{ d.rework_of }}{% endif %}</span>{% endif %}</td>
+        <td class="muted small">{{ d.endpoint_host or '-' }}</td>
+        <td>{{ '%.2f'|format(d.estimate_cost_usd or 0) }} {{ d.estimate_currency }}</td>
+        <td class="muted small">{{ d.expires_at or 'no limit' }}</td>
+        <td>
+          {% if d.protocol == 'manual' %}
+          {# Manual (file-exchange) leg: there is no wire. Delivery is the operator's - download
+             the XLIFF and hand it to the vendor; the return comes back through the upload box. #}
+          <span class="badge" title="manual delivery - download the XLIFF and hand it to the vendor; returns come back via the upload box below">manual delivery</span>
+          {% elif d.pollable %}
+          <form method="post" action="/vendors/{{ v.id }}/dispatches/{{ d.id }}/poll" class="form inline-form">
+            {% include "_csrf.html" %}
+            <button type="submit" class="ghost" data-busy-label="{{ t(request, 'busy.checking') }}">Poll now</button>
+          </form>
+          {% else %}<span class="muted small">no poll URL</span>{% endif %}
+          <a class="ghost small" href="/vendors/{{ v.id }}/dispatches/{{ d.id }}/xliff">Download XLIFF</a>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="9">
+          {% if d.band_rows %}
+          <details>
+            <summary class="muted small">TM-leverage band breakdown (dispatch {{ d.id }})</summary>
+            {% call m.data_table('TM-leverage band breakdown (dispatch ' ~ d.id ~ ')', [{'label': 'Band'}, {'label': 'Segments'}, {'label': 'Words'}, {'label': 'Cost'}, {'label': 'Scope'}]) %}
+
+                {% for r in d.band_rows %}
+                <tr><td>{{ r.label }}</td><td class="data-mono">{{ r.segments }}</td><td class="data-mono">{{ r.words }}</td><td class="data-mono">${{ '%.2f'|format(r.cost) }}</td><td class="muted">{{ 'covered' if r.covered else 'billable' }}</td></tr>
+                {% endfor %}
+
+{% endcall %}
+          </details>
+          {% endif %}
+          {% if d.status == 'quoted' %}
+          {# Wave E R3: this leg awaits a quote + approval before work proceeds. #}
+          <div class="quote-gate">
+            <p class="help small">Quote gate: this leg is parked awaiting a quote and your
+            approval before the vendor starts work. Estimate
+            ${{ '%.2f'|format(d.estimate_cost_usd or 0) }}
+            {%- if d.quoted_cost_usd is not none %}; vendor quote
+            ${{ '%.2f'|format(d.quoted_cost_usd) }} {{ d.quote_currency or 'USD' }}{% endif %}.</p>
+            <form method="post" action="/vendors/{{ v.id }}/dispatches/{{ d.id }}/quote" class="form inline-form">
+              {% include "_csrf.html" %}
+              <label class="small">Record quote <input type="number" step="0.01" min="0" name="quoted_cost_usd" required /></label>
+              <label>Currency <input type="text" name="currency" placeholder="USD" size="4" /></label>
+              <button type="submit" class="ghost">Record</button>
+            </form>
+            <form method="post" action="/vendors/{{ v.id }}/dispatches/{{ d.id }}/approve-quote" class="form inline-form">
+              {% include "_csrf.html" %}
+              <label class="small">Approve (optional amount) <input type="number" step="0.01" min="0" name="quoted_cost_usd" /></label>
+              <button type="submit">Approve &amp; proceed</button>
+            </form>
+            <form method="post" action="/vendors/{{ v.id }}/dispatches/{{ d.id }}/decline-quote" class="form inline-form">
+              {% include "_csrf.html" %}
+              <label>Reason (optional) <input type="text" name="reason" placeholder="reason (optional)" size="18" /></label>
+              <button type="submit" class="ghost">Decline</button>
+            </form>
+          </div>
+          {% else %}
+          <form method="post" action="/vendors/{{ v.id }}/dispatches/{{ d.id }}/return" class="form" enctype="multipart/form-data">
+            {% include "_csrf.html" %}
+            <label>Upload the return contract (JSON or XLIFF) for dispatch {{ d.id }}
+              <textarea name="payload" rows="3" placeholder='{"claim_token": "...", "target_locale": "{{ d.target_locale }}", "segments": [{"id": 1, "target": "..."}]}'></textarea>
+            </label>
+            <label class="small">…or choose a file (.json or .xlf) <input type="file" name="file" accept=".json,application/json,.xlf,.xliff,application/xml,application/xliff+xml" /></label>
+            <button type="submit" data-busy-label="{{ t(request, 'busy.uploading') }}">Ingest return</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+
+{% endcall %}
+  {% else %}
+    {{ m.empty_state('Nothing is out with this vendor right now.') }}
+  {% endif %}
+{% endcall %}
+
+{# --- delivered legs (reworkable) - Wave E R4 ---------------------------- #}
+{% if returned_legs %}
+{% call m.card(layout_key='delivered') %}
+  <h2 id="vendor-delivered">Delivered (reworkable)</h2>
+  <p class="help">Recently returned work. If a delivery is not good enough, <strong>reject</strong>
+  it to re-dispatch a rework round to this same vendor, carrying structured feedback (which
+  segments failed which guard lanes + your note). Rework rounds are capped
+  (<code>vendor_rework_max_rounds</code>, default 1, settable from 1 to 10); past the cap a reject escalates to a
+  human instead. A rework never injects content - its return still goes through the one guarded
+  admission seam.</p>
+  {% call m.data_table('Delivered (reworkable)', [{'label': '#'}, {'label': 'Run'}, {'label': 'Locale'}, {'label': 'Segments'}, {'label': 'Actual'}, {'label': 'Rework'}, {'label': '', 'actions': true}]) %}
+
+    {% for d in returned_legs %}
+      <tr>
+        <td>{{ d.id }}</td>
+        <td><a href="/runs/{{ d.workflow_run_id }}">run {{ d.workflow_run_id }}</a></td>
+        <td>{{ d.target_locale }}</td>
+        <td>{{ d.segment_count }}</td>
+        <td>{% if d.actual_cost_usd is not none %}${{ '%.2f'|format(d.actual_cost_usd) }}{% else %}-{% endif %}</td>
+        <td>{% if d.rework_round %}round {{ d.rework_round }}{% else %}-{% endif %}</td>
+        <td>
+          <form method="post" action="/vendors/{{ v.id }}/dispatches/{{ d.id }}/reject-rework" class="form inline-form">
+            {% include "_csrf.html" %}
+            <label>Rework note (optional) <input type="text" name="note" placeholder="rework note (optional)" size="24" /></label>
+            <button type="submit" class="ghost">Reject &amp; rework</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+
+{% endcall %}
+{% endcall %}
+{% endif %}
+
+{# --- lifecycle ---------------------------------------------------------- #}
+{% call m.card(layout_key='lifecycle') %}
+  <h2 id="vendor-lifecycle">Lifecycle</h2>
+  <div class="row-actions">
+    {% if v.archived %}
+    <form method="post" action="/vendors/{{ v.id }}/unarchive" class="form inline-form">
+      {% include "_csrf.html" %}
+      <button type="submit" class="ghost">Unarchive</button>
+    </form>
+    {% else %}
+    <form method="post" action="/vendors/{{ v.id }}/archive" class="form inline-form">
+      {% include "_csrf.html" %}
+      <button type="submit" class="ghost">Archive</button>
+    </form>
+    {% endif %}
+    <form method="post" action="/vendors/{{ v.id }}/delete" class="form inline-form" data-confirm-delete data-vendor-name="{{ v.name }}">
+      {% include "_csrf.html" %}
+      <button type="submit" class="ghost">Delete</button>
+    </form>
+  </div>
+  <p class="muted small">Delete is refused while a workflow step selects this vendor or a
+  dispatch leg references it - archive retires it from pickers without breaking history.</p>
+{% endcall %}
+</div>
+</div>
+{% with layout_page = 'vendor' %}{% include "_page_layout.html" %}{% endwith %}
+
+<script nonce="{{ csp_nonce() }}">
+// SECURITY: the vendor name rides in a data-* attribute (safe HTML-attribute context)
+// and confirm() reads it as plain string data from a static handler - never
+// interpolated into an inline on* JS string (matches content_types.html).
+(function () {
+  document.querySelectorAll('form[data-confirm-delete]').forEach(function (f) {
+    f.addEventListener('submit', function (e) {
+      var name = f.getAttribute('data-vendor-name') || 'this vendor';
+      if (window.LocAsk && window.LocAsk.guard) { window.LocAsk.guard(e, 'Delete vendor "' + name + '"? This is refused while any '
+          + 'workflow step or dispatch still references it.'); }
+      else { e.preventDefault(); }
+    });
+  });
+})();
+</script>
+
+</div>
+{% endblock %}

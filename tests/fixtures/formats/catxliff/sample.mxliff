@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xliff xmlns="urn:oasis:names:tc:xliff:document:1.2" xmlns:m="http://www.memsource.com/mxlf/2.0" version="1.2" m:version="2" m:level="1">
+<file original="guide.docx" source-language="en" target-language="de" datatype="x-undefined" m:job-uid="abc123">
+<body>
+<group id="0" m:para-id="0">
+<trans-unit id="seg0" xml:space="preserve" m:para-id="0" m:confirmed="0" m:locked="false" m:score="0.0" m:gross-score="0.0">
+<source>Click {1>Save&lt;1} to keep {2} changes.</source>
+<target></target>
+<m:tunit-metadata><m:mark id="1"><m:type>code</m:type><m:content>&lt;b&gt;</m:content></m:mark></m:tunit-metadata>
+</trans-unit>
+<trans-unit id="seg1" xml:space="preserve" m:para-id="0" m:confirmed="0" m:locked="true" m:locked-by="ex">
+<source>Do not touch.</source>
+<target>Nicht anfassen.</target>
+</trans-unit>
+<trans-unit id="seg2" xml:space="preserve" m:para-id="0" m:confirmed="1" m:locked="false" m:score="1.01" m:trans-origin="tm">
+<source>Confirmed match.</source>
+<target>Bestaetigter Treffer.</target>
+</trans-unit>
+<trans-unit id="seg3" xml:space="preserve" m:para-id="0" m:confirmed="0" m:locked="false" m:score="0.62" m:trans-origin="mt">
+<source>Draft from MT.</source>
+<target>Entwurf.</target>
+<alt-trans origin="machine-trans" match-quality="62"><target>Entwurf aus MT.</target></alt-trans>
+</trans-unit>
+</group>
+</body>
+</file>
+</xliff>

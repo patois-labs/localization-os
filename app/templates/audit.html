@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Audit log{% endblock %}
+{% block content %}
+
+{% set audit_meta %}<p class="muted">Append-only, tamper-evident record of mutating actions and key events (most recent first).</p>{% endset %}
+{{ m.page_header("Audit log", meta=audit_meta) }}
+
+{% set qs = ('&actor=' ~ (actor_q|urlencode) if actor_q else '') ~ ('&action=' ~ (action_q|urlencode) if action_q else '') %}
+
+{% call m.card() %}
+  <form class="form inline-form" method="get" action="/audit">
+    <label class="small">Actor
+      <input type="text" name="actor" value="{{ actor_q or '' }}" placeholder="user@example.com">
+    </label>
+    <label class="small">Action contains
+      <input type="text" name="action" value="{{ action_q or '' }}" placeholder="e.g. user. or settings">
+    </label>
+    <input type="hidden" name="page" value="1">
+    <button type="submit" class="btn-primary">Filter</button>
+    {% if actor_q or action_q %}
+      <a class="ghost small" href="/audit">Clear</a>
+    {% endif %}
+    {# R2-3: chain verify + NDJSON export are admin-only. A customer-bound viewer
+       sees only its own customer's rows and never these full-table operations. #}
+    {% if not customer_bound %}
+    <a class="ghost small" href="/audit?verify=1{{ qs }}">Verify chain</a>
+    <a class="ghost small" href="/audit/export{% if qs %}?{{ qs[1:] }}{% endif %}"
+       title="NDJSON for SIEM ingestion (Splunk / Elastic / Sentinel); honors the active filters">Export NDJSON</a>
+    {% endif %}
+  </form>
+
+  {% if actor_q or action_q %}
+    <p class="muted small">
+      Active filters:
+      {% if actor_q %}<span class="chip">actor: {{ actor_q }}</span>{% endif %}
+      {% if action_q %}<span class="chip">action: {{ action_q }}</span>{% endif %}
+    </p>
+  {% endif %}
+
+  {% if chain is defined and chain is not none %}
+    {% if chain[0] %}
+      <p class="ok">Chain intact ({{ chain[1] }} entries)</p>
+    {% else %}
+      <p class="error">Chain broken at entry #{{ chain[2] }} ({{ chain[1] }} entries verified before the break)</p>
+      {% if chain_hint %}<p class="muted small">{{ chain_hint }}</p>{% endif %}
+    {% endif %}
+  {% endif %}
+
+  {# G-10 / F7: last SCHEDULED chain verification (the monitored heartbeat, distinct from the
+     on-demand "Verify chain" above). Reports DISABLED when the cadence is off, UNKNOWN when it
+     has never run or the status row was tampered (never a false OK), and STALE (warning) when
+     the scheduled check has silently stopped. #}
+  {% if chain_monitor is defined and chain_monitor %}
+    {% if chain_monitor.note %}<p class="muted small">{{ chain_monitor.note }}</p>{% endif %}
+    {% if chain_monitor.disabled %}
+      <p class="muted small">Scheduled chain check: <span class="error">DISABLED</span> (set <code>audit_chain_verify_hours</code> &gt; 0 to enable).</p>
+    {% elif not chain_monitor.snapshot %}
+      <p class="muted small">Scheduled chain check: <span class="muted">UNKNOWN</span> - no verified result yet (never run, or the status record failed its integrity check).</p>
+    {% else %}
+      {% set s = chain_monitor.snapshot %}
+      <p class="muted small">
+        Scheduled chain check:
+        {% if s.ok %}<span class="ok">OK</span>{% else %}<span class="error">BROKEN{% if s.first_bad_id %} at entry #{{ s.first_bad_id }}{% endif %}</span>{% endif %}
+        - {{ s.rows_checked }} entries, last checked {{ s.last_checked }} UTC.
+        {% if chain_monitor.stale %}<span class="error">(STALE - the scheduled check has not run recently; this result may be out of date.)</span>{% endif %}
+      </p>
+    {% endif %}
+  {% endif %}
+
+  {% if rows %}
+    {# #605: the region wrapper scrolls the wide table sideways instead of the whole page at phone width. #}
+    {% call m.data_table('Audit log', [{'label': 'Time (UTC)'}, {'label': 'Actor'}, {'label': 'Action'}, {'label': 'Target'}, {'label': 'Detail'}, {'label': 'IP'}], css_class='audit-table') %}
+        {% for r in rows %}
+          <tr>
+            <td class="muted small data-mono">{{ r.ts.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+            {# Display-only: rows written before 2026-09-25 named an unidentified /api caller
+               "anonymous". The stored value, the hash chain and the NDJSON export keep the
+               original bytes; only this cell renders the current wording. #}
+            {% if r.actor == 'anonymous' %}
+            <td title="Recorded before 2026-09-25, when an unidentified caller's address was not part of the actor">unauthenticated (legacy row)</td>
+            {% else %}
+            <td>{{ r.actor }}</td>
+            {% endif %}
+            <td><code>{{ r.action }}</code></td>
+            <td class="small">{{ r.target }}</td>
+            <td class="muted small">{{ r.detail }}</td>
+            <td class="muted small data-mono">{{ r.ip }}</td>
+          </tr>
+        {% endfor %}
+    {% endcall %}
+    {{ m.pager('/audit', page, pages, total, 'entries', qs) }}
+  {% else %}
+    <div class="empty"><p>No audit entries match.</p></div>
+  {% endif %}
+{% endcall %}
+
+{% endblock %}

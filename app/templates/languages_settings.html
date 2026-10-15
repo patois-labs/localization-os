@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Enabled languages{% endblock %}
+{% block content %}
+
+{% set header_meta %}
+  <p>Pick which of the {{ total }} languages appear in project and language-set pickers. Hiding one never breaks a project already using it.</p>
+  {% if saved %}<p class="ok">Enabled languages saved.</p>{% endif %}
+{% endset %}
+{{ m.page_header("Enabled languages", meta=header_meta) }}
+
+<section class="card">
+  <form method="post" action="/settings/languages" class="form" data-langpicker>
+    {% include "_csrf.html" %}
+    {% call m.form_section("enabled-languages", "Enabled languages") %}
+    <div class="lp-controls">
+      <input type="search" data-lp-search class="lp-search"
+             placeholder="Search languages…" aria-label="Search languages" />
+      <button type="button" class="btnlink small" data-lp-all>Select all</button>
+      <button type="button" class="btnlink small" data-lp-none>Clear</button>
+      <span class="muted small" data-lp-count>0 selected</span>
+    </div>
+    <div class="lp-list lp-grid" data-lp-list>
+      {% for row in catalog %}
+        <label class="lp-opt" data-lp-opt data-code="{{ row.code }}" data-disabled="0"
+               data-label="{{ row.name }} {{ row.code }} {{ row.native }}">
+          <input type="checkbox" name="enabled" value="{{ row.code }}"
+                 {% if row.enabled %}checked{% endif %} />
+          <span class="lp-name">{{ row.name }}</span>
+          <span class="lp-code">{{ row.code }}</span>
+        </label>
+      {% endfor %}
+    </div>
+    {% endcall %}
+    <p><button type="submit">Save enabled languages</button></p>
+  </form>
+</section>
+
+{% endblock %}

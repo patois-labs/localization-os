@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+{% import "_macros.html" as m %}
+{% import "_form_errors.html" as fe %}
+<html lang="en"{{ theme_attrs(request) }}>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <title>{% if page_error(request, error) %}{{ t(request, 'errors.title_prefix') }} {% endif %}{{ compose_title('Accept invitation') }}</title>
+  {# No-FOUC theme bootstrap: runs synchronously BEFORE the stylesheet so the
+     saved theme is applied before first paint (no flash). Absent/invalid value
+     or no-JS -> attribute stays off -> :root dark default, exactly today. #}
+  <script nonce="{{ csp_nonce() }}">
+    (function () {
+      try {
+        var el = document.documentElement;
+        var p = el.getAttribute('data-theme-pref');  // ADR 0063: the signed-in account's choice
+        var t = (p === 'light' || p === 'dark' || p === 'system') ? p : localStorage.getItem('loc_theme');
+        if (t === 'light' || t === 'dark') el.setAttribute('data-theme', t);
+        else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) el.setAttribute('data-theme', 'light');  // #564 p1: no saved choice follows the OS
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/style.css?v={{ static_v('style.css') }}" />
+  <script src="/static/busy.js?v={{ static_v('busy.js') }}"></script>
+</head>
+<body class="authbody auth-account">
+{% include "_busy.html" %}
+  <main class="authcard">
+    <div class="brand-big"><span class="mark" aria-hidden="true">◐</span> {{ app_meta().org }}</div>
+    {% set auth_title %}{{ 'Invitation invalid' if invalid else 'Set up your account' }}{% endset %}
+    {{ m.page_header(auth_title) }}
+    {% if invalid %}
+      {% if refused %}
+      <p class="muted">{{ refused }}</p>
+      {% else %}
+      <p class="muted">This invitation link is invalid, already used, or expired. Ask an administrator to send a new one.</p>
+      {% endif %}
+      <a class="btnlink small mt" href="/auth/login">Back to sign in</a>
+    {% else %}
+      <p class="muted">Invited as <strong>{{ inv.email }}</strong> · role <span class="chip">{{ inv.role }}</span></p>
+      {{ fe.error_summary(request, error) }}
+      <form method="post" action="/auth/accept/{{ token }}" class="form">
+        <label>Username <input type="text" name="username" autocomplete="username" value="{{ inv.email }}" readonly /></label>
+        {% include "_csrf.html" %}
+        <label>Full name <input type="text" name="name" id="accept-name" autocomplete="name" value="{{ name|default('') }}" autofocus /></label>
+        <label>Password <input type="password" name="password" id="accept-password" autocomplete="new-password" minlength="{{ password_rules().min_length }}" required{{ fe.invalid_attrs(request, 'accept-password', 'accept-password-rules', when=(error_field|default('') == 'accept-password')) }} /></label>
+        <p class="help" id="accept-password-rules">{{ password_rules().summary }}</p>
+        <label>Confirm password <input type="password" name="confirm" id="accept-confirm" autocomplete="new-password" minlength="{{ password_rules().min_length }}" required{{ fe.invalid_attrs(request, 'accept-confirm', when=(error_field|default('') == 'accept-confirm')) }} /></label>
+        <button type="submit">Create account</button>
+      </form>
+    {% endif %}
+  </main>
+<script src="/static/form_errors.js?v={{ static_v('form_errors.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,85 @@
+# Factory spec for the Bitbucket Cloud connector: pull-request localization of resource files.
+# Second provider on the shared git core (app/services/connectors/git_core.py).
+#
+# Locked decisions (do not re-litigate):
+#   - TOPOLOGY = T3 (one target file per locale); the unit is a KEY in a key project (as GitHub).
+#   - AUTH = scoped Atlassian API token (Bearer) or a repository access token; app passwords
+#     are deprecated and are not supported. Fixed host api.bitbucket.org (Bitbucket Cloud only).
+#   - Written from Bitbucket's public REST documentation only; no bb-io code was read.
+
+connector:
+  kind: bitbucket
+  name: Bitbucket
+  class_name: BitbucketConnector
+  module: bitbucket
+  icon: "🪣"
+  cat: "Code hosting"
+  blurb: >-
+    Localize the resource files in a Bitbucket repository (JSON, nested JSON, gettext PO, or a resource file with a key view such as .properties, .strings or YAML).
+    Source strings are imported into a key project, translated through the normal pipeline,
+    and the target-language files come back as ONE commit on a working branch with ONE pull
+    request per run. The base branch is never written directly.
+  docs_url: "https://developer.atlassian.com/cloud/bitbucket/rest/intro/"
+  supports_oauth: false
+  archived: false
+
+  topology: T3
+  auth: [api_key]
+  api_version: "2.0"
+  rich_text: none
+  regions: "https://api.bitbucket.org"
+  change_signals:
+    webhook_sig: null
+    poll_field: hash
+    stale_flag: null
+    thin_payload: false
+  anti_loop_label: false
+
+  retry_noun: file
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<source-file-path>"
+  api_docstring: >-
+    Localize the repository's resource files into the connection's target locales and open
+    (or update) one pull request holding the target-language files (T3). article_ids are
+    source file paths and must match the connection's configured source path patterns.
+
+  article_noun_phrase: "a Bitbucket resource file"
+  cli_parser_help: >-
+    Localize Bitbucket resource files into the connection's locales as ONE commit on a working
+    branch and ONE pull request.
+
+  item_units:
+    scan: "the resource files in your repository that match the source path patterns (JSON, gettext PO, or a resource file with a key view such as .properties, .strings or YAML)"
+    becomes: "one target-language file per locale, committed together on a working branch and opened as a single pull request against the base branch (the base branch is never written directly)"
+
+  help_row_body: "Localize Bitbucket resource files (JSON, nested JSON, gettext PO) into the connection's locales as ONE commit on a working branch and ONE pull request (T3). Body: <code>article_ids</code>/<code>article_id</code> (source file paths matching the configured patterns), <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Localize Bitbucket resource files into the connection's locales: the source files are imported into the connection's key project, translated, and the target-language files are committed together on a working branch with one pull request against the base branch (T3). `--article-ids` are source file paths matching the configured patterns."
+
+  cli_expected_desc: "localize Bitbucket resource files into per-locale files committed on a working branch with one pull request (T3 over the shared git-provider core; POST /api/connectors/{cid}/bitbucket/translate parity)"
+
+  config_fields:
+    - {name: repo, label: "Repository", help: "workspace/repository-slug, for example acme/website (both lowercase slugs as in the Bitbucket URL).", placeholder: "acme/website"}
+    - {name: base_branch, label: "Base branch", help: "The branch the pull request targets. It is never written directly.", required: false, placeholder: "main"}
+    - {name: source_paths, label: "Source file paths", help: "Comma-separated paths or patterns of the SOURCE-language files. Use {locale} for the language code, for example locales/{locale}.json or po/{locale}.po.", placeholder: "locales/{locale}.json"}
+    - {name: source_locale, label: "Source locale", help: "The language of the source files.", required: false, placeholder: "en-US"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated locale codes to produce.", required: false, placeholder: "fr-FR, de-DE"}
+    - {name: branch_pattern, label: "Working branch", help: "Branch the commit goes to. Must contain {connection}, which is replaced by the connection id (default loc/{connection}). Never the base, default or a protected branch. The connector only builds on a branch it created itself; when the base branch changes the same files under an open pull request it moves to a new branch (loc/7-2) and declines the old request.", required: false, placeholder: "loc/{connection}"}
+    - {name: locale_style, label: "Locale spelling in file names", help: "bcp47 (fr-FR, the default), underscore (fr_FR) or language (fr).", required: false, placeholder: "bcp47"}
+  secret_fields:
+    - {name: token, label: "API token or repository access token", help: "A scoped Atlassian API token (read:repository:bitbucket, write:repository:bitbucket, read:pullrequest:bitbucket, write:pullrequest:bitbucket) or a repository access token with Repositories Write and Pull requests Write. App passwords are deprecated and not supported.", secret: true, placeholder: "ATATT3x..."}
+    - {name: email, label: "Atlassian email (optional)", help: "Leave empty to send the token as a Bearer token (repository access tokens, and API tokens). Fill in your Atlassian account email only if Bitbucket rejects the Bearer form of your API token.", required: false, secret: true, placeholder: "you@example.com"}
+  setup_steps:
+    - "In Bitbucket Cloud, open your avatar, Account settings (or Personal settings), Security, Create and manage API tokens, Create API token with scopes; choose Bitbucket and tick read:repository:bitbucket, write:repository:bitbucket, read:pullrequest:bitbucket, write:pullrequest:bitbucket."
+    - "Or create a Repository access token (Repository settings, Security, Access tokens) with Repositories: Write and Pull requests: Write."
+    - "Paste the token here, set the repository as workspace/slug, and the source path pattern, for example locales/{locale}.json."
+  other_side: >-
+    Change detection is poll-based: run on a schedule. An unchanged source file makes no
+    commit. Review and merge the pull request in Bitbucket; this connector never merges it.
+    You can edit the pull request title and description: each run only rewrites its own
+    marked block. Do not push commits to the working branch while its pull request is open
+    (the connector then pauses until that request is merged or declined).

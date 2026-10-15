@@ -1,0 +1,24 @@
+{# #630: shared markup for a LOCKED, editable prompt section. /static/promptlock.js drives it.
+   Contract: a [data-prompt-lock] container holds one [data-lock-field] (a readonly textarea),
+   one [data-lock-status] live region, and the buttons from lock_actions(). The field is
+   readonly (not disabled), so it is still read out, focusable and submitted; the lock state is
+   written in words in the status line, never by colour alone. With no JS the field simply stays
+   locked. Used by the workflow System prompt tab and by every step's Inline prompt. #}
+
+{% macro lock_status(uid, can_edit, why='') %}
+<p class="muted small wfl-status" id="plk-{{ uid }}" role="status" data-lock-status>
+  <span class="chip" data-lock-chip>{{ tl(request, 'page.workflow_builder.chip_locked') }}</span>
+  <span data-lock-text>{% if can_edit %}{{ tl(request, 'page.workflow_builder.status_locked') }}{% else %}{{ why or tl(request, 'page.workflow_builder.status_no_permission') }}{% endif %}</span>
+</p>
+{% endmacro %}
+
+{# The Unlock / Apply / Lock again buttons. Apply is a submit button of the surrounding form. #}
+{% macro lock_actions(uid, can_edit) %}
+{% if can_edit %}
+<div class="wfl-actions">
+  <button type="button" class="ghost" data-lock-unlock aria-describedby="plk-{{ uid }}">{{ tl(request, 'page.workflow_builder.unlock') }}</button>
+  <button type="submit" data-lock-apply hidden>{{ tl(request, 'page.workflow_builder.apply') }}</button>
+  <button type="button" class="ghost" data-lock-cancel hidden>{{ tl(request, 'page.workflow_builder.lock_again') }}</button>
+</div>
+{% endif %}
+{% endmacro %}

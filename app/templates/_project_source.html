@@ -1,0 +1,168 @@
+{# Connected projects (SPEC-connected-projects sections 6 and 7). Included by project.html, only when the
+   project's intake is "connected". UNBOUND: the "Connect a source" setup menu in place of the upload
+   area. BOUND: the Source card (connection, scope, last and next run, Run now, Pause or Resume, Change
+   source), which also holds the project's Notifications. Every form posts to the existing project
+   automation routes and carries return_to so the person lands back here; nothing here forks that logic. #}
+{% set cn = connected %}
+{% set auto = cn.auto %}
+{% set rt = '/projects/' ~ project.id %}
+<section class="card source-card" id="source" aria-labelledby="source-h">
+  <h2 id="source-h">{% if cn.bound %}Source{% else %}Connect a source{% endif %}</h2>
+  {% if cn.src_msg %}<p class="{{ 'notice' if cn.src_ok else 'error' }}" role="{{ 'status' if cn.src_ok else 'alert' }}" id="source-msg">{{ cn.src_msg }}</p>{% endif %}
+
+  {% if not cn.bound %}
+  <p>This is a connected project: its content comes from a connected system instead of uploads. Pick the system below. Each step is saved as you do it, so you can leave and come back.</p>
+  {% if not cn.can_manage %}
+  <p class="muted">A manager or admin sets up the source of a connected project.</p>
+  {% else %}
+  <ol class="source-steps" id="source-steps">
+    <li id="source-step-1">
+      <h3>1. Choose a system</h3>
+      {% if cn.choices %}
+      <form method="post" action="/projects/{{ project.id }}/automation/bind" class="form" id="source-bind-form">
+        {% include "_csrf.html" %}
+        <input type="hidden" name="return_to" value="{{ rt }}" />
+        <label for="source-connection">Connection
+          <select name="connection_id" id="source-connection" required>
+            <option value="">- pick a connection -</option>
+            {% for kind_label, group in cn.choices|groupby('kind_label') %}
+            <optgroup label="{{ kind_label }}">
+              {% for c in group %}<option value="{{ c.id }}"{% if cn.preselect == c.id %} selected{% endif %}>{{ c.name }}{% if c.status and c.status != 'connected' %} ({{ c.status }}){% endif %}{% if c.feeds %} - already feeds {{ c.feeds }} project{{ '' if c.feeds == 1 else 's' }}{% endif %}</option>{% endfor %}
+            </optgroup>
+            {% endfor %}
+          </select>
+        </label>
+        <h3 id="source-step-2">2. Choose what to pull</h3>
+        <label for="source-scope">Narrow what this project reads <span class="muted small">(optional, one <code>setting=value</code> per line, for example <code>max_articles=200</code>)</span>
+          <textarea name="scope" id="source-scope" rows="3"></textarea>
+        </label>
+        <p class="muted small">One connection can feed several projects. When it already feeds another project, this project gets its own copy of it, and an item that another project already owns is skipped here instead of being overwritten.</p>
+        <button type="submit">Use this connection</button>
+      </form>
+      {% else %}
+      <p class="muted" id="source-no-connection">No connection fits this project yet. Connect a new system below.</p>
+      {% endif %}
+      <details class="mt" id="source-new-system"{% if not cn.choices %} open{% endif %}>
+        <summary>Connect a new system</summary>
+        <p class="help">Opens the connector setup for that system and brings you back here with the new connection selected.</p>
+        <ul class="plain-list">
+          {% for k in cn.new_kinds %}<li><a href="/connectors/{{ k.kind }}?return_to={{ rt|urlencode }}">{{ k.name }}</a></li>{% endfor %}
+        </ul>
+      </details>
+    </li>
+    <li id="source-step-3"><h3>3. Languages</h3>
+      <p class="muted small">{% if cn.languages %}{{ cn.languages }} target language{{ '' if cn.languages == 1 else 's' }} set. {% else %}No target languages yet: choosing a connection fills them from its own target languages. {% endif %}Change them under <a href="#project-languages">Target languages</a>; the project is the source of truth once it is connected.</p></li>
+    <li id="source-step-4"><h3>4. When it runs</h3><p class="muted small">Manual by default. Available once a connection is chosen.</p></li>
+    <li id="source-step-5"><h3>5. Notifications</h3><p class="muted small">Optional. Available once a connection is chosen.</p></li>
+    <li id="source-step-6"><h3>6. First run</h3><p class="muted small">Preview, then run now. Available once a connection is chosen.</p></li>
+  </ol>
+  <form method="post" action="/projects/{{ project.id }}/intake" class="inline-form" id="source-use-uploads">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="intake" value="upload" />
+    <input type="hidden" name="return_to" value="{{ rt }}" />
+    <button type="submit" class="btn-small ghost" aria-describedby="source-use-uploads-help">Use uploads instead</button>
+  </form>
+  <p class="muted small" id="source-use-uploads-help">Turns this back into an ordinary upload project. Only possible while the project is empty.</p>
+  {% endif %}
+
+  {% else %}
+  {# ---- bound: the Source card ---- #}
+  <p>
+    <strong>{{ auto.connection_name }}</strong> <span class="badge muted-badge">{{ cn.kind_label or auto.connection_kind }}</span>
+    <span class="badge {{ 'exact' if auto.connection_status == 'connected' else 'warn' }}">{{ auto.connection_status or 'new' }}</span>
+    <a href="/connectors/connection/{{ auto.run_connection_id }}" class="small">Open the connection</a>
+  </p>
+  {% if auto.scope %}<p class="muted small" id="source-scope-line">Scope for this project: {% for k, v in auto.scope.items() %}<code>{{ k }}={{ v }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</p>{% else %}<p class="muted small" id="source-scope-line">Scope: everything the connection reads.</p>{% endif %}
+  {% for w in auto.warnings %}<p class="notice notice-warn small" role="status">{{ w }}</p>{% endfor %}
+  <p>
+    {% if auto.paused %}<span class="badge warn">paused</span>{% elif auto.enabled %}<span class="badge exact">scheduled</span>{% else %}<span class="badge muted-badge">manual</span>{% endif %}
+    {{ auto.schedule }} &middot; {{ auto.mode }} pull
+  </p>
+  {% if auto.paused %}<p class="notice notice-warn" role="status">Paused: {{ auto.paused_reason or 'by a person' }}.</p>{% endif %}
+  <p class="small" id="source-last-run">Last run:
+    {% if auto.last_status %}<strong>{{ auto.last_status }}</strong>{% if auto.last_at %} at <time class="local-dt" datetime="{{ auto.last_at }}">{{ auto.last_at }}</time> <span class="muted local-dt-zone">(UTC)</span>{% endif %}{% if auto.last_message %} - {{ auto.last_message }}{% endif %}
+    {% else %}none yet{% endif %}
+  </p>
+  <p class="small" id="source-next-run">Next run:
+    {% if auto.next_at and auto.enabled and not auto.paused %}<time class="local-dt" datetime="{{ auto.next_at }}">{{ auto.next_at }}</time> <span class="muted local-dt-zone">(UTC)</span>{% else %}none scheduled{% endif %}
+  </p>
+  {% if not cn.scheduler_enabled and auto.enabled %}<p class="notice notice-warn small" role="status">Scheduled runs are switched off for this whole install, so nothing fires on a schedule. Run now still works.</p>{% endif %}
+  {% if cn.can_manage %}
+  <div class="row-actions" id="source-actions">
+    <form method="post" action="/projects/{{ project.id }}/automation/run" class="inline-form" id="source-run-form">
+      {% include "_csrf.html" %}
+      <input type="hidden" name="return_to" value="{{ rt }}" />
+      <button type="submit"{% if cn.active_job_id %} aria-describedby="source-running"{% endif %}>Run now</button>
+    </form>
+    {% if cn.active_job_id %}<span id="source-running" class="muted small">A run is in progress (<a href="/jobs/{{ cn.active_job_id }}">job {{ cn.active_job_id }}</a>).</span>{% endif %}
+    {% if auto.paused %}
+    <form method="post" action="/projects/{{ project.id }}/automation/resume" class="inline-form">
+      {% include "_csrf.html" %}
+      <input type="hidden" name="return_to" value="{{ rt }}" />
+      <button type="submit">Resume</button>
+    </form>
+    {% else %}
+    <form method="post" action="/projects/{{ project.id }}/automation/pause" class="inline-form">
+      {% include "_csrf.html" %}
+      <input type="hidden" name="return_to" value="{{ rt }}" />
+      <button type="submit" class="ghost">Pause</button>
+    </form>
+    {% endif %}
+    <form method="post" action="/projects/{{ project.id }}/automation/unbind" class="inline-form" id="source-change-form">
+      {% include "_csrf.html" %}
+      <input type="hidden" name="return_to" value="{{ rt }}" />
+      <button type="submit" class="ghost" aria-describedby="source-change-help">Change source</button>
+    </form>
+  </div>
+  <p class="muted small" id="source-change-help">Change source removes the connection from this project and stops its schedule; the project stays a connected project and shows the setup menu again. Content already pulled and translated is kept.</p>
+  {% endif %}
+  <p class="small"><a href="/projects/{{ project.id }}/automation">Schedule, spend limits and run history <span aria-hidden="true">&rarr;</span></a></p>
+
+  {% if not auto.last_status and cn.can_manage %}
+  {# ---- finish the setup: steps 3 to 6 until the first run has happened ---- #}
+  <div id="source-setup" class="source-setup">
+    <h3>Finish setting up</h3>
+    <ol class="source-steps">
+      <li id="source-step-3"><h4>3. Languages</h4>
+        <p class="muted small">{% if cn.languages %}{{ cn.languages }} target language{{ '' if cn.languages == 1 else 's' }} set.{% else %}No target languages yet; the first run needs at least one.{% endif %} Change them under <a href="#project-languages">Target languages</a>.</p></li>
+      <li id="source-step-4"><h4>4. When it runs</h4>
+        <form method="post" action="/projects/{{ project.id }}/automation/schedule" class="form" id="source-schedule-form">
+          {% include "_csrf.html" %}
+          <input type="hidden" name="return_to" value="{{ rt }}" />
+          <input type="hidden" name="kind" value="times" />
+          <label for="source-sched-times">Times of day <span class="muted small">(24-hour UTC, comma separated, for example <code>09:00, 14:30</code>; empty = manual only)</span>
+            <input type="text" name="times" id="source-sched-times" value="{{ auto.times|join(', ') }}" maxlength="200" />
+          </label>
+          <label for="source-sched-mode">What a run does
+            <select name="mode" id="source-sched-mode">
+              <option value="delta"{% if auto.mode == 'delta' %} selected{% endif %}>Delta: only new or changed content</option>
+              <option value="full"{% if auto.mode == 'full' %} selected{% endif %}{% if not auto.full_pull_supported %} disabled{% endif %}>Full: everything again (TM matches are free)</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" name="enabled" value="1"{% if auto.enabled %} checked{% endif %} /> Run on this schedule</label>
+          <p class="muted small">Nothing is turned on unless you tick this, and turning it on never starts a run right away.</p>
+          <button type="submit">Save</button>
+        </form></li>
+      <li id="source-step-5"><h4>5. Notifications</h4>
+        <p class="muted small">Optional. Attach an existing channel below.</p></li>
+      <li id="source-step-6"><h4>6. First run</h4>
+        <p class="small"><a class="btnlink small" href="/projects/{{ project.id }}?preview=1#source-preview" id="source-preview-link">Preview</a>
+          checks that a run can start, without reading the system or spending anything. Then use Run now above.</p>
+        {% if cn.preview %}
+        <div id="source-preview" class="notice" role="status">
+          <p><strong>{{ 'A run can start.' if cn.preview.ready else 'A run cannot start yet.' }}</strong></p>
+          {% if cn.preview.problems %}<ul>{% for p in cn.preview.problems %}<li>{{ p }}</li>{% endfor %}</ul>{% endif %}
+          <p class="small">Languages: {{ cn.preview.languages|join(', ') or 'none' }}. Documents already in the project: {{ cn.preview.documents }}. Mode: {{ cn.preview.mode }}.{% if cn.preview.run_cap_usd %} Per-run cap: ${{ '%.2f'|format(cn.preview.run_cap_usd) }}.{% endif %}{% if cn.preview.budget_remaining_usd is not none %} Budget left this month: ${{ '%.2f'|format(cn.preview.budget_remaining_usd) }}.{% endif %}</p>
+          <p class="muted small">{{ cn.preview.note }}</p>
+        </div>
+        {% endif %}</li>
+    </ol>
+  </div>
+  {% endif %}
+  {% endif %}
+
+  {# The project's Notifications live in this card for a connected project. #}
+  <div id="source-notifications">
+    {% include "_project_notifications.html" %}
+  </div>
+</section>

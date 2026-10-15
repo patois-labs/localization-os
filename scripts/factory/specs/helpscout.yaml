@@ -1,0 +1,75 @@
+# Factory spec for the REBUILT Help Scout Docs connector (connector parity wave 3, un-archived
+# 2026-10-10). `python scripts/factory/generate.py check scripts/factory/specs/helpscout.yaml`
+# must PASS. Help Scout predates the factory, so this spec only records the parametric
+# touchpoints; the module body is hand-written (see app/services/connectors/helpscout.py).
+
+connector:
+  kind: helpscout
+  name: Help Scout Docs
+  class_name: HelpScoutConnector
+  icon: "\U0001F4D8"
+  cat: "Knowledge base / help center"
+  blurb: >-
+    Translate Help Scout Docs articles into any language. Help Scout has no native
+    localization, so each translation is created as a separate article in a target-language
+    COLLECTION you map (a collection per language, in the same Docs site or in a Docs site per
+    language) and tracked in an internal id map, so the source article and other locales are
+    never overwritten. Cross-links (related articles) are remapped to their translated
+    counterparts.
+  docs_url: "https://developer.helpscout.com/docs-api/"
+  supports_oauth: false
+  archived: false
+
+  topology: T3
+  auth: [api_key]
+  api_version: "v1"
+  rich_text: html
+  regions: fixed
+  change_signals:
+    webhook_sig: null
+    poll_field: updatedAt
+    stale_flag: null
+    thin_payload: true
+  anti_loop_label: false
+
+  retry_noun: article
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<article id>"
+  api_docstring: >-
+    Translate Help Scout Docs article(s) on the fly into one or more locales, each created as
+    an article in the mapped target collection (T3, tracked in the id map).
+
+  article_noun_phrase: "a Help Scout"
+  cli_parser_help: >-
+    Translate Help Scout Docs articles into the connection's locales, each created as a per-locale
+    article in the mapped target collection (T3, document-per-locale).
+
+  item_units:
+    scan: "your Help Scout Docs articles"
+    becomes: "a separate article in the target-language collection you map (collection-per-language, cross-links remapped, a notpublished draft by default; a held title or body keeps its stored text), tracked in an internal id map"
+
+  help_row_body: "Translate Help Scout Docs article(s) into the mapped target collections. Body: <code>article_ids</code>/<code>article_id</code> (inside the mapped source collections), <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Translate Help Scout Docs articles into the mapped target collections (default: every mapped source collection). `--article-ids` must sit inside a mapped source collection; ids and locale overrides are comma/space separated."
+
+  cli_expected_desc: "translate Help Scout Docs articles into per-locale articles in mapped collections (T3 DocPerLocaleStrategy; POST /api/connectors/{cid}/helpscout/translate parity)"
+
+  config_fields:
+    - {name: collection_map, label: "Collection map (JSON)", help: "Collection-per-language map (Help Scout has no locale field). JSON {\"<source collection id>\": {\"<locale>\": \"<target collection id>\"}}. Keys are the discovery scope; an unmapped (collection, locale) is rejected, never guessed. A target collection may live in another Docs site.", placeholder: "{\"5f0a...\": {\"es\": \"6b1c...\", \"de-DE\": \"6b1d...\"}}"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated locales to create (e.g. de-DE, fr, es). Each must appear in the collection map for the source collections you translate.", required: false, placeholder: "de-DE, fr, es"}
+  secret_fields:
+    - {name: api_key, label: "Docs API key", help: "Your Help Scout Docs API key (Docs settings -> API), sent as HTTP Basic username. NOTE: distinct from the Mailbox/Inbox OAuth2 credentials.", secret: true, placeholder: "your-docs-api-key"}
+  setup_steps:
+    - "Paste the API key above and fill the Collection map: for each source collection id, map each target locale to its target collection id."
+  other_side: >-
+    Help Scout Docs change detection polls the mapped source collections and gates
+    re-translation on a per-(article,locale) source-content hash (updatedAt bumps on any edit,
+    so it never drives a watermark). Each translation is a separate article in the mapped
+    target-language collection, tracked in the connector's id map; a pre-existing article in
+    that collection is never overwritten (needs_link). related[] cross-links are remapped to
+    their translated counterparts.
+

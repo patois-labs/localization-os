@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Localization OS private TBX extension, namespace
+    https://localizationos.com/tbx-ext/v1   (prefix: los)
+
+  This fragment DOCUMENTS the private data categories our TBX-Basic (DCA) export
+  rides in the `los:` namespace. It is NOT used at runtime and NOT part of the
+  strict-validation pipeline (that is the official TBX core RELAX NG +
+  app/services/tbx_conformance.py's evaluator of the official TBX-Basic DCA
+  Schematron). A third-party processor that loads this fragment can treat these
+  elements as known categories instead of foreign findings (SPEC-terminology-backend
+  §6.5). A processor that does NOT load it sees them as foreign findings, which is
+  the documented, honest cost of carrying DNT/audience/etc. in TBX; `.glossary.json`
+  remains the no-caveat lossless format, and `--strict-portable` drops every `los:`
+  element (and the xmlns:los declaration) to emit a clean pure-TBX-Basic instance.
+
+  Each `los:` element sits exactly where its standard TBX-Basic sibling would sit
+  (§6.2). Values are stored verbatim; booleans are the string "true" (the default
+  "false" omits the element entirely).
+-->
+<losExtension xmlns="https://localizationos.com/tbx-ext/v1" version="1">
+
+  <!-- term level, in the termNote group position (before descrip/admin/ref) -->
+  <dataCategory name="dnt" level="termSec" datatype="boolean">
+    <desc>Do Not Translate: the source term is kept verbatim. TBX-Basic has no DNT
+      category; on import a legacy &lt;termNote type="doNotTranslate"&gt; is ALSO
+      read for backward compatibility (M17).</desc>
+  </dataCategory>
+  <dataCategory name="audience" level="termSec" datatype="tokenList">
+    <desc>Space-joined subset of {human mt llm} — which prompt channels the term may
+      reach (Decision B/F). No TBX category.</desc>
+  </dataCategory>
+  <dataCategory name="status" level="termSec" datatype="string">
+    <desc>The house administrativeStatus value that has no TBX-Basic picklist member:
+      "forbidden" (exported alongside deprecatedTerm-admn-sts), "superseded" (the
+      re-home of the vendored supersededTerm-admn-sts on import), or any foreign
+      administrativeStatus literal preserved on import. The los: value always wins.</desc>
+  </dataCategory>
+  <dataCategory name="termType" level="termSec" datatype="string">
+    <desc>A term type outside the vendored TBX-Basic termType picklist (e.g. "ui",
+      "label", or any custom value) — M12 fallback, never an invalid picklist value.</desc>
+  </dataCategory>
+  <dataCategory name="partOfSpeech" level="termSec" datatype="string">
+    <desc>A partOfSpeech outside the vendored picklist (e.g. "properNoun") — M12
+      fallback.</desc>
+  </dataCategory>
+  <dataCategory name="grammaticalGender" level="termSec" datatype="string">
+    <desc>A grammaticalGender outside the vendored picklist — M12 fallback.</desc>
+  </dataCategory>
+  <dataCategory name="grammaticalNumber" level="termSec" datatype="string">
+    <desc>Grammatical number. TBX-Basic (DCA) has NO grammaticalNumber category
+      (E-T2-4), so EVERY value rides here; import reads both this and a foreign
+      &lt;termNote type="grammaticalNumber"&gt;.</desc>
+  </dataCategory>
+  <dataCategory name="caseSensitive" level="termSec" datatype="boolean">
+    <desc>The term matches case-sensitively. No TBX category (M5).</desc>
+  </dataCategory>
+  <dataCategory name="exact" level="termSec" datatype="boolean">
+    <desc>The term matches on exact surface only. Stored + round-tripped; not wired
+      to the gate in T1 (M5/E3).</desc>
+  </dataCategory>
+  <dataCategory name="replacement" level="termSec" datatype="string">
+    <desc>The surface string of a deprecated term's replacement when the replacement
+      is out of document scope (never a dangling IDREF, H10/H12). An in-document
+      replacement uses a standard &lt;ref type="crossReference"&gt; instead.</desc>
+  </dataCategory>
+  <dataCategory name="extid" level="conceptEntry" datatype="string">
+    <desc>The original, non-NCName-safe external_id preserved when the emitted
+      conceptEntry @id had to be sanitized/uniquified (H11).</desc>
+  </dataCategory>
+  <dataCategory name="homonym" level="conceptEntry" datatype="string">
+    <desc>The house homonym-group join key. Homonyms are DISTINCT conceptEntry
+      elements; this hint WINS over the re-derived (shared source term) grouping on
+      import (§6.1).</desc>
+  </dataCategory>
+  <dataCategory name="subdomain" level="conceptEntry" datatype="string">
+    <desc>House sub-scope beneath domain (subjectField). No TBX-Basic home; emitted
+      los-only (no second subjectField, M11).</desc>
+  </dataCategory>
+
+</losExtension>

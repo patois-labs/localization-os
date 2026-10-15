@@ -1,0 +1,7 @@
+# CI-only opt-in images layered over the single production build.
+FROM localization-os-release-check
+USER root
+ARG PROFILE
+RUN if [ "$PROFILE" = saml ]; then apt-get update && apt-get install -y --no-install-recommends libxmlsec1-dev && rm -rf /var/lib/apt/lists/*; fi
+RUN pip install --no-cache-dir --no-deps --require-hashes -r "requirements-${PROFILE}.lock"
+USER app

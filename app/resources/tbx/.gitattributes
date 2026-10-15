@@ -1,0 +1,4 @@
+# Vendored TBX standards artifacts are stored UNMODIFIED, byte-for-byte (PROVENANCE.md
+# records their upstream sha256). Disable all EOL/text normalization so a checkout on any
+# platform keeps the exact bytes the sha256es were computed over.
+* -text

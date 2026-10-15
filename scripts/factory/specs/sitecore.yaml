@@ -1,0 +1,106 @@
+# Factory spec - Sitecore XM Cloud (SitecoreAI) connector (connector parity NEW kind, 2026-10-10).
+#
+# Parametric touchpoints only; the SEMANTIC build (strategy wiring, shared-field guard,
+# existence probe, held-back accounting, fake tenant) is hand-written in
+# app/services/connectors/sitecore*.py per the generated BUILD-TODO-sitecore.md.
+#
+# DECISIONS (re-derived, not trusted from the research label):
+#   - TOPOLOGY = T2. A Sitecore item has ONE identity (itemId) and each language holds its own
+#     numbered VERSIONS of the field values: the (item, language) pair is a per-locale
+#     sub-resource of one record, owned by the source system (no id map of ours, so not T3; no
+#     per-field locale map on one payload, so not T1). Create = addItemVersion (a language with
+#     no version yet), update = updateItem on the latest existing version. The stock
+#     SubResourceStrategy fits (404-vs-200 probe -> create or update); the probe is
+#     "does (item, language) have a version >= 1", never a content read.
+#   - AUTH = XM Cloud automation client (OAuth client credentials) minted against the fixed host
+#     auth.sitecorecloud.io, audience https://api.sitecorecloud.io. Client id and secret are BOTH
+#     stored secrets and the CM host is the pinned credential destination (store_part2).
+#   - SCOPE = items under a configured content root path (taxonomy A): every explicit item id is
+#     a strict GUID and must resolve to a path under the root, fail closed.
+#   - SHARED FIELDS: a Sitecore field flagged shared holds ONE value for every language, so
+#     writing a "translation" into it would overwrite the source language. Shared (or unknown
+#     sharing) fields are never selected, whatever the operator allowlist says.
+#   - NO publish. Sitecore writes land on the working version in the master database;
+#     publishing stays a human or workflow step.
+#   - No alembic migration.
+
+connector:
+  kind: sitecore
+  name: Sitecore
+  class_name: SitecoreConnector
+  icon: "🧱"
+  cat: "DXP / CMS"
+  blurb: >-
+    Translate Sitecore XM Cloud (SitecoreAI) content items into any language. Each translation
+    is written as a language version of the same item through the Authoring GraphQL API, so
+    the source language version is never overwritten and nothing is published.
+  docs_url: "https://doc.sitecore.com/xmc/en/developers/xm-cloud/sitecore-authoring-and-management-graphql-api.html"
+  supports_oauth: false
+  archived: false
+
+  topology: T2
+  auth: [api_key]
+  api_version: "v1"
+  rich_text: html
+  regions: base_url
+  change_signals:
+    webhook_sig: null
+    poll_field: updatedDate
+    stale_flag: null
+    thin_payload: false
+  anti_loop_label: false
+
+  retry_noun: item
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<item-guid>"
+  api_docstring: >-
+    Translate Sitecore XM Cloud content item(s) on the fly into one or more languages,
+    writing each back as a language version of the same item (T2; addItemVersion then
+    updateItem). Each id is a strict item GUID that must sit under the connection's content
+    root path.
+
+  article_noun_phrase: "a Sitecore item"
+  cli_parser_help: >-
+    Translate Sitecore XM Cloud content items into the connection's languages as language
+    versions of the same item.
+
+  item_units:
+    scan: "your Sitecore content items under the configured root path"
+    becomes: "a language version of the same item (addItemVersion then updateItem on the master database; never published, shared fields never touched)"
+
+  help_row_body: "Translate Sitecore XM Cloud content item(s) as language versions of the same item. Body: <code>article_ids</code>/<code>article_id</code> (<code>&lt;itemGuid&gt;</code>), <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Translate Sitecore XM Cloud content items into the connection's languages as language versions of the same item (T2; addItemVersion then updateItem, never published). `--article-ids` are item GUIDs that must sit under the connection's root path."
+
+  cli_expected_desc: "translate Sitecore XM Cloud content items into language versions of the same item (T2 SubResourceStrategy; Authoring GraphQL addItemVersion + updateItem; POST /api/connectors/{cid}/sitecore/translate parity)"
+
+  bb_io:
+    repo: "bb-io/SitecoreGraphQl"
+    url: "https://github.com/bb-io/SitecoreGraphQl"
+    license_verified_date: "2026-10-10"
+    copyright_holder: "Blackbird"
+
+  config_fields:
+    - {name: base_url, label: "CM host URL", help: "Your XM Cloud Content Management (authoring) host, e.g. https://xmc-acme-site-env.sitecorecloud.io. The connector appends /sitecore/api/authoring/graphql/v1.", placeholder: "https://xmc-acme-site-env.sitecorecloud.io"}
+    - {name: root_path, label: "Content root path", help: "Only items at or under this path are read or written, e.g. /sitecore/content/Acme/Site/Home.", placeholder: "/sitecore/content/Acme/Site/Home"}
+    - {name: source_locale, label: "Source language", help: "The Sitecore language to translate FROM (default en).", required: false, placeholder: "en"}
+    - {name: target_locales, label: "Target languages", help: "Comma-separated Sitecore language names that already exist under /sitecore/system/Languages.", required: false, placeholder: "fr-FR, de-DE"}
+    - {name: fields, label: "Translatable fields", help: "Optional allowlist of field names. Blank = every Single-Line Text, Multi-Line Text and Rich Text field that is not shared across languages.", required: false, placeholder: "Title, Text"}
+    - {name: exclude_fields, label: "Exclude fields", help: "Field names to never translate (comma-separated).", required: false, placeholder: "Navigation Title"}
+    - {name: title_field, label: "Title field", help: "Field used as the display title (default Title, then Headline).", required: false, placeholder: "Title"}
+    - {name: max_items, label: "Max items", help: "Safety cap on items scanned per run.", required: false, placeholder: "50"}
+  secret_fields:
+    - {name: client_id, label: "Client ID", help: "From the XM Cloud Deploy app: Credentials -> Environment -> Create credentials -> Automation.", secret: true, placeholder: "automation client id"}
+    - {name: client_secret, label: "Client secret", help: "Shown once when the automation credential is created.", secret: true, placeholder: "automation client secret"}
+  setup_steps:
+    - "In the XM Cloud Deploy app, open your project environment, go to Credentials and create an Automation credential. Copy the client ID and secret."
+    - "Make sure each target language exists in Sitecore (Content Editor -> /sitecore/system/Languages) and is enabled for the site."
+    - "Enter the CM host URL, the content root path to translate, the source and target languages, and the client ID and secret."
+  other_side: >-
+    Change detection is poll-based: run on a schedule. Unchanged items are suppressed by
+    content hash. Writes go to the master database and are never published; publishing is a
+    separate Sitecore step. Fields shared across all languages are never written.

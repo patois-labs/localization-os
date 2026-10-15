@@ -1,0 +1,7468 @@
+{
+ "_header": {
+  "alembic_head": "b9e3d7c1f5a2",
+  "base": "main after issue #497 (glossary re-import keeps a blank/missing dnt)",
+  "captured_from_sha": "e6abb7182bd44fb4f3c9e2aa062de736849fdbd4",
+  "flag_terminology_concept_editor": "OFF",
+  "note": "captured with NO T1b product code; re-parented off 400720ce because #497 intentionally changes what a re-import writes (a blank/missing dnt cell now keeps the stored flag); never regenerate from the post-change tree again",
+  "purpose": "LAW-TERM-1 write-parity golden (terminology T1b authority inversion)"
+ },
+ "corpora": {
+  "blank_sense": {
+   "choose_sense": [
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> clasificar\n1. finance (use when: money) -> \n2. tech (use when: the segment gives no clear cue for any sense below) -> ordenar\nReply as JSON: {\"index\": <n>}"
+   ],
+   "entries": [
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 0,
+     "meta": null,
+     "senses": [
+      [
+       0,
+       "finance",
+       "money",
+       ""
+      ],
+      [
+       1,
+       "tech",
+       "",
+       "ordenar"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "sort",
+     "tl": "es-ES",
+     "tt": "clasificar"
+    }
+   ],
+   "seams": {
+    "en-US>es-ES": {
+     "dnt_violations": [],
+     "glossary_line": "sort→clasificar",
+     "match_terms": [
+      [
+       "sort",
+       "clasificar",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "sort",
+       "clasificar",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "sort",
+       "clasificar",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    }
+   }
+  },
+  "fuzz0": {
+   "choose_sense": [
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> nube\n1. geography (use when: the segment gives no clear cue for any sense below) -> colour\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> banco\n1. finance (use when: the segment gives no clear cue for any sense below) -> regalo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> regalo\n1. finance (use when: the segment gives no clear cue for any sense below) -> factura\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> recibo\n1. tech (use when: money context) -> regalo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> colour\n1. finance (use when: the segment gives no clear cue for any sense below) -> regalo\n2. tech (use when: map context) -> regalo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> colour\n1. finance (use when: the segment gives no clear cue for any sense below) -> regalo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> ordenar\n1. geography (use when: map context) -> banco\n2. tech (use when: the segment gives no clear cue for any sense below) -> factura\n3. tech (use when: money context) -> factura\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. geography (use when: the segment gives no clear cue for any sense below) -> orilla\n2. finance (use when: map context) -> factura\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> colour\n1. finance (use when: money context) -> regalo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> banco\n1. tech (use when: the segment gives no clear cue for any sense below) -> colour\n2. tech (use when: map context) -> \nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> recibo\n1. finance (use when: money context) -> orilla\n2. tech (use when: money context) -> recibo\n3. geography (use when: map context) -> banco\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> factura\n1. finance (use when: the segment gives no clear cue for any sense below) -> nube\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> colour\n1. finance (use when: the segment gives no clear cue for any sense below) -> colour\nReply as JSON: {\"index\": <n>}"
+   ],
+   "entries": [
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 0,
+     "meta": {
+      "definition": "a definition",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       0,
+       "geography",
+       "",
+       "colour"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "cloud",
+     "tl": "es-ES",
+     "tt": "nube"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 1,
+     "meta": null,
+     "senses": [
+      [
+       1,
+       "finance",
+       "",
+       "regalo"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "cloud",
+     "tl": "",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 2,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       2,
+       "finance",
+       "",
+       "factura"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "bank",
+     "tl": "es-ES",
+     "tt": "regalo"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 3,
+     "meta": {
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       3,
+       "tech",
+       "money context",
+       "regalo"
+      ]
+     ],
+     "sl": "",
+     "st": "widget",
+     "tl": "es-ES",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 4,
+     "meta": {
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       4,
+       "finance",
+       "",
+       "regalo"
+      ],
+      [
+       5,
+       "tech",
+       "map context",
+       "regalo"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "color",
+     "tl": "es-ES",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 5,
+     "meta": null,
+     "senses": [],
+     "sl": "",
+     "st": "Invoice",
+     "tl": "",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 6,
+     "meta": null,
+     "senses": [
+      [
+       6,
+       "finance",
+       "",
+       "regalo"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Invoice",
+     "tl": "es-ES",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 7,
+     "meta": {
+      "definition": "a bill for goods",
+      "part_of_speech": "noun"
+     },
+     "senses": [
+      [
+       7,
+       "geography",
+       "map context",
+       "banco"
+      ],
+      [
+       8,
+       "tech",
+       "",
+       "factura"
+      ],
+      [
+       9,
+       "tech",
+       "money context",
+       "factura"
+      ]
+     ],
+     "sl": "",
+     "st": "sort",
+     "tl": "es-ES",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 8,
+     "meta": {
+      "definition": "a bill for goods",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       10,
+       "geography",
+       "",
+       "orilla"
+      ],
+      [
+       11,
+       "finance",
+       "map context",
+       "factura"
+      ]
+     ],
+     "sl": "",
+     "st": "gift",
+     "tl": "",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 9,
+     "meta": {
+      "definition": "a bill for goods"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "invoice",
+     "tl": "",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 10,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       12,
+       "finance",
+       "money context",
+       "regalo"
+      ]
+     ],
+     "sl": "",
+     "st": "Acme",
+     "tl": "es-ES",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 11,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       13,
+       "tech",
+       "",
+       "colour"
+      ],
+      [
+       14,
+       "tech",
+       "map context",
+       ""
+      ]
+     ],
+     "sl": "en-US",
+     "st": "gift",
+     "tl": "es-ES",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 12,
+     "meta": {
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       15,
+       "finance",
+       "money context",
+       "orilla"
+      ],
+      [
+       16,
+       "tech",
+       "money context",
+       "recibo"
+      ],
+      [
+       17,
+       "geography",
+       "map context",
+       "banco"
+      ]
+     ],
+     "sl": "",
+     "st": "sort",
+     "tl": "",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 13,
+     "meta": null,
+     "senses": [
+      [
+       18,
+       "finance",
+       "",
+       "nube"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "invoice",
+     "tl": "",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 14,
+     "meta": {
+      "notes": "keep 30 days",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "color",
+     "tl": "es-ES",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 15,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       19,
+       "finance",
+       "",
+       "colour"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "bank",
+     "tl": "",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 16,
+     "meta": {
+      "definition": "a bill for goods",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "sort",
+     "tl": "es-ES",
+     "tt": "regalo"
+    }
+   ],
+   "seams": {
+    "en-US>es-ES": {
+     "dnt_violations": [],
+     "glossary_line": "cloud→nube; bank→regalo; widget→(do not translate); color→(do not translate); Invoice→colour; Acme→(do not translate); gift→(do not translate); sort→regalo",
+     "match_terms": [
+      [
+       "cloud",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "regalo",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "recibo",
+       null,
+       true,
+       false
+      ],
+      [
+       "color",
+       "colour",
+       null,
+       true,
+       false
+      ],
+      [
+       "Invoice",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "colour",
+       null,
+       true,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       true,
+       false
+      ],
+      [
+       "sort",
+       "regalo",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "cloud",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "regalo",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "recibo",
+       null,
+       true,
+       false
+      ],
+      [
+       "color",
+       "colour",
+       null,
+       true,
+       false
+      ],
+      [
+       "Invoice",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "colour",
+       null,
+       true,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       true,
+       false
+      ],
+      [
+       "sort",
+       "regalo",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "cloud",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "regalo",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "recibo",
+       null,
+       true,
+       false
+      ],
+      [
+       "color",
+       "colour",
+       null,
+       true,
+       false
+      ],
+      [
+       "Invoice",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "colour",
+       null,
+       true,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       true,
+       false
+      ],
+      [
+       "sort",
+       "regalo",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    }
+   }
+  },
+  "fuzz1": {
+   "choose_sense": [
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> recibo\n1. tech (use when: money context) -> ordenar\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> ordenar\n1. geography (use when: map context) -> colour\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. geography (use when: money context) -> regalo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> factura\n1. finance (use when: the segment gives no clear cue for any sense below) -> colour\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> nube\n1. finance (use when: the segment gives no clear cue for any sense below) -> factura\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> (no required term)\n1. geography (use when: map context) -> ordenar\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> colour\n1. finance (use when: map context) -> nube\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> recibo\n1. finance (use when: the segment gives no clear cue for any sense below) -> banco\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> colour\n1. finance (use when: the segment gives no clear cue for any sense below) -> colour\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> banco\n1. tech (use when: the segment gives no clear cue for any sense below) -> nube\nReply as JSON: {\"index\": <n>}"
+   ],
+   "entries": [
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 0,
+     "meta": {
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "widget",
+     "tl": "es-ES",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 1,
+     "meta": null,
+     "senses": [
+      [
+       0,
+       "tech",
+       "money context",
+       "ordenar"
+      ]
+     ],
+     "sl": "",
+     "st": "invoice",
+     "tl": "",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 2,
+     "meta": {
+      "definition": "a definition",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       1,
+       "geography",
+       "map context",
+       "colour"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "sort",
+     "tl": "es-ES",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 3,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       2,
+       "geography",
+       "money context",
+       "regalo"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "cloud",
+     "tl": "es-ES",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 4,
+     "meta": {
+      "definition": "a bill for goods",
+      "part_of_speech": "noun"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "Invoice",
+     "tl": "es-ES",
+     "tt": "nube"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 5,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "Bank",
+     "tl": "",
+     "tt": "nube"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 6,
+     "meta": {
+      "definition": "a definition",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       3,
+       "finance",
+       "",
+       "colour"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Bank",
+     "tl": "es-ES",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 7,
+     "meta": {
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "color",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 8,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       4,
+       "finance",
+       "",
+       "factura"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "gift",
+     "tl": "es-ES",
+     "tt": "nube"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 9,
+     "meta": {
+      "definition": "a definition",
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       5,
+       "geography",
+       "map context",
+       "ordenar"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "color",
+     "tl": "es-ES",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 10,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "widget",
+     "tl": "",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 11,
+     "meta": {
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       6,
+       "finance",
+       "map context",
+       "nube"
+      ]
+     ],
+     "sl": "",
+     "st": "gift",
+     "tl": "",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 12,
+     "meta": {
+      "definition": "a definition",
+      "notes": "keep 30 days",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "widget",
+     "tl": "es-ES",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 13,
+     "meta": {
+      "definition": "a definition"
+     },
+     "senses": [
+      [
+       7,
+       "finance",
+       "",
+       "banco"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "invoice",
+     "tl": "es-ES",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 14,
+     "meta": null,
+     "senses": [
+      [
+       8,
+       "finance",
+       "",
+       "colour"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Acme",
+     "tl": "es-ES",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 15,
+     "meta": {
+      "definition": "a bill for goods",
+      "part_of_speech": "noun"
+     },
+     "senses": [
+      [
+       9,
+       "tech",
+       "",
+       "nube"
+      ]
+     ],
+     "sl": "",
+     "st": "Acme",
+     "tl": "es-ES",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 16,
+     "meta": {
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "gift",
+     "tl": "",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 17,
+     "meta": {
+      "part_of_speech": "noun"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "bank",
+     "tl": "es-ES",
+     "tt": "nube"
+    }
+   ],
+   "seams": {
+    "en-US>es-ES": {
+     "dnt_violations": [],
+     "glossary_line": "sort→ordenar; cloud→orilla; Invoice→nube; Bank→factura; gift→(do not translate); widget→banco; invoice→recibo; Acme→colour; bank→nube",
+     "match_terms": [
+      [
+       "sort",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "Invoice",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "nube",
+       null,
+       true,
+       false
+      ],
+      [
+       "widget",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "nube",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "sort",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "Invoice",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "nube",
+       null,
+       true,
+       false
+      ],
+      [
+       "widget",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "nube",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "sort",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "Invoice",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "nube",
+       null,
+       true,
+       false
+      ],
+      [
+       "widget",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "nube",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    },
+    "en-US>fr-FR": {
+     "dnt_violations": [],
+     "glossary_line": "invoice→recibo; Bank→nube; color→; widget→factura; gift→banco",
+     "match_terms": [
+      [
+       "invoice",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "invoice",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "invoice",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    }
+   }
+  },
+  "fuzz2": {
+   "choose_sense": [
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> colour\n1. tech (use when: map context) -> orilla\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> recibo\n1. geography (use when: map context) -> \nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> banco\n1. finance (use when: map context) -> \nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> (no required term)\n1. finance (use when: the segment gives no clear cue for any sense below) -> colour\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. geography (use when: the segment gives no clear cue for any sense below) -> banco\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> nube\n1. tech (use when: money context) -> banco\n2. tech (use when: the segment gives no clear cue for any sense below) -> recibo\n3. geography (use when: map context) -> colour\n4. finance (use when: money context) -> colour\n5. finance (use when: money context) -> factura\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> (no required term)\n1. finance (use when: the segment gives no clear cue for any sense below) -> nube\n2. finance (use when: the segment gives no clear cue for any sense below) -> \nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> recibo\n1. finance (use when: the segment gives no clear cue for any sense below) -> recibo\n2. finance (use when: the segment gives no clear cue for any sense below) -> recibo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. tech (use when: map context) -> ordenar\nReply as JSON: {\"index\": <n>}"
+   ],
+   "entries": [
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 0,
+     "meta": {
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       0,
+       "tech",
+       "map context",
+       "orilla"
+      ]
+     ],
+     "sl": "es-ES",
+     "st": "invoice",
+     "tl": "",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 1,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun"
+     },
+     "senses": [
+      [
+       1,
+       "geography",
+       "map context",
+       ""
+      ]
+     ],
+     "sl": "es-ES",
+     "st": "Invoice",
+     "tl": "",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 2,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       2,
+       "finance",
+       "map context",
+       ""
+      ]
+     ],
+     "sl": "es-ES",
+     "st": "invoice",
+     "tl": "en-US",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 3,
+     "meta": {
+      "definition": "a definition"
+     },
+     "senses": [
+      [
+       3,
+       "finance",
+       "",
+       "colour"
+      ]
+     ],
+     "sl": "es-ES",
+     "st": "widget",
+     "tl": "en-US",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 4,
+     "meta": {
+      "notes": "keep 30 days",
+      "part_of_speech": "noun"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "Invoice",
+     "tl": "en-US",
+     "tt": "regalo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 5,
+     "meta": {
+      "definition": "a bill for goods",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "es-ES",
+     "st": "color",
+     "tl": "",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 6,
+     "meta": {
+      "definition": "a bill for goods"
+     },
+     "senses": [
+      [
+       4,
+       "geography",
+       "",
+       "banco"
+      ]
+     ],
+     "sl": "es-ES",
+     "st": "Acme",
+     "tl": "en-US",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 7,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       5,
+       "tech",
+       "money context",
+       "banco"
+      ],
+      [
+       6,
+       "tech",
+       "",
+       "recibo"
+      ],
+      [
+       7,
+       "geography",
+       "map context",
+       "colour"
+      ],
+      [
+       8,
+       "finance",
+       "money context",
+       "colour"
+      ],
+      [
+       9,
+       "finance",
+       "money context",
+       "factura"
+      ]
+     ],
+     "sl": "es-ES",
+     "st": "Bank",
+     "tl": "en-US",
+     "tt": "nube"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 8,
+     "meta": {
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       10,
+       "finance",
+       "",
+       "nube"
+      ],
+      [
+       11,
+       "finance",
+       "",
+       ""
+      ]
+     ],
+     "sl": "",
+     "st": "bank",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 9,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       12,
+       "finance",
+       "",
+       "recibo"
+      ],
+      [
+       13,
+       "finance",
+       "",
+       "recibo"
+      ]
+     ],
+     "sl": "es-ES",
+     "st": "gift",
+     "tl": "",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 10,
+     "meta": null,
+     "senses": [
+      [
+       14,
+       "tech",
+       "map context",
+       "ordenar"
+      ]
+     ],
+     "sl": "",
+     "st": "cloud",
+     "tl": "en-US",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 11,
+     "meta": {
+      "definition": "a bill for goods",
+      "part_of_speech": "noun"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "cloud",
+     "tl": "",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 12,
+     "meta": {
+      "part_of_speech": "noun"
+     },
+     "senses": [],
+     "sl": "es-ES",
+     "st": "bank",
+     "tl": "en-US",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 13,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "sort",
+     "tl": "en-US",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 14,
+     "meta": {
+      "definition": "a bill for goods",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "color",
+     "tl": "en-US",
+     "tt": "nube"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 15,
+     "meta": null,
+     "senses": [],
+     "sl": "",
+     "st": "invoice",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 16,
+     "meta": {
+      "definition": "a definition",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "es-ES",
+     "st": "sort",
+     "tl": "en-US",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 17,
+     "meta": null,
+     "senses": [],
+     "sl": "es-ES",
+     "st": "gift",
+     "tl": "en-US",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 18,
+     "meta": {
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "gift",
+     "tl": "",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 19,
+     "meta": null,
+     "senses": [],
+     "sl": "es-ES",
+     "st": "cloud",
+     "tl": "en-US",
+     "tt": "nube"
+    }
+   ],
+   "seams": {
+    "es-ES>en-US": {
+     "dnt_violations": [],
+     "glossary_line": "invoice→banco; color→factura; Acme→(do not translate); Bank→nube; bank→(do not translate); color→nube; sort→recibo; gift→banco; cloud→nube",
+     "match_terms": [
+      [
+       "invoice",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "orilla",
+       null,
+       true,
+       false
+      ],
+      [
+       "Bank",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "color",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "nube",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "invoice",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "orilla",
+       null,
+       true,
+       false
+      ],
+      [
+       "Bank",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "sort",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "nube",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "invoice",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "orilla",
+       null,
+       true,
+       false
+      ],
+      [
+       "Bank",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "sort",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "nube",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    }
+   }
+  },
+  "fuzz3": {
+   "choose_sense": [
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> ordenar\n1. finance (use when: the segment gives no clear cue for any sense below) -> nube\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> nube\n1. tech (use when: the segment gives no clear cue for any sense below) -> ordenar\n2. tech (use when: map context) -> banco\n3. finance (use when: the segment gives no clear cue for any sense below) -> \nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> (no required term)\n1. finance (use when: the segment gives no clear cue for any sense below) -> regalo\n2. finance (use when: the segment gives no clear cue for any sense below) -> regalo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> (no required term)\n1. tech (use when: map context) -> recibo\n2. geography (use when: money context) -> colour\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> regalo\n1. tech (use when: money context) -> regalo\n2. tech (use when: map context) -> orilla\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> regalo\n1. finance (use when: the segment gives no clear cue for any sense below) -> banco\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> (no required term)\n1. geography (use when: the segment gives no clear cue for any sense below) -> factura\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> regalo\n1. geography (use when: the segment gives no clear cue for any sense below) -> banco\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> nube\n1. tech (use when: map context) -> factura\n2. finance (use when: the segment gives no clear cue for any sense below) -> ordenar\n3. tech (use when: the segment gives no clear cue for any sense below) -> regalo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> ordenar\n1. tech (use when: the segment gives no clear cue for any sense below) -> banco\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> (no required term)\n1. geography (use when: money context) -> nube\nReply as JSON: {\"index\": <n>}"
+   ],
+   "entries": [
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 0,
+     "meta": {
+      "definition": "a definition"
+     },
+     "senses": [
+      [
+       0,
+       "finance",
+       "",
+       "nube"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "gift",
+     "tl": "en-US",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 1,
+     "meta": {
+      "definition": "a definition",
+      "notes": "keep 30 days",
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       1,
+       "tech",
+       "",
+       "ordenar"
+      ],
+      [
+       2,
+       "tech",
+       "map context",
+       "banco"
+      ],
+      [
+       3,
+       "finance",
+       "",
+       ""
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Acme",
+     "tl": "en-US",
+     "tt": "nube"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 2,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       4,
+       "finance",
+       "",
+       "regalo"
+      ],
+      [
+       5,
+       "finance",
+       "",
+       "regalo"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "color",
+     "tl": "en-US",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 3,
+     "meta": {
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       6,
+       "tech",
+       "map context",
+       "recibo"
+      ],
+      [
+       7,
+       "geography",
+       "money context",
+       "colour"
+      ]
+     ],
+     "sl": "",
+     "st": "Acme",
+     "tl": "en-US",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 4,
+     "meta": {
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       8,
+       "tech",
+       "money context",
+       "regalo"
+      ],
+      [
+       9,
+       "tech",
+       "map context",
+       "orilla"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "color",
+     "tl": "",
+     "tt": "regalo"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 5,
+     "meta": {
+      "definition": "a definition",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       10,
+       "finance",
+       "",
+       "banco"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Invoice",
+     "tl": "en-US",
+     "tt": "regalo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 6,
+     "meta": {
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       11,
+       "geography",
+       "",
+       "factura"
+      ]
+     ],
+     "sl": "",
+     "st": "Acme",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 7,
+     "meta": {
+      "definition": "a definition",
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       12,
+       "geography",
+       "",
+       "banco"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "sort",
+     "tl": "en-US",
+     "tt": "regalo"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 8,
+     "meta": {
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "invoice",
+     "tl": "en-US",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 9,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "invoice",
+     "tl": "",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 10,
+     "meta": {
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "cloud",
+     "tl": "",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 11,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       13,
+       "tech",
+       "map context",
+       "factura"
+      ],
+      [
+       14,
+       "finance",
+       "",
+       "ordenar"
+      ],
+      [
+       15,
+       "tech",
+       "",
+       "regalo"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "widget",
+     "tl": "",
+     "tt": "nube"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 12,
+     "meta": {
+      "part_of_speech": "noun"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "cloud",
+     "tl": "",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 13,
+     "meta": {
+      "definition": "a definition"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "Bank",
+     "tl": "en-US",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 14,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       16,
+       "tech",
+       "",
+       "banco"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "widget",
+     "tl": "en-US",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 15,
+     "meta": {
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "bank",
+     "tl": "",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 16,
+     "meta": {
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       17,
+       "geography",
+       "money context",
+       "nube"
+      ]
+     ],
+     "sl": "",
+     "st": "bank",
+     "tl": "en-US",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 17,
+     "meta": {
+      "definition": "a bill for goods"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "Bank",
+     "tl": "en-US",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 18,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "sort",
+     "tl": "en-US",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 19,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "Acme",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 20,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "Invoice",
+     "tl": "en-US",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 21,
+     "meta": {
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "cloud",
+     "tl": "en-US",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 22,
+     "meta": {
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "color",
+     "tl": "en-US",
+     "tt": "banco"
+    }
+   ],
+   "seams": {
+    "en-US>en-US": {
+     "dnt_violations": [],
+     "glossary_line": "gift→(do not translate); Acme→nube; Invoice→(do not translate); sort→(do not translate); cloud→recibo; Bank→; widget→ordenar; cloud→ordenar",
+     "match_terms": [
+      [
+       "gift",
+       "ordenar",
+       null,
+       true,
+       false
+      ],
+      [
+       "Acme",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "Invoice",
+       "regalo",
+       null,
+       true,
+       false
+      ],
+      [
+       "sort",
+       "regalo",
+       null,
+       true,
+       false
+      ],
+      [
+       "cloud",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "ordenar",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "gift",
+       "ordenar",
+       null,
+       true,
+       false
+      ],
+      [
+       "Acme",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "Invoice",
+       "regalo",
+       null,
+       true,
+       false
+      ],
+      [
+       "sort",
+       "regalo",
+       null,
+       true,
+       false
+      ],
+      [
+       "cloud",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "ordenar",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "gift",
+       "ordenar",
+       null,
+       true,
+       false
+      ],
+      [
+       "Acme",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "Invoice",
+       "regalo",
+       null,
+       true,
+       false
+      ],
+      [
+       "sort",
+       "regalo",
+       null,
+       true,
+       false
+      ],
+      [
+       "cloud",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "ordenar",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    }
+   }
+  },
+  "fuzz4": {
+   "choose_sense": [
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> colour\n1. finance (use when: the segment gives no clear cue for any sense below) -> factura\n2. tech (use when: map context) -> regalo\n3. finance (use when: money context) -> ordenar\n4. tech (use when: map context) -> \nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. finance (use when: the segment gives no clear cue for any sense below) -> \n2. finance (use when: the segment gives no clear cue for any sense below) -> colour\n3. geography (use when: map context) -> recibo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> (no required term)\n1. tech (use when: money context) -> orilla\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> (no required term)\n1. geography (use when: money context) -> colour\n2. geography (use when: money context) -> regalo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> ordenar\n1. finance (use when: the segment gives no clear cue for any sense below) -> colour\n2. tech (use when: map context) -> factura\n3. finance (use when: the segment gives no clear cue for any sense below) -> banco\n4. geography (use when: the segment gives no clear cue for any sense below) -> nube\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> recibo\n1. finance (use when: the segment gives no clear cue for any sense below) -> nube\n2. geography (use when: money context) -> nube\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> banco\n1. finance (use when: the segment gives no clear cue for any sense below) -> colour\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> regalo\n1. finance (use when: the segment gives no clear cue for any sense below) -> \n2. tech (use when: map context) -> recibo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> (no required term)\n1. tech (use when: money context) -> recibo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> recibo\n1. finance (use when: the segment gives no clear cue for any sense below) -> regalo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> factura\n1. finance (use when: the segment gives no clear cue for any sense below) -> factura\n2. geography (use when: map context) -> \nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> nube\n1. finance (use when: the segment gives no clear cue for any sense below) -> nube\n2. geography (use when: money context) -> recibo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> banco\n1. finance (use when: money context) -> \nReply as JSON: {\"index\": <n>}"
+   ],
+   "entries": [
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 0,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       0,
+       "finance",
+       "",
+       "factura"
+      ],
+      [
+       1,
+       "tech",
+       "map context",
+       "regalo"
+      ],
+      [
+       2,
+       "finance",
+       "money context",
+       "ordenar"
+      ],
+      [
+       3,
+       "tech",
+       "map context",
+       ""
+      ]
+     ],
+     "sl": "en-US",
+     "st": "widget",
+     "tl": "de-DE",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 1,
+     "meta": {
+      "definition": "a bill for goods",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       4,
+       "finance",
+       "",
+       ""
+      ],
+      [
+       5,
+       "finance",
+       "",
+       "colour"
+      ],
+      [
+       6,
+       "geography",
+       "map context",
+       "recibo"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Bank",
+     "tl": "de-DE",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 2,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days"
+     },
+     "senses": [
+      [
+       7,
+       "tech",
+       "money context",
+       "orilla"
+      ]
+     ],
+     "sl": "",
+     "st": "Bank",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 3,
+     "meta": {
+      "definition": "a bill for goods"
+     },
+     "senses": [
+      [
+       8,
+       "geography",
+       "money context",
+       "colour"
+      ],
+      [
+       9,
+       "geography",
+       "money context",
+       "regalo"
+      ]
+     ],
+     "sl": "",
+     "st": "sort",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 4,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       10,
+       "finance",
+       "",
+       "colour"
+      ],
+      [
+       11,
+       "tech",
+       "map context",
+       "factura"
+      ],
+      [
+       12,
+       "finance",
+       "",
+       "banco"
+      ],
+      [
+       13,
+       "geography",
+       "",
+       "nube"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "invoice",
+     "tl": "",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 5,
+     "meta": {
+      "definition": "a definition"
+     },
+     "senses": [
+      [
+       14,
+       "finance",
+       "",
+       "nube"
+      ],
+      [
+       15,
+       "geography",
+       "money context",
+       "nube"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "invoice",
+     "tl": "de-DE",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 6,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       16,
+       "finance",
+       "",
+       "colour"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "color",
+     "tl": "de-DE",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 7,
+     "meta": null,
+     "senses": [
+      [
+       17,
+       "finance",
+       "",
+       ""
+      ],
+      [
+       18,
+       "tech",
+       "map context",
+       "recibo"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Acme",
+     "tl": "de-DE",
+     "tt": "regalo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 8,
+     "meta": null,
+     "senses": [
+      [
+       19,
+       "tech",
+       "money context",
+       "recibo"
+      ]
+     ],
+     "sl": "",
+     "st": "invoice",
+     "tl": "de-DE",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 9,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "gift",
+     "tl": "de-DE",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 10,
+     "meta": null,
+     "senses": [],
+     "sl": "en-US",
+     "st": "bank",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 11,
+     "meta": {
+      "definition": "a bill for goods",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       20,
+       "finance",
+       "",
+       "regalo"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "sort",
+     "tl": "de-DE",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 12,
+     "meta": {
+      "definition": "a bill for goods",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       21,
+       "finance",
+       "",
+       "factura"
+      ],
+      [
+       22,
+       "geography",
+       "map context",
+       ""
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Invoice",
+     "tl": "de-DE",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 13,
+     "meta": {
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "color",
+     "tl": "",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 14,
+     "meta": {
+      "definition": "a bill for goods"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "gift",
+     "tl": "",
+     "tt": "nube"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 15,
+     "meta": {
+      "definition": "a definition"
+     },
+     "senses": [
+      [
+       23,
+       "finance",
+       "",
+       "nube"
+      ],
+      [
+       24,
+       "geography",
+       "money context",
+       "recibo"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "gift",
+     "tl": "de-DE",
+     "tt": "nube"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 16,
+     "meta": {
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       25,
+       "finance",
+       "money context",
+       ""
+      ]
+     ],
+     "sl": "",
+     "st": "bank",
+     "tl": "",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 17,
+     "meta": {
+      "notes": "keep 30 days"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "cloud",
+     "tl": "",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 18,
+     "meta": {
+      "definition": "a bill for goods",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "widget",
+     "tl": "de-DE",
+     "tt": "regalo"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 19,
+     "meta": {
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "invoice",
+     "tl": "",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 20,
+     "meta": {
+      "definition": "a definition"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "bank",
+     "tl": "de-DE",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 21,
+     "meta": {
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "sort",
+     "tl": "",
+     "tt": "nube"
+    }
+   ],
+   "seams": {
+    "en-US>de-DE": {
+     "dnt_violations": [],
+     "glossary_line": "widget→colour; Bank→orilla; invoice→(do not translate); color→banco; Acme→regalo; sort→(do not translate); Invoice→factura; gift→nube; cloud→(do not translate); bank→",
+     "match_terms": [
+      [
+       "widget",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "recibo",
+       null,
+       true,
+       false
+      ],
+      [
+       "color",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "regalo",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "recibo",
+       null,
+       true,
+       false
+      ],
+      [
+       "Invoice",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "banco",
+       null,
+       true,
+       false
+      ],
+      [
+       "bank",
+       "",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "widget",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "recibo",
+       null,
+       true,
+       false
+      ],
+      [
+       "color",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "regalo",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "recibo",
+       null,
+       true,
+       false
+      ],
+      [
+       "Invoice",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "banco",
+       null,
+       true,
+       false
+      ],
+      [
+       "bank",
+       "",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "widget",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "recibo",
+       null,
+       true,
+       false
+      ],
+      [
+       "color",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "regalo",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "recibo",
+       null,
+       true,
+       false
+      ],
+      [
+       "Invoice",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "banco",
+       null,
+       true,
+       false
+      ],
+      [
+       "bank",
+       "",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    }
+   }
+  },
+  "fuzz5": {
+   "choose_sense": [
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> factura\n1. tech (use when: the segment gives no clear cue for any sense below) -> ordenar\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> banco\n1. finance (use when: the segment gives no clear cue for any sense below) -> colour\n2. tech (use when: the segment gives no clear cue for any sense below) -> recibo\n3. tech (use when: map context) -> ordenar\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> banco\n1. finance (use when: the segment gives no clear cue for any sense below) -> colour\n2. geography (use when: money context) -> \n3. finance (use when: money context) -> \nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. finance (use when: money context) -> colour\n2. finance (use when: map context) -> colour\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. geography (use when: money context) -> colour\n2. finance (use when: the segment gives no clear cue for any sense below) -> orilla\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> (no required term)\n1. geography (use when: money context) -> orilla\n2. tech (use when: map context) -> colour\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> ordenar\n1. tech (use when: the segment gives no clear cue for any sense below) -> colour\n2. finance (use when: the segment gives no clear cue for any sense below) -> regalo\n3. tech (use when: money context) -> nube\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> ordenar\n1. geography (use when: map context) -> orilla\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. finance (use when: the segment gives no clear cue for any sense below) -> orilla\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. finance (use when: the segment gives no clear cue for any sense below) -> orilla\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> (no required term)\n1. finance (use when: the segment gives no clear cue for any sense below) -> colour\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> colour\n1. tech (use when: the segment gives no clear cue for any sense below) -> recibo\n2. geography (use when: map context) -> banco\nReply as JSON: {\"index\": <n>}"
+   ],
+   "entries": [
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 0,
+     "meta": {
+      "definition": "a definition",
+      "notes": "keep 30 days",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       0,
+       "tech",
+       "",
+       "ordenar"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "widget",
+     "tl": "es-ES",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 1,
+     "meta": {
+      "definition": "a definition",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       1,
+       "finance",
+       "",
+       "colour"
+      ],
+      [
+       2,
+       "tech",
+       "",
+       "recibo"
+      ],
+      [
+       3,
+       "tech",
+       "map context",
+       "ordenar"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Invoice",
+     "tl": "es-ES",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 2,
+     "meta": {
+      "definition": "a definition",
+      "part_of_speech": "noun"
+     },
+     "senses": [
+      [
+       4,
+       "finance",
+       "",
+       "colour"
+      ],
+      [
+       5,
+       "geography",
+       "money context",
+       ""
+      ],
+      [
+       6,
+       "finance",
+       "money context",
+       ""
+      ]
+     ],
+     "sl": "en-US",
+     "st": "gift",
+     "tl": "es-ES",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 3,
+     "meta": {
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       7,
+       "finance",
+       "money context",
+       "colour"
+      ],
+      [
+       8,
+       "finance",
+       "map context",
+       "colour"
+      ]
+     ],
+     "sl": "",
+     "st": "widget",
+     "tl": "",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 4,
+     "meta": {
+      "definition": "a bill for goods",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       9,
+       "geography",
+       "money context",
+       "colour"
+      ],
+      [
+       10,
+       "finance",
+       "",
+       "orilla"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "bank",
+     "tl": "es-ES",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 5,
+     "meta": {
+      "part_of_speech": "noun"
+     },
+     "senses": [
+      [
+       11,
+       "geography",
+       "money context",
+       "orilla"
+      ],
+      [
+       12,
+       "tech",
+       "map context",
+       "colour"
+      ]
+     ],
+     "sl": "",
+     "st": "gift",
+     "tl": "es-ES",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 6,
+     "meta": null,
+     "senses": [
+      [
+       13,
+       "tech",
+       "",
+       "colour"
+      ],
+      [
+       14,
+       "finance",
+       "",
+       "regalo"
+      ],
+      [
+       15,
+       "tech",
+       "money context",
+       "nube"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "invoice",
+     "tl": "es-ES",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 7,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "sort",
+     "tl": "es-ES",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 8,
+     "meta": {
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "invoice",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 9,
+     "meta": {
+      "definition": "a bill for goods",
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       16,
+       "geography",
+       "map context",
+       "orilla"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "color",
+     "tl": "",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 10,
+     "meta": {
+      "definition": "a definition"
+     },
+     "senses": [
+      [
+       17,
+       "finance",
+       "",
+       "orilla"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Acme",
+     "tl": "es-ES",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 11,
+     "meta": {
+      "notes": "keep 30 days"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "Bank",
+     "tl": "es-ES",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 12,
+     "meta": {
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "invoice",
+     "tl": "",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 13,
+     "meta": null,
+     "senses": [
+      [
+       18,
+       "finance",
+       "",
+       "orilla"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Bank",
+     "tl": "es-ES",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 14,
+     "meta": {
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       19,
+       "finance",
+       "",
+       "colour"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "cloud",
+     "tl": "es-ES",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 15,
+     "meta": null,
+     "senses": [],
+     "sl": "",
+     "st": "cloud",
+     "tl": "es-ES",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 16,
+     "meta": null,
+     "senses": [],
+     "sl": "en-US",
+     "st": "color",
+     "tl": "es-ES",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 17,
+     "meta": null,
+     "senses": [],
+     "sl": "",
+     "st": "widget",
+     "tl": "es-ES",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 18,
+     "meta": {
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       20,
+       "tech",
+       "",
+       "recibo"
+      ],
+      [
+       21,
+       "geography",
+       "map context",
+       "banco"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Invoice",
+     "tl": "",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 19,
+     "meta": {
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "cloud",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 20,
+     "meta": {
+      "definition": "a bill for goods",
+      "part_of_speech": "noun"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "sort",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 21,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "gift",
+     "tl": "",
+     "tt": "banco"
+    }
+   ],
+   "seams": {
+    ">": {
+     "dnt_violations": [],
+     "glossary_line": "widget→(do not translate); invoice→(do not translate); sort→; gift→banco",
+     "match_terms": [
+      [
+       "widget",
+       "orilla",
+       null,
+       true,
+       false
+      ],
+      [
+       "invoice",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "sort",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "widget",
+       "orilla",
+       null,
+       true,
+       false
+      ],
+      [
+       "invoice",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "sort",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "widget",
+       "orilla",
+       null,
+       true,
+       false
+      ],
+      [
+       "invoice",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "sort",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    },
+    ">es-ES": {
+     "dnt_violations": [],
+     "glossary_line": "gift→(do not translate); invoice→(do not translate); Bank→ordenar; cloud→banco; widget→recibo; sort→",
+     "match_terms": [
+      [
+       "gift",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "invoice",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "Bank",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "gift",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "invoice",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "Bank",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "gift",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "invoice",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "Bank",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    },
+    "en-US>": {
+     "dnt_violations": [],
+     "glossary_line": "widget→(do not translate); color→ordenar; invoice→recibo; Invoice→colour; cloud→; sort→; gift→banco",
+     "match_terms": [
+      [
+       "widget",
+       "orilla",
+       null,
+       true,
+       false
+      ],
+      [
+       "color",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "Invoice",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "widget",
+       "orilla",
+       null,
+       true,
+       false
+      ],
+      [
+       "color",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "Invoice",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "widget",
+       "orilla",
+       null,
+       true,
+       false
+      ],
+      [
+       "color",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "Invoice",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    },
+    "en-US>es-ES": {
+     "dnt_violations": [],
+     "glossary_line": "widget→(do not translate); Invoice→banco; gift→banco; bank→orilla; invoice→ordenar; sort→; Acme→orilla; Bank→orilla; color→",
+     "match_terms": [
+      [
+       "widget",
+       "factura",
+       null,
+       true,
+       false
+      ],
+      [
+       "Invoice",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "widget",
+       "factura",
+       null,
+       true,
+       false
+      ],
+      [
+       "Invoice",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "widget",
+       "factura",
+       null,
+       true,
+       false
+      ],
+      [
+       "Invoice",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    }
+   }
+  },
+  "fuzz6": {
+   "choose_sense": [
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> (no required term)\n1. geography (use when: map context) -> \nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> recibo\n1. tech (use when: map context) -> banco\n2. geography (use when: money context) -> ordenar\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> factura\n1. tech (use when: money context) -> orilla\n2. finance (use when: the segment gives no clear cue for any sense below) -> ordenar\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> banco\n1. finance (use when: the segment gives no clear cue for any sense below) -> ordenar\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. tech (use when: map context) -> banco\n2. finance (use when: the segment gives no clear cue for any sense below) -> banco\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> factura\n1. geography (use when: the segment gives no clear cue for any sense below) -> factura\n2. finance (use when: the segment gives no clear cue for any sense below) -> banco\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> factura\n1. geography (use when: map context) -> factura\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. geography (use when: money context) -> colour\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. finance (use when: the segment gives no clear cue for any sense below) -> \n2. finance (use when: money context) -> recibo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> banco\n1. tech (use when: money context) -> recibo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> ordenar\n1. geography (use when: map context) -> recibo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> recibo\n1. finance (use when: the segment gives no clear cue for any sense below) -> banco\n2. finance (use when: the segment gives no clear cue for any sense below) -> banco\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> recibo\n1. tech (use when: the segment gives no clear cue for any sense below) -> nube\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> nube\n1. tech (use when: money context) -> banco\nReply as JSON: {\"index\": <n>}"
+   ],
+   "entries": [
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 0,
+     "meta": {
+      "definition": "a definition",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       0,
+       "geography",
+       "map context",
+       ""
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Bank",
+     "tl": "es-ES",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 1,
+     "meta": null,
+     "senses": [
+      [
+       1,
+       "tech",
+       "map context",
+       "banco"
+      ],
+      [
+       2,
+       "geography",
+       "money context",
+       "ordenar"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "cloud",
+     "tl": "",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 2,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       3,
+       "tech",
+       "money context",
+       "orilla"
+      ],
+      [
+       4,
+       "finance",
+       "",
+       "ordenar"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "color",
+     "tl": "es-ES",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 3,
+     "meta": {
+      "definition": "a definition",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       5,
+       "finance",
+       "",
+       "ordenar"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "invoice",
+     "tl": "es-ES",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 4,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       6,
+       "tech",
+       "map context",
+       "banco"
+      ],
+      [
+       7,
+       "finance",
+       "",
+       "banco"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "sort",
+     "tl": "es-ES",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 5,
+     "meta": {
+      "definition": "a definition",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       8,
+       "geography",
+       "",
+       "factura"
+      ],
+      [
+       9,
+       "finance",
+       "",
+       "banco"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "gift",
+     "tl": "es-ES",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 6,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       10,
+       "geography",
+       "map context",
+       "factura"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "invoice",
+     "tl": "",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 7,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       11,
+       "geography",
+       "money context",
+       "colour"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "widget",
+     "tl": "",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 8,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       12,
+       "finance",
+       "",
+       ""
+      ],
+      [
+       13,
+       "finance",
+       "money context",
+       "recibo"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Invoice",
+     "tl": "es-ES",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 9,
+     "meta": {
+      "definition": "a bill for goods",
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       14,
+       "tech",
+       "money context",
+       "recibo"
+      ]
+     ],
+     "sl": "",
+     "st": "bank",
+     "tl": "es-ES",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 10,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       15,
+       "geography",
+       "map context",
+       "recibo"
+      ]
+     ],
+     "sl": "",
+     "st": "Bank",
+     "tl": "es-ES",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 11,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "Bank",
+     "tl": "",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 12,
+     "meta": {
+      "definition": "a definition"
+     },
+     "senses": [
+      [
+       16,
+       "finance",
+       "",
+       "banco"
+      ],
+      [
+       17,
+       "finance",
+       "",
+       "banco"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Acme",
+     "tl": "es-ES",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 13,
+     "meta": {
+      "definition": "a bill for goods",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "Acme",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 14,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "gift",
+     "tl": "",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 15,
+     "meta": {
+      "definition": "a definition"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "cloud",
+     "tl": "es-ES",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 16,
+     "meta": {
+      "notes": "keep 30 days",
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       18,
+       "tech",
+       "",
+       "nube"
+      ]
+     ],
+     "sl": "",
+     "st": "sort",
+     "tl": "es-ES",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 17,
+     "meta": {
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       19,
+       "tech",
+       "money context",
+       "banco"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "bank",
+     "tl": "",
+     "tt": "nube"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 18,
+     "meta": {
+      "definition": "a definition",
+      "part_of_speech": "noun"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "bank",
+     "tl": "es-ES",
+     "tt": "nube"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 19,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "color",
+     "tl": "",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 20,
+     "meta": {
+      "definition": "a definition"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "widget",
+     "tl": "es-ES",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 21,
+     "meta": {
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "widget",
+     "tl": "es-ES",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 22,
+     "meta": {
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "Invoice",
+     "tl": "",
+     "tt": "regalo"
+    }
+   ],
+   "seams": {
+    "en-US>es-ES": {
+     "dnt_violations": [],
+     "glossary_line": "Bank→(do not translate); color→factura; invoice→banco; sort→orilla; gift→(do not translate); Invoice→(do not translate); Acme→recibo; cloud→ordenar; bank→(do not translate); widget→",
+     "match_terms": [
+      [
+       "Bank",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "color",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "factura",
+       null,
+       true,
+       false
+      ],
+      [
+       "Invoice",
+       "orilla",
+       null,
+       true,
+       false
+      ],
+      [
+       "Acme",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "nube",
+       null,
+       true,
+       false
+      ],
+      [
+       "widget",
+       "",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "Bank",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "color",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "factura",
+       null,
+       true,
+       false
+      ],
+      [
+       "Invoice",
+       "orilla",
+       null,
+       true,
+       false
+      ],
+      [
+       "Acme",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "nube",
+       null,
+       true,
+       false
+      ],
+      [
+       "widget",
+       "",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "Bank",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "color",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "factura",
+       null,
+       true,
+       false
+      ],
+      [
+       "Invoice",
+       "orilla",
+       null,
+       true,
+       false
+      ],
+      [
+       "Acme",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "nube",
+       null,
+       true,
+       false
+      ],
+      [
+       "widget",
+       "",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    }
+   }
+  },
+  "fuzz7": {
+   "choose_sense": [
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. finance (use when: the segment gives no clear cue for any sense below) -> regalo\n2. tech (use when: money context) -> \nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> recibo\n1. finance (use when: the segment gives no clear cue for any sense below) -> colour\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> nube\n1. finance (use when: the segment gives no clear cue for any sense below) -> colour\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> (no required term)\n1. geography (use when: map context) -> orilla\n2. tech (use when: money context) -> nube\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> ordenar\n1. finance (use when: map context) -> recibo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> factura\n1. geography (use when: money context) -> factura\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> nube\n1. geography (use when: money context) -> factura\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> ordenar\n1. geography (use when: money context) -> \n2. geography (use when: money context) -> banco\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> (no required term)\n1. finance (use when: the segment gives no clear cue for any sense below) -> orilla\n2. finance (use when: the segment gives no clear cue for any sense below) -> orilla\n3. tech (use when: map context) -> \nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. tech (use when: money context) -> recibo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. geography (use when: money context) -> banco\nReply as JSON: {\"index\": <n>}"
+   ],
+   "entries": [
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 0,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       0,
+       "finance",
+       "",
+       "regalo"
+      ],
+      [
+       1,
+       "tech",
+       "money context",
+       ""
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Bank",
+     "tl": "es-ES",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 1,
+     "meta": {
+      "definition": "a definition",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       2,
+       "finance",
+       "",
+       "colour"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "widget",
+     "tl": "es-ES",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 2,
+     "meta": {
+      "notes": "keep 30 days"
+     },
+     "senses": [
+      [
+       3,
+       "finance",
+       "",
+       "colour"
+      ]
+     ],
+     "sl": "",
+     "st": "color",
+     "tl": "es-ES",
+     "tt": "nube"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 3,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "bank",
+     "tl": "es-ES",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 4,
+     "meta": null,
+     "senses": [],
+     "sl": "en-US",
+     "st": "Bank",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 5,
+     "meta": {
+      "definition": "a bill for goods",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       4,
+       "geography",
+       "map context",
+       "orilla"
+      ],
+      [
+       5,
+       "tech",
+       "money context",
+       "nube"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "bank",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 6,
+     "meta": {
+      "definition": "a bill for goods",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       6,
+       "finance",
+       "map context",
+       "recibo"
+      ]
+     ],
+     "sl": "",
+     "st": "gift",
+     "tl": "",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 7,
+     "meta": {
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "Acme",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 8,
+     "meta": {
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       7,
+       "geography",
+       "money context",
+       "factura"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "sort",
+     "tl": "",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 9,
+     "meta": {
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       8,
+       "geography",
+       "money context",
+       "factura"
+      ]
+     ],
+     "sl": "",
+     "st": "Invoice",
+     "tl": "es-ES",
+     "tt": "nube"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 10,
+     "meta": {
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       9,
+       "geography",
+       "money context",
+       ""
+      ],
+      [
+       10,
+       "geography",
+       "money context",
+       "banco"
+      ]
+     ],
+     "sl": "",
+     "st": "invoice",
+     "tl": "es-ES",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 11,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "widget",
+     "tl": "",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 12,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       11,
+       "finance",
+       "",
+       "orilla"
+      ],
+      [
+       12,
+       "finance",
+       "",
+       "orilla"
+      ],
+      [
+       13,
+       "tech",
+       "map context",
+       ""
+      ]
+     ],
+     "sl": "en-US",
+     "st": "gift",
+     "tl": "es-ES",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 13,
+     "meta": {
+      "part_of_speech": "noun"
+     },
+     "senses": [
+      [
+       14,
+       "tech",
+       "money context",
+       "recibo"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Acme",
+     "tl": "es-ES",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 14,
+     "meta": {
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       15,
+       "geography",
+       "money context",
+       "banco"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Acme",
+     "tl": "",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 15,
+     "meta": {
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "Invoice",
+     "tl": "",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 16,
+     "meta": null,
+     "senses": [],
+     "sl": "en-US",
+     "st": "invoice",
+     "tl": "es-ES",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 17,
+     "meta": {
+      "definition": "a bill for goods",
+      "part_of_speech": "noun"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "color",
+     "tl": "",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 18,
+     "meta": {
+      "definition": "a bill for goods",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "gift",
+     "tl": "es-ES",
+     "tt": "banco"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 19,
+     "meta": {
+      "notes": "keep 30 days",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "invoice",
+     "tl": "",
+     "tt": "nube"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 20,
+     "meta": {
+      "definition": "a bill for goods",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "cloud",
+     "tl": "",
+     "tt": "ordenar"
+    }
+   ],
+   "seams": {
+    "en-US>es-ES": {
+     "dnt_violations": [],
+     "glossary_line": "Bank→orilla; widget→recibo; color→nube; bank→colour; sort→(do not translate); Acme→(do not translate); invoice→banco; color→recibo; cloud→ordenar",
+     "match_terms": [
+      [
+       "Bank",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "factura",
+       null,
+       true,
+       false
+      ],
+      [
+       "Acme",
+       "orilla",
+       null,
+       true,
+       false
+      ],
+      [
+       "invoice",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "ordenar",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "Bank",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "factura",
+       null,
+       true,
+       false
+      ],
+      [
+       "Acme",
+       "orilla",
+       null,
+       true,
+       false
+      ],
+      [
+       "invoice",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "ordenar",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "Bank",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "factura",
+       null,
+       true,
+       false
+      ],
+      [
+       "Acme",
+       "orilla",
+       null,
+       true,
+       false
+      ],
+      [
+       "invoice",
+       "banco",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "ordenar",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    },
+    "en-US>fr-FR": {
+     "dnt_violations": [],
+     "glossary_line": "Bank→(do not translate); bank→(do not translate); gift→ordenar; sort→(do not translate); widget→orilla; Acme→orilla; color→recibo; invoice→nube; cloud→ordenar",
+     "match_terms": [
+      [
+       "Bank",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "bank",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "gift",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "factura",
+       null,
+       true,
+       false
+      ],
+      [
+       "widget",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "ordenar",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "Bank",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "bank",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "gift",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "factura",
+       null,
+       true,
+       false
+      ],
+      [
+       "widget",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "ordenar",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "Bank",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "bank",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "gift",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "factura",
+       null,
+       true,
+       false
+      ],
+      [
+       "widget",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "ordenar",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    }
+   }
+  },
+  "fuzz8": {
+   "choose_sense": [
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. tech (use when: money context) -> colour\n2. finance (use when: map context) -> \n3. finance (use when: money context) -> banco\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. finance (use when: map context) -> regalo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> regalo\n1. geography (use when: the segment gives no clear cue for any sense below) -> colour\n2. tech (use when: the segment gives no clear cue for any sense below) -> ordenar\n3. finance (use when: the segment gives no clear cue for any sense below) -> regalo\n4. finance (use when: the segment gives no clear cue for any sense below) -> nube\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> colour\n1. geography (use when: map context) -> \n2. tech (use when: money context) -> colour\n3. finance (use when: the segment gives no clear cue for any sense below) -> banco\n4. geography (use when: the segment gives no clear cue for any sense below) -> \n5. geography (use when: money context) -> nube\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. finance (use when: the segment gives no clear cue for any sense below) -> banco\n2. finance (use when: money context) -> ordenar\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> recibo\n1. finance (use when: money context) -> ordenar\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> nube\n1. finance (use when: the segment gives no clear cue for any sense below) -> factura\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> recibo\n1. finance (use when: the segment gives no clear cue for any sense below) -> recibo\nReply as JSON: {\"index\": <n>}"
+   ],
+   "entries": [
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 0,
+     "meta": null,
+     "senses": [
+      [
+       0,
+       "tech",
+       "money context",
+       "colour"
+      ],
+      [
+       1,
+       "finance",
+       "map context",
+       ""
+      ],
+      [
+       2,
+       "finance",
+       "money context",
+       "banco"
+      ]
+     ],
+     "sl": "es-ES",
+     "st": "widget",
+     "tl": "",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 1,
+     "meta": {
+      "definition": "a definition",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       3,
+       "finance",
+       "map context",
+       "regalo"
+      ]
+     ],
+     "sl": "es-ES",
+     "st": "invoice",
+     "tl": "en-US",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 2,
+     "meta": {
+      "definition": "a definition",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       4,
+       "geography",
+       "",
+       "colour"
+      ],
+      [
+       5,
+       "tech",
+       "",
+       "ordenar"
+      ],
+      [
+       6,
+       "finance",
+       "",
+       "regalo"
+      ],
+      [
+       7,
+       "finance",
+       "",
+       "nube"
+      ]
+     ],
+     "sl": "es-ES",
+     "st": "bank",
+     "tl": "en-US",
+     "tt": "regalo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 3,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       8,
+       "geography",
+       "map context",
+       ""
+      ],
+      [
+       9,
+       "tech",
+       "money context",
+       "colour"
+      ],
+      [
+       10,
+       "finance",
+       "",
+       "banco"
+      ],
+      [
+       11,
+       "geography",
+       "",
+       ""
+      ],
+      [
+       12,
+       "geography",
+       "money context",
+       "nube"
+      ]
+     ],
+     "sl": "es-ES",
+     "st": "Invoice",
+     "tl": "en-US",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 4,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun"
+     },
+     "senses": [],
+     "sl": "es-ES",
+     "st": "gift",
+     "tl": "en-US",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 5,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "sort",
+     "tl": "en-US",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 6,
+     "meta": {
+      "definition": "a definition",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       13,
+       "finance",
+       "",
+       "banco"
+      ],
+      [
+       14,
+       "finance",
+       "money context",
+       "ordenar"
+      ]
+     ],
+     "sl": "es-ES",
+     "st": "widget",
+     "tl": "en-US",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 7,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "cloud",
+     "tl": "en-US",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 8,
+     "meta": {
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       15,
+       "finance",
+       "money context",
+       "ordenar"
+      ]
+     ],
+     "sl": "es-ES",
+     "st": "Invoice",
+     "tl": "",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 9,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days"
+     },
+     "senses": [
+      [
+       16,
+       "finance",
+       "",
+       "factura"
+      ]
+     ],
+     "sl": "",
+     "st": "invoice",
+     "tl": "",
+     "tt": "nube"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 10,
+     "meta": {
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "color",
+     "tl": "",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 11,
+     "meta": {
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "gift",
+     "tl": "en-US",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 12,
+     "meta": {
+      "definition": "a bill for goods",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "es-ES",
+     "st": "sort",
+     "tl": "en-US",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 13,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "es-ES",
+     "st": "Acme",
+     "tl": "",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 14,
+     "meta": {
+      "definition": "a definition",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "es-ES",
+     "st": "Acme",
+     "tl": "en-US",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 15,
+     "meta": {
+      "definition": "a bill for goods",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "es-ES",
+     "st": "sort",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 16,
+     "meta": {
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "es-ES",
+     "st": "color",
+     "tl": "en-US",
+     "tt": "nube"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 17,
+     "meta": null,
+     "senses": [],
+     "sl": "",
+     "st": "Acme",
+     "tl": "",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 18,
+     "meta": {
+      "notes": "keep 30 days",
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "bank",
+     "tl": "en-US",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 19,
+     "meta": {
+      "definition": "a definition",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "es-ES",
+     "st": "cloud",
+     "tl": "en-US",
+     "tt": "regalo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 20,
+     "meta": null,
+     "senses": [
+      [
+       17,
+       "finance",
+       "",
+       "recibo"
+      ]
+     ],
+     "sl": "es-ES",
+     "st": "Bank",
+     "tl": "en-US",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 21,
+     "meta": {
+      "definition": "a bill for goods"
+     },
+     "senses": [],
+     "sl": "es-ES",
+     "st": "bank",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 22,
+     "meta": {
+      "definition": "a bill for goods"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "Bank",
+     "tl": "",
+     "tt": "orilla"
+    }
+   ],
+   "seams": {
+    "es-ES>en-US": {
+     "dnt_violations": [],
+     "glossary_line": "invoice→orilla; bank→(do not translate); Invoice→colour; gift→; widget→orilla; sort→factura; Acme→(do not translate); color→nube; cloud→(do not translate); Bank→recibo",
+     "match_terms": [
+      [
+       "invoice",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "regalo",
+       null,
+       true,
+       false
+      ],
+      [
+       "Invoice",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "colour",
+       null,
+       true,
+       false
+      ],
+      [
+       "color",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "regalo",
+       null,
+       true,
+       false
+      ],
+      [
+       "Bank",
+       "recibo",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "invoice",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "regalo",
+       null,
+       true,
+       false
+      ],
+      [
+       "Invoice",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "colour",
+       null,
+       true,
+       false
+      ],
+      [
+       "color",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "regalo",
+       null,
+       true,
+       false
+      ],
+      [
+       "Bank",
+       "recibo",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "invoice",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "bank",
+       "regalo",
+       null,
+       true,
+       false
+      ],
+      [
+       "Invoice",
+       "colour",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "widget",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "colour",
+       null,
+       true,
+       false
+      ],
+      [
+       "color",
+       "nube",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "regalo",
+       null,
+       true,
+       false
+      ],
+      [
+       "Bank",
+       "recibo",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    }
+   }
+  },
+  "fuzz9": {
+   "choose_sense": [
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> ordenar\n1. tech (use when: money context) -> recibo\n2. finance (use when: map context) -> ordenar\n3. tech (use when: map context) -> colour\n4. tech (use when: map context) -> ordenar\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> ordenar\n1. finance (use when: the segment gives no clear cue for any sense below) -> regalo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. tech (use when: map context) -> factura\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> regalo\n1. tech (use when: map context) -> \n2. finance (use when: the segment gives no clear cue for any sense below) -> regalo\n3. tech (use when: the segment gives no clear cue for any sense below) -> factura\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> recibo\n1. finance (use when: the segment gives no clear cue for any sense below) -> colour\n2. tech (use when: the segment gives no clear cue for any sense below) -> regalo\n3. tech (use when: the segment gives no clear cue for any sense below) -> \nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> ordenar\n1. finance (use when: the segment gives no clear cue for any sense below) -> ordenar\n2. geography (use when: money context) -> banco\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> colour\n1. tech (use when: the segment gives no clear cue for any sense below) -> nube\n2. finance (use when: map context) -> factura\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> (no required term)\n1. finance (use when: the segment gives no clear cue for any sense below) -> \nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> colour\n1. geography (use when: the segment gives no clear cue for any sense below) -> recibo\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> factura\n1. finance (use when: the segment gives no clear cue for any sense below) -> banco\n2. finance (use when: the segment gives no clear cue for any sense below) -> factura\n3. geography (use when: map context) -> factura\nReply as JSON: {\"index\": <n>}",
+    "Choose the single best sense for the term as used in this segment.\nSegment: probe segment\n0. general (use when: the segment gives no clear cue for any sense below) -> orilla\n1. tech (use when: the segment gives no clear cue for any sense below) -> factura\n2. geography (use when: map context) -> orilla\nReply as JSON: {\"index\": <n>}"
+   ],
+   "entries": [
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 0,
+     "meta": null,
+     "senses": [
+      [
+       0,
+       "tech",
+       "money context",
+       "recibo"
+      ],
+      [
+       1,
+       "finance",
+       "map context",
+       "ordenar"
+      ],
+      [
+       2,
+       "tech",
+       "map context",
+       "colour"
+      ],
+      [
+       3,
+       "tech",
+       "map context",
+       "ordenar"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "invoice",
+     "tl": "",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 1,
+     "meta": {
+      "definition": "a definition",
+      "part_of_speech": "noun",
+      "subject_field": "finance"
+     },
+     "senses": [
+      [
+       4,
+       "finance",
+       "",
+       "regalo"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Acme",
+     "tl": "en-US",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 2,
+     "meta": {
+      "notes": "keep 30 days",
+      "part_of_speech": "noun"
+     },
+     "senses": [
+      [
+       5,
+       "tech",
+       "map context",
+       "factura"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "cloud",
+     "tl": "en-US",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 3,
+     "meta": {
+      "definition": "a definition",
+      "part_of_speech": "noun",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       6,
+       "tech",
+       "map context",
+       ""
+      ],
+      [
+       7,
+       "finance",
+       "",
+       "regalo"
+      ],
+      [
+       8,
+       "tech",
+       "",
+       "factura"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "Invoice",
+     "tl": "en-US",
+     "tt": "regalo"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 4,
+     "meta": {
+      "definition": "a definition"
+     },
+     "senses": [
+      [
+       9,
+       "finance",
+       "",
+       "colour"
+      ],
+      [
+       10,
+       "tech",
+       "",
+       "regalo"
+      ],
+      [
+       11,
+       "tech",
+       "",
+       ""
+      ]
+     ],
+     "sl": "en-US",
+     "st": "color",
+     "tl": "en-US",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 5,
+     "meta": {
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       12,
+       "finance",
+       "",
+       "ordenar"
+      ],
+      [
+       13,
+       "geography",
+       "money context",
+       "banco"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "invoice",
+     "tl": "en-US",
+     "tt": "ordenar"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 6,
+     "meta": {
+      "definition": "a bill for goods",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       14,
+       "tech",
+       "",
+       "nube"
+      ],
+      [
+       15,
+       "finance",
+       "map context",
+       "factura"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "widget",
+     "tl": "",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 7,
+     "meta": {
+      "definition": "a definition",
+      "notes": "keep 30 days",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       16,
+       "finance",
+       "",
+       ""
+      ]
+     ],
+     "sl": "en-US",
+     "st": "widget",
+     "tl": "en-US",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 8,
+     "meta": {
+      "definition": "a bill for goods",
+      "notes": "keep 30 days",
+      "part_of_speech": "noun"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "color",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 9,
+     "meta": {
+      "part_of_speech": "noun",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [
+      [
+       17,
+       "geography",
+       "",
+       "recibo"
+      ]
+     ],
+     "sl": "",
+     "st": "invoice",
+     "tl": "en-US",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 10,
+     "meta": {
+      "notes": "keep 30 days",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "Acme",
+     "tl": "",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 11,
+     "meta": {
+      "notes": "keep 30 days",
+      "subject_field": "finance",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "Bank",
+     "tl": "",
+     "tt": "colour"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 12,
+     "meta": null,
+     "senses": [
+      [
+       18,
+       "finance",
+       "",
+       "banco"
+      ],
+      [
+       19,
+       "finance",
+       "",
+       "factura"
+      ],
+      [
+       20,
+       "geography",
+       "map context",
+       "factura"
+      ]
+     ],
+     "sl": "en-US",
+     "st": "gift",
+     "tl": "en-US",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 13,
+     "meta": {
+      "definition": "a definition",
+      "notes": "keep 30 days",
+      "usage_example": "Send the invoice"
+     },
+     "senses": [],
+     "sl": "en-US",
+     "st": "bank",
+     "tl": "en-US",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 14,
+     "meta": null,
+     "senses": [
+      [
+       21,
+       "tech",
+       "",
+       "factura"
+      ],
+      [
+       22,
+       "geography",
+       "map context",
+       "orilla"
+      ]
+     ],
+     "sl": "",
+     "st": "color",
+     "tl": "",
+     "tt": "orilla"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 15,
+     "meta": {
+      "definition": "a bill for goods",
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "sort",
+     "tl": "en-US",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 16,
+     "meta": null,
+     "senses": [],
+     "sl": "en-US",
+     "st": "bank",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 17,
+     "meta": {
+      "subject_field": "finance"
+     },
+     "senses": [],
+     "sl": "",
+     "st": "Acme",
+     "tl": "en-US",
+     "tt": "recibo"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 18,
+     "meta": null,
+     "senses": [],
+     "sl": "en-US",
+     "st": "Bank",
+     "tl": "en-US",
+     "tt": "nube"
+    }
+   ],
+   "seams": {
+    "en-US>en-US": {
+     "dnt_violations": [],
+     "glossary_line": "Acme→ordenar; cloud→orilla; Invoice→regalo; color→(do not translate); invoice→ordenar; gift→(do not translate); bank→factura; sort→recibo; Bank→(do not translate)",
+     "match_terms": [
+      [
+       "Acme",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "Invoice",
+       "regalo",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "recibo",
+       null,
+       true,
+       false
+      ],
+      [
+       "invoice",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "factura",
+       null,
+       true,
+       false
+      ],
+      [
+       "bank",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "nube",
+       null,
+       true,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "Acme",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "Invoice",
+       "regalo",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "recibo",
+       null,
+       true,
+       false
+      ],
+      [
+       "invoice",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "factura",
+       null,
+       true,
+       false
+      ],
+      [
+       "bank",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "nube",
+       null,
+       true,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "Acme",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "cloud",
+       "orilla",
+       null,
+       false,
+       false
+      ],
+      [
+       "Invoice",
+       "regalo",
+       null,
+       false,
+       false
+      ],
+      [
+       "color",
+       "recibo",
+       null,
+       true,
+       false
+      ],
+      [
+       "invoice",
+       "ordenar",
+       null,
+       false,
+       false
+      ],
+      [
+       "gift",
+       "factura",
+       null,
+       true,
+       false
+      ],
+      [
+       "bank",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "sort",
+       "recibo",
+       null,
+       false,
+       false
+      ],
+      [
+       "Bank",
+       "nube",
+       null,
+       true,
+       false
+      ]
+     ],
+     "term_violations": []
+    }
+   }
+  },
+  "ladder": {
+   "choose_sense": [],
+   "entries": [
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 0,
+     "meta": null,
+     "senses": [],
+     "sl": "en-US",
+     "st": "invoice",
+     "tl": "es-ES",
+     "tt": "recibo"
+    }
+   ],
+   "seams": {
+    "en-US>es-ES": {
+     "dnt_violations": [],
+     "glossary_line": "invoice→recibo",
+     "match_terms": [
+      [
+       "invoice",
+       "recibo",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "invoice",
+       "recibo",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "invoice",
+       "recibo",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    }
+   }
+  },
+  "reversed_self": {
+   "choose_sense": [],
+   "entries": [
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 0,
+     "meta": null,
+     "senses": [],
+     "sl": "es-ES",
+     "st": "factura",
+     "tl": "en-US",
+     "tt": "invoice"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 1,
+     "meta": null,
+     "senses": [],
+     "sl": "en-US",
+     "st": "Widget",
+     "tl": "en-US",
+     "tt": "Widget"
+    }
+   ],
+   "seams": {
+    "en-US>en-US": {
+     "dnt_violations": [],
+     "glossary_line": "Widget→Widget",
+     "match_terms": [
+      [
+       "Widget",
+       "Widget",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "Widget",
+       "Widget",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "Widget",
+       "Widget",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    },
+    "es-ES>en-US": {
+     "dnt_violations": [],
+     "glossary_line": "factura→invoice",
+     "match_terms": [
+      [
+       "factura",
+       "invoice",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "factura",
+       "invoice",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "factura",
+       "invoice",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    }
+   }
+  },
+  "shapes": {
+   "choose_sense": [],
+   "entries": [
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 0,
+     "meta": null,
+     "senses": [],
+     "sl": "en-US",
+     "st": "orphan",
+     "tl": "es-ES",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 1,
+     "meta": null,
+     "senses": [],
+     "sl": "en-US",
+     "st": "invoice",
+     "tl": "es-ES",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 2,
+     "meta": null,
+     "senses": [],
+     "sl": "en-US",
+     "st": "bill",
+     "tl": "es-ES",
+     "tt": "factura"
+    },
+    {
+     "cs": false,
+     "dnt": true,
+     "i": 3,
+     "meta": null,
+     "senses": [],
+     "sl": "",
+     "st": "Acme",
+     "tl": "",
+     "tt": ""
+    },
+    {
+     "cs": false,
+     "dnt": false,
+     "i": 4,
+     "meta": null,
+     "senses": [],
+     "sl": "en-US",
+     "st": "iPhone",
+     "tl": "es-ES",
+     "tt": "iphone"
+    }
+   ],
+   "seams": {
+    "en-US>es-ES": {
+     "dnt_violations": [],
+     "glossary_line": "orphan→; invoice→factura; bill→factura; Acme→(do not translate); iPhone→iphone",
+     "match_terms": [
+      [
+       "orphan",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "bill",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "iPhone",
+       "iphone",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_legacy": [
+      [
+       "orphan",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "bill",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "iPhone",
+       "iphone",
+       null,
+       false,
+       false
+      ]
+     ],
+     "merged_pinned": [
+      [
+       "orphan",
+       "",
+       null,
+       false,
+       false
+      ],
+      [
+       "invoice",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "bill",
+       "factura",
+       null,
+       false,
+       false
+      ],
+      [
+       "Acme",
+       "",
+       null,
+       true,
+       false
+      ],
+      [
+       "iPhone",
+       "iphone",
+       null,
+       false,
+       false
+      ]
+     ],
+     "term_violations": []
+    }
+   }
+  }
+ }
+}

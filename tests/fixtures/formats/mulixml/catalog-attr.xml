@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Product strings, one entry per message, every language as a sibling -->
+<catalog xml:lang="en" version='2'>
+  <entry id="welcome">
+    <text xml:lang="en" id="t1">Welcome to <b>Northwind</b>, {0}!</text>
+    <text xml:lang="de" id="t2">Willkommen bei <b>Northwind</b>, {0}!</text>
+  </entry>
+  <entry id="save">
+    <text xml:lang="en">Save &amp; close</text>
+    <text xml:lang="de">Speichern &amp; schliessen</text>
+    <text xml:lang="fr"/>
+  </entry>
+  <entry id="count">
+    <text xml:lang="en">You have %1$s new messages</text>
+  </entry>
+  <entry id="skip">
+    <text xml:lang="en">   </text>
+    <text xml:lang="de">   </text>
+  </entry>
+</catalog>

@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Inspect judge{% endblock %}
+{% block content %}
+{# Jev Train C: the judge-engine Inspector. Everything shown comes from
+   app/services/jev_inspector.py (criteria from qe_jev.QUESTIONS, the rule from
+   qe_jev.describe_rule, the try from qe_jev.score_segment). Every value is autoescaped
+   here, and the try result is written with textContent only (never parsed as HTML). #}
+{% set e = data.engine %}
+<div class="admin-ai-page admin-ai-inspect">
+{% set intro %}
+  <p class="small"><a href="/setup-ai#quality-judges"><span aria-hidden="true">&larr;</span> Back to Setup AI</a></p>
+
+  <p class="muted">{{ e.kind_label }} &middot; <code>{{ e.provider_name }}</code> &middot;
+    model <code>{{ data.model }}</code> &middot; timeout {{ "%g"|format(data.timeout_s) }} s</p>
+  <p class="muted small">Sends to <code>{{ data.endpoint }}</code></p>
+  {% if not data.live %}
+  <p class="err">This engine is not live, so Try it is off until it is fixed in Setup AI:
+    {{ data.not_live_reason }}</p>
+  {% endif %}
+  <p class="help">{{ data.cost_note }}</p>
+  {% for warning in data.warnings %}<p class="err">{{ warning }}</p>{% endfor %}
+{% endset %}
+{% set heading %}Inspect: {{ e.name }} <a class="help-hint" href="/help#jev-inspector" title="Inspecting a quality judge" aria-label="Inspecting a quality judge">?</a>{% endset %}
+{{ m.page_header(heading, meta=intro) }}
+<nav class="admin-ai-index admin-ai-index-inline" aria-label="Inspect judge">
+  <a href="#criteria">1. What Jev is asked</a>
+  <a href="#rule">2. How it decides</a>
+  <a href="#try">3. Try it</a>
+  <a href="#ledger">4. Ledger</a>
+</nav>
+
+<section class="card" id="criteria">
+  <h2>1. What Jev is asked</h2>
+  <p class="help">Each segment goes out as one request carrying the source, the translation and
+    the questions below. The four scored questions each come back as a level with a probability
+    for every level; <code>meaning_changed</code> comes back as a yes-or-no probability.</p>
+  {% call m.data_table('1. What Jev is asked', [{'label':'Question'}, {'label':'Type'}, {'label':'Instructions'}, {'label':'Levels and what they mean'}]) %}
+      {% for q in data.criteria %}
+        <tr>
+          <td><code>{{ q.id }}</code></td>
+          <td>{{ q.type }}</td>
+          <td>{{ q.instructions }}</td>
+          <td><ul class="doc-list">
+            {% for lv in q.levels %}<li><strong>{{ lv.level }}</strong>: {{ lv.signals | join(' ') }}</li>{% endfor %}
+          </ul></td>
+        </tr>
+      {% endfor %}
+  {% endcall %}
+  <details class="mt">
+    <summary>Exact request body (JSON)</summary>
+    <pre class="code" tabindex="0" role="region" aria-label="Exact request body (JSON)" style="max-height:28rem;overflow:auto">{{ data.request_template | tojson(indent=2) }}</pre>
+    <p class="help">{{ data.auth_note }}</p>
+  </details>
+</section>
+
+<section class="card" id="rule">
+  <h2>2. How it decides</h2>
+  <p class="help">Rendered from the code's own numbers and this engine's settings, so it always
+    matches what the QE gate really does.</p>
+  {% for s in data.rule.sections %}
+  <h3>{{ s.title }}</h3>
+  <ul class="doc-list">
+    {% for line in s.lines %}<li>{{ line }}</li>{% endfor %}
+  </ul>
+  {% endfor %}
+</section>
+
+<section class="card" id="try">
+  <h2>3. Try it</h2>
+  <p class="help">Score one segment exactly as a QE-gated workflow step would. You see the request
+    that was sent, Jev's raw answer, the parsed result, the step's verdict, and the prompt the
+    auto-fix post-editor would get. {{ data.cost_note }} Up to 20 tries a minute per person, one
+    at a time per engine; a try stops after the engine's timeout plus 2 seconds.</p>
+  <form id="jevTryForm" class="form" data-eid="{{ e.id }}">
+    {% call m.form_section('jev-try-fields', '3. Try it') %}
+    <label>Source text
+      <textarea name="source" rows="3" required placeholder="Pay ten euros at the desk."></textarea></label>
+    <label>Translation
+      <textarea name="target" rows="3" required placeholder="Zahlen Sie neun Euro am Schalter."></textarea></label>
+    <div class="grid2">
+      <label>Source locale <input type="text" name="source_locale" value="en" required /></label>
+      <label>Target locale <input type="text" name="target_locale" value="de" required /></label>
+    </div>
+    <label>Pass threshold <span class="muted">(0 to 100, the step's QE threshold)</span>
+      <input type="number" name="threshold" value="{{ data.rule.default_threshold }}" min="0" max="100" /></label>
+    <div class="row-actions">
+      <button type="submit" class="small" id="jevTryBtn" data-busy-label="{{ t(request, 'busy.scoring') }}" {% if not data.live %}disabled{% endif %}>Try it</button>
+      <span id="jevTryStatus" class="muted small" role="status"></span>
+    </div>
+    {# a11y T7: a refused try is an error (role=alert, error styling), tied to the field it
+       names through LocA11y.fieldError when the message starts with that field's name. #}
+    <p id="jevTryError" class="error-inline small" role="alert" hidden></p>
+    {% endcall %}
+  </form>
+
+  <style>
+    /* Long unbroken tokens (the endpoint URL, the judge's rationale) must wrap inside the
+       card on a phone instead of widening the page; tables scroll in their own wrapper. */
+    #jevTryOut, #jevTryOut p, #jevTryStatus { overflow-wrap: anywhere; word-break: break-word; }
+    #jevTryOut { max-width: 100%; min-width: 0; }
+    #jevTryOut .tablewrap { overflow-x: auto; max-width: 100%; }
+    #jevTryOut pre.code { max-width: 100%; }
+  </style>
+  <div id="jevTryOut" hidden>
+    <p><span id="jevVerdict" class="badge"></span> <span id="jevVerdictText"></span></p>
+    <p id="jevMeta" class="muted small"></p>
+    <div class="tablewrap" tabindex="0" role="region" aria-label="Levels by dimension">
+      <table class="table">
+        <thead><tr><th>Dimension</th><th>Level</th></tr></thead>
+        <tbody id="jevLevels"></tbody>
+      </table>
+    </div>
+    <p id="jevRationale" class="muted small"></p>
+    <h3>Request sent</h3>
+    <p class="help">{{ data.auth_note }}</p>
+    <pre class="code" id="jevReq" tabindex="0" role="region" aria-label="Request sent" style="max-height:24rem;overflow:auto"></pre>
+    <h3>Raw response</h3>
+    <pre class="code" id="jevResp" tabindex="0" role="region" aria-label="Raw response" style="max-height:24rem;overflow:auto"></pre>
+    <h3>What the post-editor would get (auto-fix, round 1)</h3>
+    <p id="jevFixWhy"></p>
+    <p id="jevFixNote" class="muted small"></p>
+    <h4>System prompt</h4>
+    <pre class="code" id="jevFixSys" tabindex="0" role="region" aria-label="System prompt" style="white-space:pre-wrap"></pre>
+    <h4>Prompt</h4>
+    <pre class="code" id="jevFixPrompt" tabindex="0" role="region" aria-label="Prompt" style="max-height:28rem;overflow:auto;white-space:pre-wrap"></pre>
+  </div>
+</section>
+
+<section class="card" id="ledger">
+  <h2>4. Ledger</h2>
+  <p class="help">Every try (recorded as action <code>jev-try</code>) and every workflow call to
+    this engine lands in the {{ names.ledger }}, filtered here to this engine.
+    {% if not data.ledger_on %}<strong>The Ledger is off right now</strong>, so nothing is being
+    recorded; turn it on from the Ledger page first.{% endif %}</p>
+  <a class="ghost small" href="{{ data.ledger_url }}">Open the Ledger for this engine</a>
+</section>
+
+</div>
+<script nonce="{{ csp_nonce() }}">
+(function () {
+  const form = document.getElementById('jevTryForm');
+  if (!form) return;
+  const $ = (id) => document.getElementById(id);
+  const show = (el, text) => { el.textContent = text == null ? '' : String(text); };
+  const pretty = (obj) => (obj == null ? '(none)' : JSON.stringify(obj, null, 2));
+  const BADGE = { pass: 'exact', fail: 'danger', undecided: 'warn' };
+  // jev_inspector's validation messages start with the field's name (longest first).
+  const FIELD_BY_PREFIX = [
+    ['Source locale', 'source_locale'], ['Target locale', 'target_locale'],
+    ['Source', 'source'], ['Target', 'target'], ['threshold', 'threshold'],
+  ];
+  const errEl = $('jevTryError');
+  let marked = null;
+  const clearError = () => {
+    if (marked && window.LocA11y) window.LocA11y.clearFieldError(marked, errEl);
+    marked = null;
+    errEl.hidden = true;
+    show(errEl, '');
+  };
+  const fail = (msg) => {
+    show($('jevTryStatus'), '');
+    const hit = FIELD_BY_PREFIX.find((p) => msg.indexOf(p[0]) === 0);
+    const input = hit ? form.elements[hit[1]] : null;
+    if (input && window.LocA11y) {
+      window.LocA11y.fieldError(input, msg, errEl);
+      marked = input;
+    } else {
+      show(errEl, msg);
+      errEl.hidden = false;
+    }
+  };
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const btn = $('jevTryBtn');
+    // Busy indicators: shared spinner + translated label + top bar; always released.
+    if (window.LocBusy && window.LocBusy.isBusy(btn)) return;
+    const done = window.LocBusy ? window.LocBusy.start(btn) : () => { btn.disabled = false; };
+    if (!window.LocBusy) btn.disabled = true;
+    clearError();
+    show($('jevTryStatus'), 'asking the judge...');
+    let d;
+    try {
+      const hdrs = new Headers();
+      hdrs.append('X-CSRF-Token', window.CSRF_TOKEN);
+      const r = await fetch('/setup-ai/engines/' + form.dataset.eid + '/inspect/try', {
+        method: 'POST',
+        headers: hdrs,
+        body: new URLSearchParams(new FormData(form)),
+      });
+      d = await r.json();
+    } catch (err) {
+      fail('Could not reach the server. Check your connection, then try again.');
+      done();
+      return;
+    }
+    done();
+    if (!d.ok) {
+      fail(String(d.message || d.error || 'The try failed. Check the engine in Setup AI, then try again.'));
+      $('jevTryOut').hidden = true;
+      return;
+    }
+    show($('jevTryStatus'), d.message || '');
+    $('jevTryOut').hidden = false;
+    const verdict = $('jevVerdict');
+    verdict.className = 'badge ' + (BADGE[d.verdict] || 'muted-badge');
+    show(verdict, d.verdict);
+    const card = d.card || {};
+    let text = card.skipped || card.score == null
+      ? 'Judge did not score (' + (card.reason || 'skipped') + (card.error ? ': ' + card.error : '') + ').'
+      : 'Score ' + card.score + ' against a threshold of ' + d.threshold + '.';
+    if (card.unsure && card.unsure.length) text += ' Unsure: ' + card.unsure.join(', ') + '.';
+    show($('jevVerdictText'), text);
+    const cost = d.priced ? 'USD ' + Number(d.cost_usd || 0).toFixed(6) : '$0 (local)';
+    show($('jevMeta'), 'Cost ' + cost + ' · judge latency ' + d.latency_ms + ' ms · HTTP '
+      + (d.status == null ? 'none' : d.status) + ' · ' + d.endpoint);
+    const body = $('jevLevels');
+    body.textContent = '';
+    Object.entries(card.levels || {}).forEach(([dim, level]) => {
+      const tr = document.createElement('tr');
+      const a = document.createElement('td'); a.textContent = dim;
+      const b = document.createElement('td'); b.textContent = level;
+      tr.appendChild(a); tr.appendChild(b); body.appendChild(tr);
+    });
+    show($('jevRationale'), card.rationale || '');
+    show($('jevReq'), pretty(d.request));
+    show($('jevResp'), pretty(d.response));
+    const fix = d.autofix || {};
+    show($('jevFixWhy'), fix.why || '');
+    show($('jevFixNote'), fix.note || '');
+    show($('jevFixSys'), fix.system || '');
+    show($('jevFixPrompt'), fix.prompt || '(no prompt: the judge did not score this segment)');
+  });
+})();
+</script>
+{% endblock %}

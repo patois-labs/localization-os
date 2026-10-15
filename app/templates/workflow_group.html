@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}{{ grp.name }} - Multilingual workflow{% endblock %}
+{% block content %}
+<div class="ux-workflows">
+
+<p><a href="/workflows" class="back"><span aria-hidden="true">←</span> Workflows</a></p>
+
+{# One-shot banner after an add-a-pair / copy-to-pairs submit - names the pairs created
+   AND the ones refused as already-covered (issue #46: a silent skip is what made an add
+   look like an overwrite). #}
+{% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
+
+<section class="card has-layout-edit">
+  {% set workflow_title %}{{ grp.name }}{% endset %}
+  {{ m.page_header(workflow_title) }}
+  <button type="button" class="ghost layout-edit-btn" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+  <p class="muted">Multilingual workflow ·
+    {{ "customer " ~ grp.customer_id if grp.customer_id else "global" }}</p>
+  {% if grp.description %}<p>{{ grp.description }}</p>{% endif %}
+  {% if (not app_meta().auth_on) or can_tune_ai(current_user(request)) %}
+    <form method="post" action="/workflow-groups/{{ grp.id }}/rename" class="form inline-form">
+      {% include "_csrf.html" %}
+      <input type="text" name="name" value="{{ grp.name }}" aria-label="Group name" required />
+      <button type="submit" class="small">Rename</button>
+    </form>
+    {% if (not app_meta().auth_on) or is_admin(current_user(request)) %}
+      <form method="post" action="/workflow-groups/{{ grp.id }}/delete" class="inline-del"
+            data-action-confirm="Delete group &quot;{{ grp.name }}&quot;? This fails while the group still has member workflows.">
+        {% include "_csrf.html" %}
+        <button type="submit" class="small danger-btn">Delete group</button>
+      </form>
+    {% endif %}
+  {% endif %}
+
+  <h3>Per-language-pair variants</h3>
+  {% if variants %}
+    {% call m.data_table('Per-language-pair variants', [{'label': 'Workflow'}, {'label': 'Pair'}, {'label': 'Steps', 'numeric': true}, {'label': 'Overrides', 'numeric': true}, {'label': 'Default'}, {'label': '', 'actions': true}]) %}
+        {% for v in variants %}
+          <tr>
+            <td><a class="trunc" href="/workflows/{{ v.id }}" style="max-width:28ch">{{ v.name }}</a></td>
+            <td class="data-mono">
+              {% if v.source_locale or v.target_locale %}
+                {{ (v.source_locale or "*") }} → {{ (v.target_locale or "*") }}
+              {% else %}
+                <span class="chip">universal</span>
+              {% endif %}
+            </td>
+            <td class="data-mono">{{ step_counts.get(v.id, 0) }}</td>
+            {# SPEC-workflows-redesign 4b: pinned (deliberately diverged) steps in this
+               variant - frozen against base-edit propagation. 0 = fully tracks the base. #}
+            <td class="data-mono">
+              {% set oc = override_counts.get(v.id, 0) %}
+              {% if oc %}<span class="chip" title="Pinned steps - frozen against base-edit propagation">{{ oc }} pinned</span>{% else %}<span class="muted">0</span>{% endif %}
+            </td>
+            <td>
+              {% if v.is_default %}<span class="badge">default</span>
+              {% else %}
+                <form method="post" action="/workflow-groups/{{ grp.id }}/default" class="form inline-form">
+                  {% include "_csrf.html" %}
+                  <input type="hidden" name="workflow_id" value="{{ v.id }}" />
+                  <button type="submit" class="small ghost">make default<span class="sr-only">: {{ v.name }}</span></button>
+                </form>
+              {% endif %}
+            </td>
+            <td></td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+  {% else %}
+    {% set workflow_empty %}No variants yet - add an existing workflow below, or use
+    "Copy to language pair(s)" from a workflow's builder page.{% endset %}{{ m.empty_state(workflow_empty) }}
+  {% endif %}
+</section>
+
+{# SPEC-workflows-redesign Phase 4a: COVERAGE. The (source -> target) locale pairs of the
+   projects in this group's scope (its customer's projects, or - for a global group -
+   yours when you are customer-bound, else the org's), each classified by the SAME dispatch
+   ladder resolve_variant uses (server-derived via group_locale_coverage -> _variant_match)
+   AND matched at the pair's own source, so the readout reflects what a real run would
+   dispatch. Calm, read-only; no new colour - a fallback/no-coverage note leans on --muted. #}
+<nav class="wf-section-nav" aria-label="Workflows sections"><a href="#wf-coverage">Coverage</a>
+{% if (not app_meta().auth_on) or can_tune_ai(current_user(request)) %}<a href="#wf-add_pair">Add a language pair</a>{% endif %}
+<a href="#wf-add_variant">Add an existing workflow as a variant</a></nav>
+<div id="page-layout" class="page-layout" data-layout-page="workflow_group">
+<section class="card" data-card="coverage" id="wf-coverage">
+  <h2>Coverage</h2>
+  <p class="muted wf-cov-note">For each source -> target locale across
+    {{ "this customer's projects" if grp.customer_id else "your projects" }}, which this
+    group covers with an exact variant, and which fall back.</p>
+  {% if coverage %}
+    {% call m.data_table('Coverage', [{'label': 'Source'}, {'label': 'Target locale'}, {'label': 'Coverage'}], css_class='wf-cov') %}
+        {% for c in coverage %}
+          <tr>
+            <td class="data-mono">{{ c.source }}</td>
+            <td class="data-mono">{{ c.locale }}</td>
+            {% if c.kind == 'exact' %}
+              <td><span class="chip">exact variant</span>
+                <a class="trunc" href="/workflows/{{ c.variant_id }}"
+                   style="max-width:24ch">{{ c.variant_name }}</a></td>
+            {% elif c.kind == 'default' %}
+              {# Issue #46: name the PAIR the fallback variant is written for. "falls back
+                 to default: ACME Workflow" hid that German content would run a workflow
+                 whose steps were authored for en-US->fr-FR. #}
+              <td class="wf-cov-fallback">no exact variant - {{ c.locale }} will run
+                <a class="trunc" href="/workflows/{{ c.variant_id }}"
+                   style="max-width:24ch">{{ c.variant_name }}</a>
+                <span class="muted">(default, {{ c.variant_pair }})</span></td>
+            {% elif c.kind == 'universal' %}
+              <td class="wf-cov-fallback">no exact variant - {{ c.locale }} will run
+                <a class="trunc" href="/workflows/{{ c.variant_id }}"
+                   style="max-width:24ch">{{ c.variant_name }}</a>
+                <span class="muted">(universal variant - no pair of its own)</span></td>
+            {% else %}
+              <td class="wf-cov-fallback">no coverage
+                <span class="muted">(a run would use the requested workflow as-is)</span></td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+      {% endcall %}
+  {% else %}
+    <p class="muted">No {{ "project target locales for this customer" if grp.customer_id
+      else "project target locales in this scope" }} yet - nothing to measure coverage
+      against.</p>
+  {% endif %}
+</section>
+
+{# Issue #46(3): add a language pair WITHOUT leaving the group page. Copies the group's
+   default variant onto each checked target through the same copy_to_pairs seam the
+   builder uses. Pairs the group already has are ticked and disabled - visibly covered
+   rather than silently skipped on submit. #}
+{% if (not app_meta().auth_on) or can_tune_ai(current_user(request)) %}
+<section class="card" data-card="add_pair" id="wf-add_pair">
+  <h2>Add a language pair</h2>
+  {% if pair_src_wf %}
+    {# R11c: say WHICH workflow is the template and WHY it was chosen. "this group's
+       first variant" was wrong twice over - the source is the DEFAULT when there is one,
+       and otherwise the lowest-sorting member, not the first one added. #}
+    <p class="muted">Copies <a href="/workflows/{{ pair_src_wf.id }}">{{ pair_src_wf.name }}</a>
+      <span class="data-mono">{{ pair_src_pair }}</span>
+      {%- if pair_src_wf.is_default %} - this group's default variant
+      {%- else %} - this group has no default variant, so its first variant by language
+        pair is used{% endif %}. Its steps are cloned onto each language you pick, from
+      <span class="data-mono">{{ pair_source or "*" }}</span>. Existing pairs are already
+      ticked and cannot be added twice.</p>
+    <form method="post" action="/workflow-groups/{{ grp.id }}/add-pair" class="form">
+      {% include "_csrf.html" %}
+      <input type="hidden" name="source_locale" value="{{ pair_source or '' }}" />
+      {# R9: confine the offering to the customer's ACTIVE language pairs, with a
+         show-all escape - the same soft-confinement law the builder's copy picker and
+         the project add-locale picker follow (customers.confined_target_rows is the one
+         seam). The escape is a plain <details>, so the "already covered" ticked+disabled
+         rendering below survives for BOTH groups and no JS is involved. #}
+      {# N5: `pair_offered` / `pair_rest` are built in the ROUTE, which computes
+         covered_targets over exactly their union - building them here let the two drift
+         (a covered-but-not-enabled active pair rendered addable, then got skipped). #}
+      {% set offered = pair_offered %}
+      {% set rest = pair_rest %}
+      {% call m.form_section('workflow_group-fields-1', 'Target languages') %}
+        {% if pair_targets_confined %}
+          <p class="help">Showing {{ pair_targets_customer.name }}'s
+            active language pairs. Use <em>Show all languages</em> for the full
+            catalog.</p>
+        {% endif %}
+        {% for loc in offered %}
+          {% set done = loc in covered_targets %}
+          <label class="checkbox{{ ' muted' if done else '' }}">
+            <input type="checkbox" name="target_locales" value="{{ loc }}"
+                   {% if done %}checked disabled{% endif %} />
+            {{ label_for(loc) }}{% if done %} <span class="chip">already covered</span>{% endif %}
+          </label>
+        {% endfor %}
+        {% if rest %}
+          <details class="lp-showall">
+            <summary>Show all languages ({{ rest | length }} more)</summary>
+            {% for loc in rest %}
+              {% set done = loc in covered_targets %}
+              <label class="checkbox{{ ' muted' if done else '' }}">
+                <input type="checkbox" name="target_locales" value="{{ loc }}"
+                       {% if done %}checked disabled{% endif %} />
+                {{ label_for(loc) }}{% if done %} <span class="chip">already covered</span>{% endif %}
+              </label>
+            {% endfor %}
+          </details>
+        {% endif %}
+      {% endcall %}
+      <label class="checkbox"><input type="checkbox" name="adapt" value="1" />
+        Adapt instructions with the LLM for each new language (marks every copied step
+        needs_review)</label>
+      <button type="submit" data-busy-label="{{ t(request, 'busy.copying_workflow') }}">Add language pair(s)</button>
+    </form>
+  {% else %}
+    <p class="muted">There is no variant in this group you can copy a language pair from
+      - add an existing workflow below first, then you can fan it out to more language
+      pairs from here.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="card" data-card="add_variant" id="wf-add_variant">
+  <h2>Add an existing workflow as a variant</h2>
+  <form method="post" action="/workflow-groups/{{ grp.id }}/add" class="form">
+    {% include "_csrf.html" %}
+    <label>Workflow
+      <select name="workflow_id" required>
+        {% for w in ungrouped %}<option value="{{ w.id }}">{{ w.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <div class="grid2">
+      <label>Source locale
+        <select name="source_locale"><option value="">(universal)</option>
+          {% for loc in locales %}<option value="{{ loc }}">{{ label_for(loc) }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Target locale
+        <select name="target_locale"><option value="">(universal)</option>
+          {% for loc in locales %}<option value="{{ loc }}">{{ label_for(loc) }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+    <label class="checkbox"><input type="checkbox" name="make_default" value="1" />
+      Make this the group's default variant</label>
+    <button type="submit">Add to group</button>
+  </form>
+</section>
+</div>
+{% with layout_page = 'workflow_group' %}{% include "_page_layout.html" %}{% endwith %}
+
+</div>
+{% endblock %}

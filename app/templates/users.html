@@ -1,0 +1,268 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Users{% endblock %}
+{% block content %}
+
+{% set page_title %}Users &amp; roles{% endset %}
+{% set layout_action %}<button type="button" class="ghost layout-edit-btn layout-edit-inline" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>{% endset %}
+{% set users_intro %}<p>Who can sign in and what they can change. A manager may also edit a workflow's system prompt, a step's prompt and a group's default workflow. <a href="/help#users">About roles</a>
+  {% if not auth_on %}<span class="badge warn">Authentication is OFF</span> Roles are not enforced until you enable login in <a href="/security">Security</a>.{% endif %}</p>{% endset %}
+{% set users_primary %}<a class="btn-primary" href="#users-invite">Invite user</a>{% endset %}
+{{ m.page_header(page_title, meta=users_intro, secondary=layout_action, primary=users_primary) }}
+  {% if invited %}<p class="ok">Invitation created for <strong>{{ invited }}</strong> -
+    {% if emailed == '1' %}emailed.{% else %}SMTP isn't configured, so share the link below.{% endif %}</p>{% endif %}
+  {% if revoked %}<p class="ok" role="status">Invitation revoked for <strong>{{ revoked }}</strong>.</p>{% endif %}
+  {% if deleted %}<p class="ok" role="status">Invitation deleted for <strong>{{ deleted }}</strong>.</p>{% endif %}
+  {% if invite_link %}<p>Copy this invitation link now; it is shown once.</p>
+    <input class="linkbox" readonly aria-label="Invite link" value="{{ invite_link }}" data-select-on-click />{% endif %}
+  {% if erased %}<p class="ok">{{ erased }}</p>{% endif %}
+  {% if sign_in_unlocked %}
+    <p class="ok" role="status">Account sign-in lock cleared.</p>
+  {% endif %}
+  {% if mfa_reset %}<p class="ok" role="status">Two-step sign-in was reset. That person is signed out everywhere.</p>{% endif %}
+  {# a11y T6: ?error= renders in the page error summary at the top of main. #}
+
+
+<div class="auth-admin-layout">
+<nav class="auth-section-nav" aria-label="Users &amp; roles">
+  <a href="#users-invite">Invite by email</a>
+  {% if expired %}<a href="#users-expired">Expired invitations</a>{% endif %}
+  <a href="#users-add">Add user</a>
+  <a href="#users-members">Members</a>
+</nav>
+<div id="page-layout" class="page-layout" data-layout-page="users">
+<section class="card" data-card="invite" id="users-invite">
+  {% set section_label %}<h2>Invite by email <span class="muted">(account-creation handshake)</span></h2>{% endset %}
+{% call m.form_section('users-invite-fields', section_label) %}
+  <p class="muted">Sends a one-time expiring link; the invitee sets their own password.
+  {% if smtp_configured %}SMTP is configured - invites are emailed.{% else %}SMTP isn't configured
+  (<a href="/security">set it up</a>) - the link is shown below to share.{% endif %}</p>
+  <form method="post" action="/users/invite" class="form inline-form">
+    {% include "_csrf.html" %}
+    <label>Email <input type="email" name="email" autocomplete="off" required /></label>
+    <label>Role <select name="role" id="invite-role">{% for r in roles %}<option value="{{ r }}"{% if r == "viewer" %} selected{% endif %}>{{ r }}</option>{% endfor %}</select></label>
+    <button type="submit">Send invite</button>
+  </form>
+  {% if pending %}
+    <h3 class="mt">Pending invitations</h3>
+    {% call m.data_table('Pending invitations', [{'label': 'Email'}, {'label': 'Role'}, {'label': 'Expires'}, {'label': 'Action'}]) %}
+        {% for inv in pending %}
+          <tr>
+            <td>{{ inv.email }}</td>
+            <td><span class="chip">{{ inv.role }}</span></td>
+            <td class="muted small data-mono">{{ inv.expires_at.strftime('%Y-%m-%d') }} UTC</td>
+            <td><form method="post" action="/users/invite/{{ inv.id }}/revoke">
+              {% include "_csrf.html" %}
+              <button type="submit">Revoke</button>
+            </form>
+            <form method="post" action="/users/invite">
+              {% include "_csrf.html" %}
+              <input type="hidden" name="resend_id" value="{{ inv.id }}" />
+              <input type="hidden" name="email" value="{{ inv.email }}" />
+              <input type="hidden" name="role" value="{{ inv.role }}" />
+              <button type="submit">Resend</button>
+            </form></td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+  {% else %}
+    {% set empty_message %}No pending invitations.{% endset %}{{ m.empty_state(empty_message) }}
+  {% endif %}
+
+{% endcall %}
+</section>
+
+{% if expired %}
+<section class="card" data-card="expired" id="users-expired">
+  <h2>Expired invitations</h2>
+  <p class="muted">These links have expired. Resend creates a new invitation and invalidates the old one. Delete removes the invitation from this list; the old link stays dead.</p>
+  {% call m.data_table('Expired invitations', [{'label': 'Email'}, {'label': 'Role'}, {'label': 'Expired'}, {'label': 'Action'}]) %}{% for inv in expired %}<tr><td>{{ inv.email }}</td><td>{{ inv.role }}</td>
+      <td>{{ inv.expires_at.strftime('%Y-%m-%d') }} UTC</td>
+      <td><form method="post" action="/users/invite">
+        {% include "_csrf.html" %}
+        <input type="hidden" name="resend_id" value="{{ inv.id }}" />
+        <input type="hidden" name="email" value="{{ inv.email }}" />
+        <input type="hidden" name="role" value="{{ inv.role }}" />
+        <button type="submit">Resend</button>
+      </form>
+      {# SPEC-expired-invite-delete s7: a SOFT delete (revoked_at) behind the shared
+         data-action-confirm prompt; the name carries the address (label-in-name). #}
+      <form method="post" action="/users/invite/{{ inv.id }}/revoke"
+            data-action-confirm="Delete the expired invitation for {{ inv.email }}? The old link stays dead. You can send a new invite later.">
+        {% include "_csrf.html" %}
+        <button type="submit" class="danger-btn" aria-label="Delete invitation for {{ inv.email }}">Delete</button>
+      </form></td></tr>{% endfor %}{% endcall %}
+</section>
+{% endif %}
+
+<section class="card" data-card="add" id="users-add">
+  {% set section_label %}<h2>Add user</h2>{% endset %}
+{% call m.form_section('users-add-fields', section_label) %}
+  <form method="post" action="/users" class="form inline-form">
+    {% include "_csrf.html" %}
+    <label>Name <input type="text" name="name" autocomplete="off" /></label>
+    <label>Email <input type="email" name="email" autocomplete="off" required /></label>
+    <label>Role
+      <select name="role" id="add-role">{% for r in roles %}<option value="{{ r }}"{% if r == "viewer" %} selected{% endif %}>{{ r }}</option>{% endfor %}</select>
+    </label>
+    <label>Password <input type="password" name="password" autocomplete="new-password" /></label>
+    {# R2-3: optional customer binding at creation. A bound account may only be
+       translator/linguist/viewer (enforced at the service seam). Blank = staff. #}
+    <label>Customer <span class="muted small">(customer login - translator/linguist/viewer, sees only that customer)</span>
+      <select name="customer_id">
+        <option value="">- internal staff -</option>
+        {% for c in bind_customers %}<option value="{{ c.id }}">{{ customer_label(c) }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="submit">Create</button>
+  </form>
+
+{% endcall %}
+</section>
+
+<section class="card" data-card="members" id="users-members">
+  <h2>Members</h2>
+  <div class="list-toolbar">
+    <form class="list-search-form" method="get" action="/users" role="search">
+      <label class="list-search"><span class="sr-only">Search members</span>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+        <input type="search" name="q" value="{{ q or '' }}" placeholder="Search by email or name" autocomplete="off" />
+      </label>
+      <input type="hidden" name="page" value="1">
+      <button type="submit" class="btn-primary">Filter</button>
+      {% if q %}<a class="ghost small" href="/users">Clear</a>{% endif %}
+    </form>
+  </div>
+  {% if q %}
+    <p class="muted small">Filtered by "<strong>{{ q }}</strong>" - {{ total }} match(es).</p>
+  {% endif %}
+  {% if users %}
+    {% set me = current_user(request) %}
+    <p><span class="count-chip">{{ total }} user{{ '' if total == 1 else 's' }}</span></p>
+    {% call m.data_table('Members', [{'label': 'User'}, {'label': 'Role'}, {'label': 'Department'}, {'label': 'Customer'}] + ([{'label': 'Org'}] if multi_org_on else []) + [{'label': 'Sign-in'}, {'label': 'Status'}, {'label': 'Last login'}, {'label': '', 'actions': true}]) %}
+        {% for u in users %}
+          {% set ms = mfa_state.get(u.id, 'off') if mfa_state else 'off' %}
+          {% set kc = key_counts.get(u.id, 0) if key_counts else 0 %}
+          <tr>
+            <td>
+              <span class="cell-primary">{{ u.name or u.email }}</span>
+              {% if u.name %}<span class="cell-secondary">{{ u.email }}</span>{% endif %}
+              {% if me and me.id == u.id %}<span class="cell-tag">You</span>{% endif %}
+            </td>
+            <td>
+              <form method="post" action="/users/{{ u.id }}/role" class="rowform">
+                {% include "_csrf.html" %}
+                <select name="role" aria-label="Role for {{ u.email }}">
+                  {% for r in roles %}<option value="{{ r }}" {% if r == u.role %}selected{% endif %}>{{ r }}</option>{% endfor %}
+                </select>
+                <button type="submit" class="btn-small" aria-label="Save role for {{ u.email }}">Save</button>
+              </form>
+            </td>
+            <td>
+              <form method="post" action="/users/{{ u.id }}/department" class="rowform">
+                {% include "_csrf.html" %}
+                <input type="text" name="department" aria-label="Department for {{ u.email }}" value="{{ u.department or '' }}"
+                       size="10" placeholder="(none)" />
+                <button type="submit" class="btn-small" aria-label="Save department for {{ u.email }}">Save</button>
+              </form>
+            </td>
+            <td>
+              {# R2-3: customer binding. Only translator/linguist/viewer may be
+                 bound (the service rejects admin/manager); the dropdown is org-
+                 filtered. Selecting "internal staff" clears the binding. #}
+              <form method="post" action="/users/{{ u.id }}/customer" class="rowform">
+                {% include "_csrf.html" %}
+                <select name="customer_id" aria-label="Customer for {{ u.email }}">
+                  <option value="">- staff -</option>
+                  {% for c in bind_customers %}<option value="{{ c.id }}" {% if c.id == u.customer_id %}selected{% endif %}>{{ customer_label(c) }}</option>{% endfor %}
+                  {% if u.customer_id and u.customer_id not in bind_customers|map(attribute='id')|list %}
+                    <option value="{{ u.customer_id }}" selected>{{ customer_names.get(u.customer_id, 'customer ' ~ u.customer_id) }}</option>
+                  {% endif %}
+                </select>
+                <button type="submit" class="btn-small" aria-label="Save customer for {{ u.email }}">Save</button>
+              </form>
+            </td>
+            {% if multi_org_on %}
+            <td>
+              {# READ-ONLY. Moving a user between orgs is a host operator action
+                 (`cli user org`), not a web one: the super-admin that was the only
+                 principal allowed to do it here was removed on 2026-09-20. #}
+              <span class="muted small">{{ org_names.get(u.org_id, '-') }}</span>
+            </td>
+            {% endif %}
+            <td>
+              <span class="cell-primary" style="font-weight:400">{{ u.auth_source }}{% if scim_managed_ids and u.id in scim_managed_ids %} <span class="chip" title="Provisioned / managed by your SCIM identity provider">SCIM</span>{% endif %}</span>
+              {# TOTP train: two-step sign-in state. The reset lives in the row menu. #}
+              <span class="cell-secondary">Two-step sign-in {% if ms == 'sso' %}via identity provider{% elif ms == 'on' %}on{% elif ms == 'required' %}required, not set up{% else %}off{% endif %}{% if kc %} - <span class="data-mono">{{ kc }}</span> active API key{{ '' if kc == 1 else 's' }}{% endif %}</span>
+            </td>
+            <td class="status-cell">{% if u.active %}{{ m.status_badge('active', 'Active') }}{% else %}{{ m.status_badge('inactive', 'Disabled') }}{% endif %}</td>
+            <td class="muted small data-mono">{{ (u.last_login.strftime('%Y-%m-%d %H:%M') ~ ' UTC') if u.last_login else 'never' }}</td>
+            <td class="row-actions">
+              {% call m.row_menu('um-' ~ u.id, 'More actions for ' ~ (u.name or u.email)) %}
+                <form method="post" action="/users/{{ u.id }}/toggle"{% if u.active %}
+                      data-action-confirm="Disable {{ u.email }}? They are signed out everywhere and their API keys are revoked for good; re-enabling does not bring them back.{% if scim_token_owner_ids and u.id in scim_token_owner_ids %} This account owns a SCIM token: your identity provider's user sync stops until an administrator creates a new SCIM token for another active administrator and enters it in the identity provider.{% endif %}"{% endif %}>
+                  {% include "_csrf.html" %}
+                  <button type="submit" role="menuitem" data-busy-keep-label title="{{ 'Disable: signs this person out everywhere and revokes their API keys' if u.active else 'Re-enable: they sign in again and create new API keys' }}">{{ 'Disable account' if u.active else 'Re-enable account' }}</button>
+                </form>
+                {% if ms in ('on', 'required') %}
+                <form method="post" action="/users/{{ u.id }}/mfa-reset"
+                      data-action-confirm="Reset two-step sign-in for {{ u.email }}? Their authenticator setup and recovery codes are deleted and they are signed out everywhere. If it is required for them, they set it up again at their next sign-in.">
+                  {% include "_csrf.html" %}
+                  <button type="submit" role="menuitem" aria-label="Reset two-step sign-in for {{ u.email }}" data-busy-keep-label>Reset two-step sign-in</button>
+                </form>
+                {% endif %}
+                {% if kc %}
+                <form method="post" action="/users/{{ u.id }}/apikeys/revoke">
+                  {% include "_csrf.html" %}
+                  <button type="submit" role="menuitem" data-busy-keep-label>Revoke all API keys ({{ kc }})</button>
+                </form>
+                {% endif %}
+                <form method="post" action="/users/{{ u.id }}/unlock">
+                  {% include "_csrf.html" %}
+                  <button type="submit" role="menuitem">Unlock sign-in</button>
+                </form>
+                <a role="menuitem" href="/users/{{ u.id }}/export">Export data</a>
+                {% if not (me and me.id == u.id) %}
+                <form method="post" action="/users/{{ u.id }}/erase"
+                      data-action-confirm="Erase {{ u.email }}? This anonymizes the account and rewrites all their attribution to a tombstone. It is irreversible (audit history is kept).">
+                  {% include "_csrf.html" %}
+                  <button type="submit" role="menuitem" class="rm-danger" data-busy-keep-label>Erase account</button>
+                </form>
+                {% endif %}
+              {% endcall %}
+            </td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+    {% if pages and pages > 1 %}
+      {{ m.pager('/users', page, pages, total, 'users', ('&q=' ~ (q|urlencode)) if q else '') }}
+    {% endif %}
+  {% else %}
+    {% set empty_message %}{% if q %}No users match "{{ q }}".{% else %}No users yet. (With auth off, the app runs as a single System admin.){% endif %}{% endset %}{{ m.empty_state(empty_message) }}
+  {% endif %}
+
+  {% if scim_on %}
+  <h2>SCIM groups <span class="muted">(directory metadata - read-only)</span></h2>
+  <p class="help">Groups pushed by your identity provider over SCIM. In this version a group is
+    <strong>directory metadata only</strong>: membership confers no role, visibility, or project
+    access. Provisioning is IdP-driven - create, update and delete groups from your IdP.</p>
+  {% if scim_groups %}
+    {% call m.data_table('SCIM groups', [{'label': 'Group'}, {'label': 'External id'}, {'label': 'Members'}]) %}
+        {% for g in scim_groups %}
+          <tr>
+            <td>{{ g.name }}</td>
+            <td class="muted small data-mono">{{ g.external_id or '-' }}</td>
+            <td>{% if g.members %}{{ g.members|join(', ') }}{% else %}<span class="muted">(none)</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+  {% else %}
+    {% set empty_message %}No SCIM groups yet.{% endset %}{{ m.empty_state(empty_message) }}
+  {% endif %}
+  {% endif %}
+</section>
+</div>
+</div>
+{% with layout_page = 'users' %}{% include "_page_layout.html" %}{% endwith %}
+
+{% endblock %}

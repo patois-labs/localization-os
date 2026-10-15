@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?><xliff xmlns:sdl="http://sdl.com/FileTypes/SdlXliff/1.0" xmlns="urn:oasis:names:tc:xliff:document:1.2" version="1.2" sdl:version="1.0">
+<file original="C:\Projects\demo\en-US\guide.docx" datatype="x-sdlfilterframework2" source-language="en-US" target-language="de-DE">
+  <header>
+    <file-info xmlns="http://sdl.com/FileTypes/SdlXliff/1.0"><value key="SDL:FileId">0b9a6b0e-1111-4222-8333-944455556666</value></file-info>
+    <tag-defs><tag id="pt1"><bpt name="b" word-end="false" can-hide="true">&lt;b&gt;</bpt><ept name="b" word-end="false">&lt;/b&gt;</ept><fmt id="1"/></tag><tag id="ph2"><ph name="br" word-end="false">&lt;br/&gt;</ph></tag></tag-defs>
+  </header>
+  <body>
+    <trans-unit id="a1b2c3d4-0001"><source>Open the <g id="pt1">Settings</g> menu. Then click Save.</source><seg-source><mrk mtype="seg" mid="1">Open the <g id="pt1">Settings</g> menu.</mrk> <mrk mtype="seg" mid="2">Then click Save.</mrk></seg-source><target><mrk mtype="seg" mid="1"/> <mrk mtype="seg" mid="2"></mrk></target><sdl:seg-defs><sdl:seg id="1" conf="Draft"/><sdl:seg id="2"/></sdl:seg-defs></trans-unit>
+    <trans-unit id='a1b2c3d4-0002'><source>Line one<x id="ph2"/>line two &amp; more&#xA0;text.</source><seg-source><mrk mtype="seg" mid="3">Line one<x id="ph2"/>line two &amp; more&#xA0;text.</mrk></seg-source><sdl:seg-defs><sdl:seg id="3"/></sdl:seg-defs></trans-unit>
+    <trans-unit id="a1b2c3d4-0003"><source>Locked legal notice. Approved tagline.</source><seg-source><mrk mtype="seg" mid="4">Locked legal notice.</mrk> <mrk mtype="seg" mid="5">Approved tagline.</mrk></seg-source><target><mrk mtype="seg" mid="4">Locked legal notice.</mrk> <mrk mtype="seg" mid="5">Genehmigter Slogan.</mrk></target><sdl:seg-defs><sdl:seg id="4" locked="true" conf="Translated"/><sdl:seg id="5" conf="ApprovedTranslation" origin="interactive"/></sdl:seg-defs></trans-unit>
+    <trans-unit id="a1b2c3d4-0004"><source><g id="pt1"><mrk mtype="x-sdl-comment" sdl:cid="c1">Already</mrk> done.</g></source><seg-source><g id="pt1"><mrk mtype="seg" mid="6">Already done.</mrk></g></seg-source><target><g id="pt1"><mrk mtype="seg" mid="6">Bereits erledigt.</mrk></g></target><sdl:seg-defs><sdl:seg id="6" conf="Translated" origin="tm" percent="100"/></sdl:seg-defs></trans-unit>
+    <trans-unit id="a1b2c3d4-0005" translate="no"><source><x id="ph2"/></source></trans-unit>
+    <trans-unit id="a1b2c3d4-0006"><source>Wrapped segment.</source><seg-source><g id="pt1"><mrk mtype="seg" mid="7">Wrapped segment.</mrk></g></seg-source></trans-unit>
+  </body>
+</file>
+</xliff>

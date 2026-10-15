@@ -1,0 +1,52 @@
+/* Branch 05: project/customer pages and the existing global creation dialog. */
+.project-confirmation { max-width: 760px; margin-inline: auto; }
+.confirmation-notice { margin-block: var(--space-4) var(--space-5); max-width: var(--readable); }
+.project-header .page-header { margin-bottom: var(--space-3); }
+.project-header .fact-strip { margin-top: var(--space-4); }
+#project-sections { margin-top: var(--space-5); }
+#project-sections [data-card="overview"] .stats { gap: var(--space-5); margin-block: var(--space-3); }
+#project-sections [data-card="overview"] .stat { padding: 0; border: 0; background: transparent; text-align: start; min-width: 0; }
+#project-sections [data-card="overview"] .statnum { font-size: 20px; }
+#project-sections [data-component-panel] { min-width: 0; }
+#project-sections .layout-row:not([hidden]):not([data-project-empty]),
+#project-sections .grid2:not([hidden]):not([data-project-empty]) { grid-template-columns: repeat(var(--project-visible-cols, 1), minmax(0, 1fr)); }
+/* An empty row stays displayed for its responsive columns but takes no vertical space. */
+#project-sections [data-project-empty] { margin-block: 0; padding-block: 0; row-gap: 0; }
+#project-sections [hidden] { display: none !important; }
+/* Settings toolbar (Connected projects T3): buttons keep their natural width, packed left; the opened
+   form is a flex item ordered AFTER every edit button and spanning the card, so opening one never moves
+   an edit button. The Archive/Delete group is ordered after the form (order 20), so the form sits right
+   under the button that opened it and the danger group follows it. The <details> boxes use
+   display:contents so their summaries are the toolbar items. */
+.project-settings .edit-row { gap: var(--space-2) var(--space-3); align-items: center; }
+.project-settings .edit-row > details.inline-edit { display: contents; }
+.project-settings .edit-row > details.inline-edit > summary { flex: 0 0 auto; cursor: pointer; }
+.project-settings .edit-row > details.inline-edit[open] > summary { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
+.project-settings .edit-row > details.inline-edit > :not(summary),
+.project-settings .edit-row > details.inline-edit::details-content { order: 10; flex: 0 0 100%; min-width: 0; }
+.project-settings .edit-row > details.inline-edit:not([open])::details-content { display: none; }
+.project-settings .edit-danger { order: 20; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2) var(--space-3); flex: 0 0 100%; margin-top: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--color-control-border); }
+.project-settings .edit-danger > form { margin: 0; }
+#new-project-dialog .np-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+#new-project-dialog .np-fields > label { min-width: 0; }
+#new-project-dialog .np-fields > label > input,
+#new-project-dialog .np-fields > label > select { width: 100%; max-width: 100%; }
+#new-project-dialog .np-fields > fieldset { grid-column: 1 / -1; }
+#new-project-dialog .np-describe { margin-block: var(--space-4); }
+#new-project-dialog .form > fieldset,
+#new-project-dialog .form > details { margin-block: var(--space-4); }
+@media (max-width: 600px) {
+  .project-settings .edit-danger { justify-content: flex-start; }
+  #new-project-dialog .np-fields { grid-template-columns: minmax(0, 1fr); }
+  #project-sections .layout-row:not([hidden]):not([data-project-empty]),
+  #project-sections .grid2:not([hidden]):not([data-project-empty]) { grid-template-columns: minmax(0, 1fr); }
+  .project-confirmation .form input:not([type="checkbox"]):not([type="radio"]) { width: 100%; min-width: 0; }
+  /* Phone overflow cue: an edge shadow shows on whichever side has more tabs to scroll to. */
+  #project-sections .component-tab-list {
+    background:
+      linear-gradient(to right, var(--color-canvas) 30%, transparent) left center / 24px 100% no-repeat local,
+      linear-gradient(to left, var(--color-canvas) 30%, transparent) right center / 24px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, var(--color-control-border), transparent) left center / 10px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, var(--color-control-border), transparent) right center / 10px 100% no-repeat scroll;
+  }
+}

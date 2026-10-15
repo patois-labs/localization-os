@@ -1,0 +1,95 @@
+# Factory spec for the GitHub connector: pull-request localization of resource files.
+# Built on the shared git-provider core (app/services/connectors/git_core.py); GitLab and
+# Bitbucket are thin providers on the same core.
+#
+# The semantic build (the localization loop, key-project import/export, one commit and one
+# pull request per run) lives in git_core.py; this spec drives the nine parity touchpoints.
+#
+# Locked decisions (do not re-litigate):
+#   - TOPOLOGY = T3 (one target file per locale), but the translation unit is a KEY in a
+#     key project, not a document: the connector owns no ConnectorIdMap rows. Our "id map" is
+#     the connection config (repo, base branch, path pattern) plus the key project.
+#   - AUTH = fine-grained personal access token paste (Contents RW, Pull requests RW,
+#     Metadata R). A GitHub App is the enterprise path and is deferred.
+#   - article ids = the configured source-path patterns' resolved files (`locales/en.json`),
+#     validated against the configured patterns, fail-closed, never escaping the repo.
+#   - Licence: bb-io/Github verified verbatim MIT at build time (reference-and-reimplement).
+
+connector:
+  kind: github
+  name: GitHub
+  class_name: GitHubConnector
+  module: github
+  icon: "🐙"
+  cat: "Code hosting"
+  blurb: >-
+    Localize the resource files in a GitHub repository (JSON, nested JSON, gettext PO, or a resource file with a key view such as .properties, .strings or YAML).
+    Source strings are imported into a key project, translated through the normal pipeline,
+    and the target-language files come back as ONE commit on a working branch with ONE pull
+    request per run. The base branch is never written directly.
+  docs_url: "https://docs.github.com/en/rest"
+  supports_oauth: false
+  archived: false
+
+  topology: T3
+  auth: [api_key]
+  api_version: "2022-11-28"
+  rich_text: none
+  regions: base_url
+  change_signals:
+    webhook_sig: null
+    poll_field: sha
+    stale_flag: null
+    thin_payload: false
+  anti_loop_label: false
+
+  retry_noun: file
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<source-file-path>"
+  api_docstring: >-
+    Localize the repository's resource files into the connection's target locales and open
+    (or update) one pull request holding the target-language files (T3). article_ids are
+    source file paths and must match the connection's configured source path patterns.
+
+  article_noun_phrase: "a GitHub resource file"
+  cli_parser_help: >-
+    Localize GitHub resource files into the connection's locales as ONE commit on a working
+    branch and ONE pull request.
+
+  item_units:
+    scan: "the resource files in your repository that match the source path patterns (JSON, gettext PO, or a resource file with a key view such as .properties, .strings or YAML)"
+    becomes: "one target-language file per locale, committed together on a working branch and opened as a single pull request against the base branch (the base branch is never written directly)"
+
+  help_row_body: "Localize GitHub resource files (JSON, nested JSON, gettext PO) into the connection's locales as ONE commit on a working branch and ONE pull request (T3). Body: <code>article_ids</code>/<code>article_id</code> (source file paths matching the configured patterns), <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Localize GitHub resource files into the connection's locales: the source files are imported into the connection's key project, translated, and the target-language files are committed together on a working branch with one pull request against the base branch (T3). `--article-ids` are source file paths matching the configured patterns."
+
+  cli_expected_desc: "localize GitHub resource files into per-locale files committed on a working branch with one pull request (T3 over the shared git-provider core; POST /api/connectors/{cid}/github/translate parity)"
+
+  bb_io:
+    repo: "bb-io/Github"
+    url: "https://github.com/bb-io/Github"
+    license_verified_date: "2026-10-10"
+    copyright_holder: "Blackbird International Inc."
+
+  config_fields:
+    - {name: repo, label: "Repository", help: "owner/name, for example acme/website.", placeholder: "acme/website"}
+    - {name: base_branch, label: "Base branch", help: "The branch the pull request targets. It is never written directly.", required: false, placeholder: "main"}
+    - {name: source_paths, label: "Source file paths", help: "Comma-separated paths or patterns of the SOURCE-language files. Use {locale} for the language code, for example locales/{locale}.json or po/{locale}.po.", placeholder: "locales/{locale}.json"}
+    - {name: source_locale, label: "Source locale", help: "The language of the source files.", required: false, placeholder: "en-US"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated locale codes to produce.", required: false, placeholder: "fr-FR, de-DE"}
+    - {name: branch_pattern, label: "Working branch", help: "Branch the commit goes to. Must contain {connection}, which is replaced by the connection id (default loc/{connection}). Never the base, default or a protected branch.", required: false, placeholder: "loc/{connection}"}
+    - {name: base_url, label: "GitHub Enterprise API URL", help: "Leave empty for github.com. For GitHub Enterprise Server, the API root, for example https://github.acme.com/api/v3.", required: false, placeholder: "https://api.github.com"}
+  secret_fields:
+    - {name: token, label: "Personal access token", help: "A fine-grained token with Contents (read and write), Pull requests (read and write) and Metadata (read) on the one repository.", secret: true, placeholder: "github_pat_..."}
+  setup_steps:
+    - "In GitHub, open Settings, Developer settings, Personal access tokens, Fine-grained tokens, Generate new token."
+    - "Choose the one repository, then grant Contents: Read and write, Pull requests: Read and write (Metadata: Read is added automatically)."
+    - "Paste the token here, and set the source path pattern, for example locales/{locale}.json."
+  other_side: >-
+    Change detection is poll-based: run on a schedule. An unchanged source file makes no
+    commit. Review and merge the pull request in GitHub; this connector never merges it.

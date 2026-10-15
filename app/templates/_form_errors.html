@@ -1,0 +1,61 @@
+{# Page error macros (a11y train T6, WCAG 3.3.1 / 3.3.3). Kept out of _macros.html, whose
+   header promises byte-identical output for existing call sites.
+
+   page_error(request, explicit) is the Jinja global in app/web/deps.py: it resolves
+   explicit > ?err > ?error > the page alias through app/web/form_errors.py and caches the
+   result on request.state, so every macro below sees the same error on one render.
+
+   error_summary   the role="alert" summary (focused on load by static/form_errors.js); base.html
+                   renders it as the first child of <main>, the standalone auth pages inside
+                   their card. It carries the plain sentence and a link to the field or section.
+   invalid_attrs   aria-invalid="true" + a MERGED aria-describedby on the field the current
+                   error targets; otherwise only the describedby it was given (if any).
+   field_message   optional short inline copy next to the field (id "<field>-error").
+   status_summary  RESERVED name for the 4.1.3 success-message owner (role="status"); not
+                   implemented here, so the two never diverge. #}
+
+{% macro error_summary(request, explicit=None, scope='page', field=None, anchor=None) -%}
+{#- field / anchor (T7): the page's own fallback target for an error the map cannot place
+    (free text from a form the page knows, such as Setup AI's spend cap). A mapped code's
+    own field or anchor always wins. -#}
+{%- set e = page_error(request, explicit) -%}
+{%- if e -%}
+{%- set to_field = e.field or (none if e.anchor else field) -%}
+{%- set to_anchor = e.anchor or (none if e.field else anchor) -%}
+{#- a11y T11 (WCAG 3.1.2): the summary declares the language its title really has, and
+    the message sentence declares its own: messages are English-only today, so with any
+    other interface language the message is marked English whatever the title is. -#}
+{%- set err_lang = key_lang_attr(request, 'errors.summary_title') -%}
+{%- set msg_lang %}{% if ui_lang(request) != 'en' %} lang="en"{% endif %}{% endset -%}
+<div class="error error-summary" id="{{ scope }}-error" role="alert" tabindex="-1"{{ err_lang }}{% if to_field %} data-error-field="{{ to_field }}"{% endif %}>
+  <h2 class="error-summary-title">{{ t(request, 'errors.summary_title') }}</h2>
+  <p id="{{ scope }}-error-msg"{{ msg_lang }}>{{ e.text }}</p>
+  {%- if to_field %}
+  <p class="error-summary-link"><a href="#{{ to_field }}">{{ t(request, 'errors.go_to_field') }}</a></p>
+  {%- elif to_anchor %}
+  <p class="error-summary-link"><a href="#{{ to_anchor }}">{{ t(request, 'errors.go_to_section') }}</a></p>
+  {%- endif %}
+</div>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro invalid_attrs(request, field_id, describedby='', message_id='page-error-msg', when=none) -%}
+{#- when: the page knows better than the map (a free-text error that is about this field,
+    such as a wrong password); none means "when the mapped field is this one". -#}
+{%- set e = page_error(request) -%}
+{%- if e and (e.field == field_id if when is none else when) -%}
+{%- set ids = [describedby, message_id]|select|join(' ') -%}
+{{ ' ' }}aria-invalid="true" aria-describedby="{{ ids }}"
+{%- elif describedby -%}
+{{ ' ' }}aria-describedby="{{ describedby }}"
+{%- endif -%}
+{%- endmacro %}
+
+{% macro field_message(request, field_id) -%}
+{%- set e = page_error(request) -%}
+{%- if e and e.field == field_id -%}
+{#- English-only message (see error_summary): marked English in any other UI language. -#}
+{%- set msg_lang %}{% if ui_lang(request) != 'en' %} lang="en"{% endif %}{% endset -%}
+<span class="error-inline" id="{{ field_id }}-error"{{ msg_lang }}>{{ e.text }}</span>
+{%- endif -%}
+{%- endmacro %}

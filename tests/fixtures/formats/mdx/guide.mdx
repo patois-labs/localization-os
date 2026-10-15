@@ -1,0 +1,41 @@
+---
+title: Getting started
+---
+
+import {Chart} from '../components/chart.js'
+import Note from './note.mdx'
+export const meta = {
+  author: 'Ada'
+}
+
+# Getting started with {meta.author}
+
+Press <Kbd>Ctrl</Kbd> + <Kbd>C</Kbd> to copy the {props.count} selected rows.
+
+<Note type="info" title="Before you begin">
+Make sure the server is **running** first.
+</Note>
+
+<Chart
+  data={[1, 2, {a: '}'}]}
+  label="Monthly sales"
+/>
+
+{/* A comment the translator never sees */}
+
+{
+  props.items.map(item => <li key={item}>{item}</li>)
+}
+
+- Use `{braces}` in inline code freely.
+- A literal \{ brace and \< bracket stay escaped.
+
+<img src="/img/logo.png" />
+
+![](/img/empty-alt.png)
+
+```js
+const x = <Hidden>Not translated</Hidden>
+```
+
+The <Abbr title="Application programming interface">API</Abbr> is stable.

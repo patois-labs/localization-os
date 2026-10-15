@@ -1,0 +1,39 @@
+{# Project notifications panel (project automation Part B). Included by project.html inside the
+   project settings card. Shows where this project posts (its own routes; broader routes from the
+   content type, project type, customer or org default apply too, see Settings > Notifications),
+   lets a manager attach an existing channel to this project or mute the project. #}
+{% import "_macros.html" as m %}
+{% set nv = notify_view(project, current_user(request)) %}
+{% call m.form_section('project-notifications', 'Notifications', 'Status updates for this project go to the channels below. Messages carry the project name, counts and a link, never content.') %}
+  {% if not nv.outbound_enabled %}<p class="muted small"><span class="badge warn">Off</span> Outbound notifications are switched off on this install.</p>{% endif %}
+  {% if nv.muted %}<p class="muted small"><span class="badge warn">Muted</span> This project posts to no channel.</p>{% endif %}
+  {% if nv.routes %}
+  <ul class="plain-list" id="project-notify-routes">
+    {% for r in nv.routes %}<li>{{ r.channel }} <span class="muted small">({{ r.kind }}, {{ r.scope.replace('_', ' ') }}; {{ r.events | join(', ') if r.events else 'default events' }})</span></li>{% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted small">No channel is attached to this project directly.</p>
+  {% endif %}
+  {% if nv.can_edit %}
+  {% if nv.channels %}
+  <form method="post" action="/settings/notifications/routes" class="form inline-form">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="scope" value="project" />
+    <input type="hidden" name="ref" value="{{ project.id }}" />
+    <input type="hidden" name="back" value="/projects/{{ project.id }}" />
+    <label>Channel
+      <select name="channel_id">{% for c in nv.channels %}<option value="{{ c.id }}">{{ c.name }} ({{ c.kind }})</option>{% endfor %}</select>
+    </label>
+    <button type="submit" class="btn-small">Attach to this project</button>
+  </form>
+  {% endif %}
+  <form method="post" action="/settings/notifications/mute" class="form inline-form">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="project_id" value="{{ project.id }}" />
+    <input type="hidden" name="back" value="/projects/{{ project.id }}" />
+    <input type="hidden" name="muted" value="{{ '0' if nv.muted else '1' }}" />
+    <button type="submit" class="btn-small ghost">{{ 'Unmute this project' if nv.muted else 'Mute this project' }}</button>
+  </form>
+  <p class="small"><a href="/settings/notifications">Manage channels and routes <span aria-hidden="true">&rarr;</span></a></p>
+  {% endif %}
+{% endcall %}

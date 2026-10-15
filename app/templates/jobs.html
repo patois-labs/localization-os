@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ t(request, 'nav.jobs') }}{% endblock %}
+{% block content %}
+<div class="documents-page">
+
+{% set page_title %}{{ tl(request, 'page.jobs.title') }}{% endset %}
+{% set jobs_meta %}<p>{{ tl(request, 'page.jobs.intro') }}</p>
+  {% if spend %}
+  <p class="small" id="jobs-spend-line">
+    AI spend this month: <strong>${{ '%.2f'|format(spend.spent) }}</strong>
+    {% if spend.on %}/ ${{ '%.2f'|format(spend.cap) }} cap
+      {% if spend.tripped %}<span class="badge warn">reached</span>{% endif %}
+    {% else %}<span class="badge muted-badge">no cap</span>{% endif %}
+  </p>
+  {% endif %}{% endset %}
+{{ m.page_header(page_title, meta=jobs_meta) }}
+
+<section class="card flat">
+  <form method="get" action="/jobs" class="list-search-form" role="search">
+   <div class="list-toolbar">
+    <label class="list-search"><span class="sr-only">{{ tl(request, 'page.jobs.filter_actor') }}</span>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+      <input type="search" name="actor" value="{{ f.actor }}" placeholder="{{ t(request, 'page.jobs.filter_actor_search_ph') }}" autocomplete="off">
+    </label>
+    <details class="filters"{% if f.type != 'all' or f.status or f.kind %} open{% endif %}>
+      <summary><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 5h18l-7 8v6l-4-2v-4z"></path></svg> {{ tl(request, 'page.jobs.filters_summary') }}</summary>
+      <div class="filters-panel form inline-form">
+    <label>{{ tl(request, 'page.jobs.filter_type') }}
+      <select name="type">
+        <option value="all"{{ lang_attr(request, 'page.jobs.filter_all') }} {% if f.type == 'all' %}selected{% endif %}>{{ t(request, 'page.jobs.filter_all') }}</option>
+        <option value="job"{{ lang_attr(request, 'page.jobs.type_job') }} {% if f.type == 'job' %}selected{% endif %}>{{ t(request, 'page.jobs.type_job') }}</option>
+        <option value="run"{{ lang_attr(request, 'page.jobs.type_run') }} {% if f.type == 'run' %}selected{% endif %}>{{ t(request, 'page.jobs.type_run') }}</option>
+        <option value="batch" {% if f.type == 'batch' %}selected{% endif %}>Batch</option>
+      </select>
+    </label>
+    <label>{{ tl(request, 'page.jobs.filter_status') }}
+      <select name="status">
+        <option value=""{{ lang_attr(request, 'page.jobs.filter_all') }} {% if not f.status %}selected{% endif %}>{{ t(request, 'page.jobs.filter_all') }}</option>
+        {% for s in ['queued', 'running', 'completed', 'failed', 'pending', 'paused', 'skipped'] %}
+          <option value="{{ s }}" {% if f.status == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>{{ tl(request, 'page.jobs.filter_kind') }}
+      <select name="kind">
+        <option value=""{{ lang_attr(request, 'page.jobs.filter_all') }} {% if not f.kind %}selected{% endif %}>{{ t(request, 'page.jobs.filter_all') }}</option>
+        {% for k in job_kinds %}
+          <option value="{{ k }}" {% if f.kind == k %}selected{% endif %}>{{ k }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="btn">{{ tl(request, 'page.jobs.filter_apply') }}</button>
+    <a href="/jobs" class="btn ghost">{{ tl(request, 'page.jobs.filter_reset') }}</a>
+      </div>
+    </details>
+   </div>
+  </form>
+
+  {% if rows %}
+    <p class="muted small">{{ tl(request, 'page.jobs.showing', a=(page - 1) * page_size + 1, b=(page - 1) * page_size + rows|length, total=total) }}</p>
+    {% set column_0 %}{{ tl(request, 'page.jobs.col_type') }}{% endset %}
+    {% set column_1 %}{{ tl(request, 'page.jobs.col_id') }}{% endset %}
+    {% set column_2 %}{{ tl(request, 'page.jobs.col_kind') }}{% endset %}
+    {% set column_3 %}{{ tl(request, 'page.jobs.col_subject') }}{% endset %}
+    {% set column_4 %}{{ tl(request, 'page.jobs.col_status') }}{% endset %}
+    {% set column_5 %}{{ tl(request, 'page.jobs.col_progress') }}{% endset %}
+    {% set column_6 %}{{ tl(request, 'page.jobs.col_result') }}{% endset %}
+    {% set column_7 %}{{ tl(request, 'page.jobs.col_by') }}{% endset %}
+    {% set column_8 %}{{ tl(request, 'page.jobs.col_started') }}{% endset %}
+{% call m.data_table('Jobs', [{'label': column_0}, {'label': column_1}, {'label': column_2}, {'label': column_3}, {'label': column_4}, {'label': column_5}, {'label': column_6}, {'label': column_7}, {'label': column_8}]) %}
+        {% for j in rows %}
+          <tr>
+            <td>
+              {% if j.type == 'run' %}<span class="badge">{{ tl(request, 'page.jobs.type_run') }}</span>
+              {% elif j.type == 'batch' %}<span class="badge">Batch</span>
+              {% else %}<span class="badge muted-badge">{{ tl(request, 'page.jobs.type_job') }}</span>{% endif %}
+            </td>
+            <td class="muted data-mono">{{ j.id }}</td>
+            <td class="col-kind"><code>{{ j.kind }}</code></td>
+            <td class="small col-subject">
+              <span class="cell-primary">{{ j.subject or '-' }}</span>
+              {% if j.type in ('run', 'batch') and j.project %}<span class="cell-secondary">{{ j.project }}</span>{% endif %}
+            </td>
+            <td class="status-cell">
+              {% set status_key = 'page.jobs.status_' ~ (j.status if j.status in ['completed', 'failed', 'running', 'paused', 'pending', 'skipped'] else 'queued') %}
+              <span{{ lang_attr(request, status_key) }}>{{ m.status_badge(j.status, t(request, status_key)) }}</span>
+            </td>
+            <td class="prog-cell">
+              {% if j.type in ('job', 'batch') and j.progress_total %}
+                <div class="prog"><div class="prog-bar{% if j.progress_done >= j.progress_total %} done{% endif %}" style="width:{{ (100 * j.progress_done / j.progress_total)|round|int }}%"></div></div>
+                <span class="muted small data-mono">{{ j.progress_done }}/{{ j.progress_total }}</span>
+              {% elif j.duration_s is not none %}
+                <span class="muted small data-mono">{{ '%.1f'|format(j.duration_s) }}s</span>
+              {% else %}<span class="muted small">-</span>{% endif %}
+            </td>
+            <td class="small">
+              {% if j.type == 'run' %}
+                <a href="{{ j.link }}">{{ tl(request, 'page.jobs.view_run') }}</a>
+              {% elif j.type == 'batch' %}
+                <a href="{{ j.link }}">View batch</a>
+              {% else %}
+                {% set fails = (j.result or {}).get('failures') %}
+                {% if j.error %}<span class="error-inline">{{ j.error }}</span>
+                  {% if fails %} <span class="badge warn">{{ tl(request, 'page.jobs.n_failed', n=fails|length) }}</span>{% endif %}
+                {% else %}{{ (j.result or {}).get('message', '') }}
+                  {% if fails %}<span class="badge warn">{{ tl(request, 'page.jobs.n_failed', n=fails|length) }}</span>{% endif %}
+                {% endif %}
+                {% set cr = (j.result or {}).get('tokens_cache_read', 0) %}
+                {% set cw = (j.result or {}).get('tokens_cache_write', 0) %}
+                {% if cr or cw %}
+                  <span class="badge" title="Prompt-cache tokens: read is billed ~0.1x, write ~1.25x of normal input">cache: {{ cr }} read / {{ cw }} write</span>
+                {% endif %}
+              {% endif %}
+            </td>
+            <td class="muted small">{{ j.actor or '-' }}</td>
+            <td class="muted small data-mono">{{ (j.created_at.strftime('%Y-%m-%d %H:%M:%S') ~ ' UTC') if j.created_at else '-' }}</td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+
+    {% if has_newer or has_older %}
+    <nav class="pager" aria-label="pagination">
+      {% set qs = 'type=' ~ (f.type|urlencode) ~ '&status=' ~ (f.status|urlencode) ~ '&kind=' ~ (f.kind|urlencode) ~ '&actor=' ~ (f.actor|urlencode) ~ '&document=' ~ (f.document|urlencode) ~ '&workflow=' ~ (f.workflow|urlencode) %}
+      {% if has_newer %}<a class="btn ghost" href="/jobs?{{ qs }}&page={{ page - 1 }}">{{ tl(request, 'page.jobs.newer') }}</a>{% endif %}
+      <span class="muted small">{{ tl(request, 'page.jobs.page_n', n=page) }}</span>
+      {% if has_older %}<a class="btn ghost" href="/jobs?{{ qs }}&page={{ page + 1 }}">{{ tl(request, 'page.jobs.older') }}</a>{% endif %}
+    </nav>
+    {% endif %}
+  {% else %}
+    {% set empty_message %}{{ tl(request, 'page.jobs.no_jobs') }}{% endset %}
+{{ m.empty_state(empty_message) }}
+  {% endif %}
+</section>
+
+</div>
+{% endblock %}

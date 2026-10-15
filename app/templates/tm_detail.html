@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}TM entry #{{ e.id }} - Translation Memory{% endblock %}
+{% block content %}
+
+{% set header_meta %}
+  <p class="muted"><a href="/tm{% if customer %}?customer={{ customer }}{% endif %}"><span aria-hidden="true">←</span> Back to Translation Memory</a></p>
+  {% if edited %}<p class="ok">Target updated.</p>{% endif %}
+  {# a11y T7: a ?err= error renders once, as a sentence, in the summary at the top of
+     main (base.html + _form_errors.html), never as a raw code here. #}
+{% endset %}
+{% set header_status %}{% endset %}
+{{ m.page_header('TM entry #' ~ e.id, meta=header_meta, status=header_status) }}
+
+
+<div class="tm-text-pair">
+{% call m.card() %}
+  <h2>Source ({{ e.source_locale }})</h2>
+  <p{{ e.source_locale|langattrs }}>{{ e.source_text }}</p>
+{% endcall %}
+{% call m.card() %}
+  <h2>Target ({{ e.target_locale }})</h2>
+  {% if can_edit %}
+    <form method="post" action="/tm/{{ e.id }}/edit" class="form">
+      {% include "_csrf.html" %}
+      <label>Edit the target text
+        <textarea name="target" rows="3" required{{ e.target_locale|langattrs }}>{{ e.target_text }}</textarea></label>
+      <label class="inline"><input type="checkbox" name="acknowledge_placeholder_loss" value="1" /> Save it even if a placeholder is dropped or added</label>
+      <button type="submit">Save target</button>
+    </form>
+    <p class="muted">The source text is the entry's match key and cannot be edited.
+    The edited target is checked against the same refusal guard as new translations, and a
+    target that drops or adds a placeholder (or damages inline tags) is refused like it is when
+    approving a segment. Only a placeholder loss can be saved anyway, with the box above.</p>
+  {% else %}
+    <p{{ e.target_locale|langattrs }}>{{ e.target_text }}</p>
+  {% endif %}
+{% endcall %}
+
+</div>
+{% call m.card(flat=true) %}
+  <h2>Details</h2>
+  <table class="grid">
+    <tbody>
+      <tr><th scope="row">Language pair</th><td class="data-mono">{{ e.source_locale }}→{{ e.target_locale }}</td></tr>
+      <tr><th scope="row">Project id</th><td class="data-mono">{{ e.project_id if e.project_id is not none else 'global (no project)' }}</td></tr>
+      <tr><th scope="row">Origin</th><td>{{ entry.origin }}</td></tr>
+      <tr><th scope="row">Created</th><td class="data-mono">{{ entry.created_at or '-' }}</td></tr>
+      <tr><th scope="row">Times used</th><td class="data-mono">{{ entry.use_count }}</td></tr>
+      <tr><th scope="row">Last used</th><td class="data-mono">{{ entry.last_used_at or 'never' }}</td></tr>
+    </tbody>
+  </table>
+{% endcall %}
+
+{% if can_delete %}
+{% call m.card(flat=true) %}
+  <h2>Delete</h2>
+  <form method="post" action="/tm/{{ e.id }}/delete" data-action-confirm="Delete this TM entry?">
+    {% include "_csrf.html" %}
+    <button type="submit" class="danger-btn">Delete this entry</button>
+  </form>
+{% endcall %}
+{% endif %}
+
+{% endblock %}

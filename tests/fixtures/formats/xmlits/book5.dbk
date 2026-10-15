@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<article xmlns="http://docbook.org/ns/docbook" xmlns:xlink="http://www.w3.org/1999/xlink" version="5.0" xml:lang="en">
+  <info><title>Getting started</title></info>
+  <section xml:id="install">
+    <title>Install</title>
+    <para>Run the <emphasis role="strong">installer</emphasis>, then read <xref linkend="config"/>.<footnote><para>Admin rights needed.</para></footnote></para>
+    <programlisting language="sh">./install.sh --prefix /opt</programlisting>
+    <para>Type <userinput>yes</userinput> when asked.</para>
+    <remark>TODO: screenshots</remark>
+  </section>
+</article>

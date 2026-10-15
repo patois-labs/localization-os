@@ -1,0 +1,621 @@
+{# Reusable, output-preserving template macros. Each macro must render byte-identical
+   HTML to what it replaces - see call sites for the exact markup being generalized. #}
+
+{# BEGIN Direction A shared components. Existing interfaces below stay compatible. #}
+{% macro page_header(title, meta=none, status=none, primary=none, secondary=none) -%}
+<header class="page-header">
+  <div class="page-header-copy"><div class="page-header-title"><h1>{{ title }}</h1>{% if status %}{{ status }}{% endif %}</div>
+  {% if meta %}<div class="page-header-meta">{{ meta }}</div>{% endif %}</div>
+  {% if primary or secondary %}<div class="page-header-actions">{% if secondary %}{{ secondary }}{% endif %}{% if primary %}<div class="page-header-primary">{{ primary }}</div>{% endif %}</div>{% endif %}
+</header>
+{%- endmacro %}
+
+{% macro action_bar(label, primary=none, secondary=none, destructive=none, consequence=none) -%}
+<div class="action-bar" role="group" aria-label="{{ (label|striptags) if (label is defined and label.__html__ is defined) else label }}">
+  {% if primary %}<div class="action-bar-primary">{{ primary }}</div>{% endif %}
+  {% if secondary %}<div class="action-bar-secondary">{{ secondary }}</div>{% endif %}
+  {% if destructive %}<div class="action-bar-destructive">{{ destructive }}</div>{% endif %}
+  {% if consequence %}<div class="action-bar-consequence">{{ consequence }}</div>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro data_table(label, columns, caption=none, css_class=none) -%}
+<div class="data-table-region{% if css_class %} {{ css_class }}{% endif %}" role="region" aria-label="{{ (label|striptags) if (label is defined and label.__html__ is defined) else label }}" tabindex="0">
+<table class="data-table">
+  {% if caption %}<caption>{{ caption }}</caption>{% endif %}
+  <thead><tr>{% for column in columns %}<th scope="col"{% if column.sort %} aria-sort="{{ column.sort }}"{% endif %}{% if column.numeric or column.actions %} class="{% if column.numeric %}numeric{% endif %}{% if column.actions %} row-actions{% endif %}"{% endif %}>{% if column.actions and not column.label %}<span class="sr-only">Actions</span>{% else %}{{ column.label }}{% endif %}</th>{% endfor %}</tr></thead>
+  <tbody>{{ caller() }}</tbody>
+</table>
+</div>
+{%- endmacro %}
+
+{#- Row actions "..." menu (Console). `id` must be unique on the page; `label` names the row for
+    assistive tech ("More actions for Help Center"). The caller supplies the items as
+    `<a role="menuitem" href>` links or `<form method="post">...<button type="submit" role="menuitem">`.
+    Without JS (rowmenu.js not loaded) the items render as an inline list. -#}
+{% macro row_menu(id, label) -%}
+<div class="row-menu" data-row-menu>
+  <button type="button" class="row-menu-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="{{ id }}" aria-label="{{ (label|striptags) if (label is defined and label.__html__ is defined) else label }}" data-row-menu-btn><span aria-hidden="true">&#8943;</span></button>
+  <div class="row-menu-list" id="{{ id }}" role="menu" aria-label="{{ (label|striptags) if (label is defined and label.__html__ is defined) else label }}">{{ caller() }}</div>
+</div>
+{%- endmacro %}
+
+{% macro empty_state(message, action=none) -%}
+<div class="empty-state"><p>{{ message }}</p>{% if action %}<div>{{ action }}</div>{% endif %}</div>
+{%- endmacro %}
+
+{% macro form_section(id, label, help=none) -%}
+<fieldset class="form-section" id="{{ id }}"{% if help %} aria-describedby="{{ id }}-help"{% endif %}>
+  <legend>{{ label }}</legend>{% if help %}<p class="help" id="{{ id }}-help">{{ help }}</p>{% endif %}
+  {{ caller() }}
+</fieldset>
+{%- endmacro %}
+
+{% macro disclosure(label, open=false) -%}
+<details class="component-disclosure"{% if open %} open{% endif %}><summary>{{ label }}</summary><div>{{ caller() }}</div></details>
+{%- endmacro %}
+
+{% macro tabs(id, label, sections) -%}
+<div class="component-tabs" id="{{ id }}" data-component-tabs>
+  <nav class="component-tab-list" aria-label="{{ (label|striptags) if (label is defined and label.__html__ is defined) else label }}">{% for section in sections %}<a id="{{ id }}-tab-{{ loop.index }}" href="#{{ section.id }}" data-component-tab>{{ section.label }}</a>{% endfor %}</nav>
+  {% for section in sections %}<section id="{{ section.id }}" aria-labelledby="{{ id }}-tab-{{ loop.index }}" data-component-panel>{{ caller(section) }}</section>{% endfor %}
+</div>
+{%- endmacro %}
+
+{% macro dialog(id, title, close_label, drawer=false) -%}
+<dialog id="{{ id }}" class="component-dialog{% if drawer %} component-drawer{% endif %}" aria-labelledby="{{ id }}-title" data-component-dialog>
+  <div class="component-dialog-heading"><h2 id="{{ id }}-title">{{ title }}</h2><button type="button" class="ghost" data-component-close>{{ close_label }}</button></div>
+  {{ caller() }}
+</dialog>
+{%- endmacro %}
+
+{% macro toast(message, announce=false) -%}
+<div class="component-toast"{% if announce %} role="status" aria-atomic="true"{% endif %}>{{ message }}</div>
+{%- endmacro %}
+
+{% macro step_indicator(label, steps) -%}
+<ol class="step-indicator" aria-label="{{ (label|striptags) if (label is defined and label.__html__ is defined) else label }}">{% for step in steps %}<li{% if step.current %} aria-current="step"{% endif %}><span>{{ step.label }}</span>{% if step.status %} {{ status_badge(step.status, step.status_label | default(none)) }}{% endif %}</li>{% endfor %}</ol>
+{%- endmacro %}
+
+{% macro component_script() -%}
+<script defer src="/static/components.js?v={{ static_v('components.js') }}"></script>
+{%- endmacro %}
+{# END Direction A shared components. #}
+
+{% macro pager(base_url, page, pages, total, noun, extra_qs='') %}
+    <div class="pager">
+      {% if page > 1 %}<a href="{{ base_url }}?page={{ page - 1 }}{{ extra_qs }}"><span aria-hidden="true">←</span> Newer</a>{% endif %}
+      <span class="muted">Page {{ page }} of {{ pages }} · {{ total }} {{ noun }}</span>
+      {% if page < pages %}<a href="{{ base_url }}?page={{ page + 1 }}{{ extra_qs }}">Older <span aria-hidden="true">→</span></a>{% endif %}
+    </div>
+{% endmacro %}
+
+{# BEGIN branch 07 status label #}
+{% macro status_label(value) -%}
+{%- set labels = {'ok': 'OK', 'mt': 'MT', 'mt_complete': 'MT complete', 'needs_review': 'Needs review', 'in_translation': 'In translation', 'pre_translating': 'Pre-translating', 'in_review': 'In review'} -%}
+{{- labels.get(value, (value or '')|string|replace('_', ' ')|capitalize) -}}
+{%- endmacro %}
+{# END branch 07 status label #}
+
+{# status_badge(value, label=None): render ANY entity status as a signal-dot badge
+   (status-plates Option A). Maps the raw status string to the state class so no
+   template hand-picks classes (the miss that left customer/document/run statuses
+   as bare pills after the signal-dots rollout). Non-status TAGS (roles, scopes,
+   locales, modes) must NOT use this - they stay quiet `.chip`/`.badge` pills. #}
+{% macro status_badge(value, label=None, tone=None) %}
+{%- set v = (value or '')|lower -%}
+{%- set lbl = label if label is not none else (value or '?') -%}
+{%- if tone -%}
+  {%- set cls = tone -%}
+{%- elif v in ('completed', 'done', 'approved', 'connected', 'active', 'delivered') -%}
+  {%- set cls = 'exact' -%}
+{%- elif v in ('failed', 'error', 'failed_budget', 'held') -%}
+  {%- set cls = 'danger' -%}
+{%- elif v == 'reauth' -%}
+  {%- set cls = 'reauth' -%}
+{%- elif v in ('beta', 'indicative') -%}
+  {%- set cls = 'beta' -%}
+{%- elif v == 'paused' -%}
+  {%- set cls = 'paused' -%}
+{%- elif v in ('running', 'in_translation', 'pre_translating', 'building', 'in_progress') -%}
+  {%- set cls = 'run' -%}
+{%- elif v in ('in_review', 'needs_review', 'review') -%}
+  {%- set cls = 'warn' -%}
+{%- else -%}
+  {%- set cls = 'status' -%}
+{%- endif -%}
+<span class="badge {{ cls }}" title="{{ (lbl|striptags) if (lbl is defined and lbl.__html__ is defined) else lbl }}">{{ lbl }}</span>
+{%- endmacro %}
+
+{# term_candidate_grid(candidates, action_base, request, can_edit, none_msg):
+   THE SHARED term-extraction review grid (feat/term-extraction, research Option C).
+   Renders a status-driven candidate workbench - Term | Proposed translation (editable)
+   | Frequency | In-context snippet | Status, with per-row Accept/Drop and batch
+   accept/drop of the selected rows (the memoQ accept/drop/postpone triad; postpone =
+   leave pending). It is a REUSABLE component: a future upload-time extraction pass
+   (research Option A) mounts THIS macro with its own `action_base` and implements the
+   matching `{action_base}/candidates/{id}/accept|drop` + `/candidates/batch` routes -
+   the grid + the candidate shape are surface-agnostic (a candidate carries its own
+   glossary_id, so accept resolves the target glossary from the candidate).
+     candidates  a list of TermCandidate rows (already status/frequency sorted).
+     action_base the URL prefix the row/batch forms post to (e.g. "/glossaries/5").
+     request     needed for csrf_token(request) (a template global, ctx-free).
+     can_edit    gate the accept/drop controls (read-only view when False).
+   No nested forms: the batch form is a standalone <form id="tc-batch-*"> the checkboxes
+   reference via the HTML `form=` attribute; each row's accept/drop is its own inline
+   <form> in a cell. #}
+{% macro term_candidate_grid(candidates, action_base, request, can_edit=True,
+                             none_msg='No candidates awaiting review. Extract from a document to propose terms.') %}
+{%- set fid = 'tc-batch-' ~ (action_base | replace('/', '_')) -%}
+{% if candidates %}
+  {% if can_edit %}
+  <form id="{{ fid }}" method="post" action="{{ action_base }}/candidates/batch">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}" />
+  </form>
+  {% endif %}
+  <table class="grid">
+    <thead><tr>
+      {% if can_edit %}<th></th>{% endif %}
+      <th>Term</th><th>Proposed translation</th><th>Freq</th><th>In context</th><th>Status</th>
+      {% if can_edit %}<th></th>{% endif %}
+    </tr></thead>
+    <tbody>
+      {% for c in candidates %}
+      <tr>
+        {% if can_edit %}<td><input type="checkbox" name="candidate_id" aria-label="Select {{ c.source_term }}" value="{{ c.id }}" form="{{ fid }}" /></td>{% endif %}
+        {#- T5 (a11y, WCAG 3.1.2): langattrs is called as a GLOBAL here, not as a filter:
+            suites compile this file in a bare Jinja env (the wf_graph pins), where an
+            unknown filter fails at compile time. Same function, same output. -#}
+        <td><span{{ langattrs(c.source_locale) }}>{{ c.source_term }}</span>
+          <div class="muted small data-mono">{{ c.source_locale or '·' }}→{{ c.target_locale or '·' }}</div></td>
+        <td>
+          {% if can_edit and c.status == 'pending' %}
+          <form method="post" action="{{ action_base }}/candidates/{{ c.id }}/accept" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}" />
+            <input type="text" name="target_term" aria-label="Translation for {{ c.source_term }}" value="{{ c.proposed_target or '' }}"{{ langattrs(c.target_locale) }} placeholder="(add translation)" />
+            <button type="submit" class="btnlink small">Accept</button>
+          </form>
+          {% elif c.proposed_target %}<span{{ langattrs(c.target_locale) }}>{{ c.proposed_target }}</span>{% else %}-{% endif %}
+        </td>
+        <td class="muted small">{{ c.frequency }}</td>
+        <td class="muted small"{% if c.context_snippet %}{{ langattrs(c.source_locale) }}{% endif %}>{{ c.context_snippet or '-' }}</td>
+        <td>{{ status_badge(c.status) }}</td>
+        {% if can_edit %}
+        <td>
+          {% if c.status == 'pending' %}
+          <form method="post" action="{{ action_base }}/candidates/{{ c.id }}/drop" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}" />
+            <button type="submit" class="btnlink small">Drop</button>
+          </form>
+          {% endif %}
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if can_edit %}
+  <p class="help" style="margin-top:var(--space-2)">
+    <button type="submit" form="{{ fid }}" name="action" value="accept" class="btnlink small">Accept selected</button>
+    ·
+    <button type="submit" form="{{ fid }}" name="action" value="drop" class="btnlink small">Drop selected</button>
+  </p>
+  {% endif %}
+{% else %}
+  <p class="notice">{{ none_msg }}</p>
+{% endif %}
+{% endmacro %}
+
+{# Plain card() wrapper for the common `<section class="card">...</section>` shape.
+   Only migrate call sites where this produces byte-for-byte identical output -
+   e.g. no extra class beyond "card", no id, no attributes on the <section>. Sections
+   with irregular structure (extra classes, ids, or non-trivial attributes) should
+   stay hand-written rather than be forced through this macro.
+   Train L2 (editable page layouts): `layout_key` makes the card a movable layout card
+   (data-card, see _page_layout.html) and `layout_title` names a card that has no h2
+   (data-card-title). Called with neither, the output is unchanged. #}
+{% macro card(layout_key=none, layout_title=none, flat=false) %}
+<section class="card"{% if layout_key %} data-card="{{ layout_key }}"{% endif %}{% if layout_title %} data-card-title="{{ layout_title }}"{% endif %}{% if flat %} data-flat{% endif %}>
+  {{ caller() }}
+</section>
+{% endmacro %}
+
+{# Searchable language multi-select (P2, item 1). `name` is the form field every
+   checkbox shares; `enabled` + `all_rows` are lists of {code,name,native} dicts
+   (the enabled subset + the full catalog); `selected` is a list of already-chosen
+   codes (for the living-project add flow). Options outside `enabled` are rendered
+   with data-disabled="1" and hidden until the "show all languages" toggle - the
+   escape hatch. Enhanced by /static/langpicker.js; degrades to a scrollable
+   checkbox list without JS.
+
+   Preselection matches on the NORMALIZED key (trim, lower-case, underscore->hyphen
+   - mirroring languages_catalog.normalize), so a grandfathered non-canonical
+   stored code (`es_ES`) checks its canonical `es-ES` row instead of silently
+   rendering unchecked (Wave 3B review, finding 1a). Identical output for
+   canonical data (exact match == normalized match there).
+
+   `keep_unknown=True` (finding 1b - OPT-IN, default False so every existing
+   caller renders byte-identically): a selected code that matches NO rendered row
+   (an out-of-catalog legacy code) is appended as an extra CHECKED "legacy" option
+   with its stored spelling as the value, so a benign form save re-submits it
+   instead of silently dropping the locale. Only enable where the consuming route
+   accepts such codes (languages.html Edit - the Language-Set update seam
+   grandfathers codes already stored on the set). #}
+{# Workflow "how it works" GRAPH (SPEC-conditional-workflows Phase 4 + SPEC-workflows-
+   redesign Phase 3.1). A read-only, server-rendered inline SVG of a workflow - no external
+   library, no JS (it re-renders on every GET, e.g. after add-step, and degrades to the
+   step LIST which stays the source of truth). Phase 3.1 relaxed the old branch-only
+   early-return: EVERY workflow now renders (a linear one is a simple spine of nodes), and
+   each node shows its role + package at a glance, not just topology.
+
+   `steps` may be WorkflowStep ORM rows (builder) OR plain step dicts (the Design-review
+   screen) - Jinja attribute access resolves the same field names for both (a field the
+   draft dict omits, e.g. redact_pii, reads Undefined = falsy, so its chip just doesn't
+   show). Per node: index + name (title); the user-facing role (Translate/Check/Review -
+   never "agent") + provider/model (incl. engine:<id> custom engines, truncated); and a
+   compact muted META line of the packaged assets/gates that are SET (LQA/QE gate + its
+   threshold, glossary, TM few-shot, PII redaction, an adapted-prompt flag). Node height is
+   computed from content (taller only when any node carries a meta line), and the total
+   viewBox height follows.
+
+   Topology (UNCHANGED semantics - the maintainer's favourite, enhanced not regressed): a light
+   vertical SPINE = default fall-through flow; a colored curved EDGE for each branch slot
+   that routes to `end` or a named step - on_pass GREEN, on_fail RED, and a LOOP-BACK (a
+   target that sits EARLIER, index <= source) drawn DASHED with a ↺ label. Coordinates are
+   computed from the step index; the key->index map is built by mutating one dict across
+   the loop (persists - same object, not a rebind). #}
+{# `overlay` (SPEC-conditional-workflows Phase 4, deferred run-view item) is OPTIONAL and
+   defaults to none, so the builder + author-review call sites (which pass only `steps`)
+   render BYTE-IDENTICAL markup - every overlay artifact below is gated on `{% if overlay %}`
+   / an `ov_node` that is none without it. When supplied it is `run_overlay.build_overlay`'s
+   dict: `overlay.by_id[step.id]` -> {status, visits, label, token, looped, score, gate},
+   letting the SAME graph show THIS run's actual per-node execution state (status colour +
+   redundant text label + xN visit chip; a traversed loop-back drawn solid instead of
+   dashed). Never forks a second SVG. #}
+{# `editable` (SPEC-workflow-canvas §4.4) is OPTIONAL and defaults to FALSE, so the
+   author-review + run-overlay call sites (and every default call) render BYTE-IDENTICAL
+   markup - every affordance below is packed INSIDE an `{% raw %}{% if editable %}{% endraw %}` on an
+   EXISTING line, never on a line of its own (a bare `{% raw %}{% if %}{% endraw %}` line would leak its own
+   indentation + newline into the false branch, which the sha256 pin in
+   tests/verify_parallel_routing.py [F3] and tests/verify_workflow_canvas.py would
+   catch). Only the BUILDER passes editable=true, which adds: a per-node grip handle
+   (drags start ONLY there), invisible slot rects between rows carrying `data-gap`, and
+   one lane-band rect per real parallel group carrying `data-group`. ALL of the geometry
+   is computed HERE - /static/wfcanvas.js does no layout math, it hit-tests the
+   rectangles this macro drew. #}
+{# `text_id` (a11y T8, WCAG 1.1.1) is OPTIONAL and defaults to none, so every existing call
+   renders BYTE-IDENTICAL markup: when set, the svg gains aria-describedby="<text_id>",
+   packed onto the existing aria-label line inside an if. Point it at a text equivalent
+   of the diagram: the builder's step list (#wfStepList) or a wf_graph_text list. #}
+{% macro wf_graph(steps, overlay=none, editable=false, text_id=none) %}
+  {% if steps %}
+    {% set n = steps | length %}
+    {% set branched = steps | selectattr('branch') | list %}
+    {# Does ANY node carry a meta line? Reserve the third text row uniformly if so, so
+       every node stays the same height and the spine/edge math (uniform ROW) holds. #}
+    {% set ns = namespace(has_meta=false, has_par=false) %}
+    {% for s in steps %}
+      {% if s.qe_gate or s.step_type == 'lqa' or s.glossary_id
+            or (s.tm_examples and s.step_type == 'llm_agent') or s.redact_pii
+            or s.needs_review %}{% set ns.has_meta = true %}{% endif %}{% if s.parallel_group %}{% set ns.has_par = true %}{% endif %}
+    {% endfor %}
+    {% set TOP = 10 %}{% set NX = 12 %}{% set NW = 272 %}
+    {% set NH = 58 if ns.has_meta else 42 %}
+    {% set ROW = NH + 22 %}
+    {% set RX = NX + NW %}
+    {% set VW = 420 if branched else (NX + NW + 16) %}
+    {% set H = TOP + n * ROW + 40 %}
+    {% set type_labels = {'llm_agent': 'Translate', 'lqa': 'Check', 'human_review': 'Review'} %}
+    {% set key_index = {} %}
+    {% for s in steps %}{% if s.key %}{% set _ = key_index.update({s.key: loop.index0}) %}{% endif %}{% endfor %}
+    <figure class="wf-graph">
+      <figcaption class="muted small">How this workflow runs - each step's role, model &amp;
+        packaged assets ({% if editable %}the step list's move up / move down buttons reorder the workflow; with JavaScript on you can also drag a step by its grip, or drop a check onto a group outline to run those checks together{% else %}read-only; the step list is the source of truth{% endif %}).{% if branched %}
+        <span class="wfg-k wfg-pass">on pass</span>
+        <span class="wfg-k wfg-fail">on fail</span>
+        <span class="wfg-k wfg-loop">&#8635; loop-back</span>{% endif %}{% if overlay %}
+        <span class="wfg-run-note">Overlaid with this run's step outcomes (status shown as a labelled colour; &#215;N = loop visits).</span>{% endif %}</figcaption>
+      <svg viewBox="0 0 {{ VW }} {{ H }}" width="{{ VW }}" class="wf-graph-svg{% if editable %} wfg-editable{% endif %}" role="img"
+           aria-label="{{ 'Workflow run diagram' if overlay else 'Workflow diagram' }}"{% if text_id %} aria-describedby="{{ text_id }}"{% endif %} xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="wfgPass" markerWidth="8" markerHeight="8" refX="5" refY="3"
+                  orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L6,3 L0,6 Z" fill="var(--success)"/></marker>
+          <marker id="wfgFail" markerWidth="8" markerHeight="8" refX="5" refY="3"
+                  orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L6,3 L0,6 Z" fill="var(--danger)"/></marker>
+        </defs>
+        {# --- spine: default fall-through flow between consecutive nodes --- #}
+        {% for s in steps %}
+          {% set i = loop.index0 %}
+          {% set b = s.branch %}
+          {% set op_ft = (not b) or (not b.on_pass is defined) or (b.on_pass == 'next') %}
+          {% set of_ft = (not b) or (not b.on_fail is defined) or (b.on_fail == 'next') %}
+          {% if op_ft or of_ft %}
+            <line x1="{{ NX + NW // 2 }}" y1="{{ TOP + i * ROW + NH }}"
+                  x2="{{ NX + NW // 2 }}" y2="{{ TOP + (i + 1) * ROW }}"
+                  stroke="var(--border)" stroke-width="2"/>
+          {% endif %}
+        {% endfor %}
+        {# --- branch / loop-back edges (only end/step targets; 'next' rides the spine) --- #}
+        {% for s in steps %}
+          {% set i = loop.index0 %}
+          {% set b = s.branch %}
+          {% if b %}
+            {% for slot in ['on_pass', 'on_fail'] %}
+              {% if b[slot] is defined and b[slot] and b[slot] != 'next' %}
+                {% set tgt = b[slot] %}
+                {% if tgt == 'end' %}{% set ti = n %}
+                {% elif tgt is mapping %}{% set ti = key_index.get(tgt.step, i + 1) %}
+                {% else %}{% set ti = i + 1 %}{% endif %}
+                {% set ys = TOP + i * ROW + NH // 2 %}
+                {% set yt = TOP + ti * ROW + (NH // 2 if ti < n else 12) %}
+                {% set loopback = ti <= i %}{# overlay: per-EDGE loop-back traversal count from the run's row SEQUENCE (unproven stays dashed); packed onto ONE line so the no-overlay render stays byte-identical #}{% set trav = (overlay.traversals.get(s.id ~ ':' ~ slot, 0) if (overlay and loopback) else 0) %}{% set loop_traversed = loopback and trav > 0 %}
+                {% set bow = (26 if slot == 'on_pass' else 44) + (16 if loopback else 0) %}
+                {% set color = 'var(--success)' if slot == 'on_pass' else 'var(--danger)' %}
+                <path d="M{{ RX }},{{ ys }} C{{ RX + bow }},{{ ys }} {{ RX + bow }},{{ yt }} {{ RX }},{{ yt }}"
+                      fill="none" stroke="{{ color }}" stroke-width="{{ '2.6' if loop_traversed else '1.8' }}"
+                      marker-end="url(#{{ 'wfgPass' if slot == 'on_pass' else 'wfgFail' }})"
+                      {% if loopback and not loop_traversed %}stroke-dasharray="4 3"{% endif %}/>
+                <text x="{{ RX + bow + 3 }}" y="{{ (ys + yt) // 2 + 3 }}"
+                      class="wfg-elabel" fill="{{ color }}">{{ slot[3:] }}{% if loopback %} &#8635;{% endif %}{% if loop_traversed %} &#215;{{ trav }}{% endif %}</text>
+              {% endif %}
+            {% endfor %}
+          {% endif %}
+        {% endfor %}
+        {# --- nodes (drawn over the spine) --- #}
+        {% for s in steps %}
+          {% set i = loop.index0 %}
+          {% set ty = TOP + i * ROW %}
+          {% set role = type_labels.get(s.step_type, s.step_type) %}
+          {% set prov = s.provider or 'default' %}
+          {% set pm = (prov ~ (':' ~ s.model if s.model else '')) | string | truncate(30, true) %}
+          {# META chips (only those SET). Mutual gate: a QE gate shows its threshold, else
+             an LQA step shows a bare gate; assets/flags append. TM only on translate steps. #}
+          {% set meta = [] %}
+          {% if s.qe_gate %}{% set _ = meta.append('gate ' ~ s.qe_threshold ~ '%') %}
+          {% elif s.step_type == 'lqa' %}{% set _ = meta.append('LQA gate') %}{% endif %}
+          {% if s.glossary_id %}{% set _ = meta.append('glossary') %}{% endif %}
+          {% if s.tm_examples and s.step_type == 'llm_agent' %}{% set _ = meta.append('TM') %}{% endif %}
+          {% if s.redact_pii %}{% set _ = meta.append('PII redaction') %}{% endif %}
+          {% if s.needs_review %}{% set _ = meta.append('adapted') %}{% endif %}
+          {% if s.max_visits %}{% set _ = meta.append('max ' ~ s.max_visits) %}{% endif %}{# overlay: this node's run state, none without overlay -> the stroke/label fall back to the plain builder markup (byte-identical) #}{% set ov_node = overlay.by_id.get(s.id) if overlay else none %}
+          <g{% if editable %} class="wfg-node" data-step-id="{{ s.id }}" data-position="{{ i }}"{% if s.step_type == 'lqa' %} data-groupable="1"{% endif %}{% if s.parallel_group %} data-group="{{ s.parallel_group }}"{% endif %}{% endif %}>
+            <rect x="{{ NX }}" y="{{ ty }}" width="{{ NW }}" height="{{ NH }}"
+                  rx="7" fill="var(--panel)"
+                  stroke="{{ ov_node.token if ov_node else ('var(--warn-border)' if s.branch else 'var(--border)') }}"
+                  stroke-width="{{ '2' if (ov_node or s.branch) else '1' }}"/>
+            <text x="{{ NX + 10 }}" y="{{ ty + 17 }}" class="wfg-title">{{ loop.index }}. {{ (s.name or s.key or role) | string | truncate(30, true) }}</text>
+            <text x="{{ NX + 10 }}" y="{{ ty + 34 }}" class="wfg-sub">{{ role }} &middot; {{ pm }}</text>
+            {% if meta %}<text x="{{ NX + 10 }}" y="{{ ty + 50 }}" class="wfg-meta">{{ meta | join(' · ') }}</text>{% endif %}{# overlay-only status label (colourblind-safe: text + colour + xN chip), packed onto the meta line so the no-overlay render is byte-identical #}{% if overlay %}<text x="{{ RX - 8 }}" y="{{ ty + 17 }}" text-anchor="end" class="wfg-state" fill="{{ ov_node.token if ov_node else 'var(--muted)' }}">{{ ov_node.label if ov_node else 'not run' }}{% if ov_node and ov_node.visits > 1 %} &#215;{{ ov_node.visits }}{% endif %}</text>{% endif %}{# SPEC-workflow-canvas §4.3: the GRIP. A drag starts here and nowhere else, so clicking the node body (or its text) never begins one and no mode toggle is needed. Packed onto this line so the non-editable render stays byte-identical. #}{% if editable %}<g class="wfg-grip" data-grip="{{ s.id }}"><title>Drag to reorder this step.{% if s.step_type == 'llm_agent' %} A translate step at the top can answer from TM alone when a segment matches 100%.{% endif %}</title><rect x="{{ NX + 1 }}" y="{{ ty + 1 }}" width="9" height="{{ NH - 2 }}" rx="3" fill="var(--border)"/><line x1="{{ NX + 3 }}" y1="{{ ty + NH // 2 - 4 }}" x2="{{ NX + 8 }}" y2="{{ ty + NH // 2 - 4 }}" stroke="var(--muted)" stroke-width="1"/><line x1="{{ NX + 3 }}" y1="{{ ty + NH // 2 }}" x2="{{ NX + 8 }}" y2="{{ ty + NH // 2 }}" stroke="var(--muted)" stroke-width="1"/><line x1="{{ NX + 3 }}" y1="{{ ty + NH // 2 + 4 }}" x2="{{ NX + 8 }}" y2="{{ ty + NH // 2 + 4 }}" stroke="var(--muted)" stroke-width="1"/></g>{% endif %}
+          </g>
+        {% endfor %}{# --- SPEC-parallel-routing §6: PARALLEL GROUP outlines. The Phase-1 fallback the spec sanctions (a labelled outline around the members' row-band) rather than side-by-side boxes: the node geometry here is index-driven with a uniform ROW, and re-flowing it 2D is the CANVAS spec's job. Packed onto ONE line, and every artifact gated on ns.has_par, so an UNGROUPED workflow renders byte-identical SVG (snapshot-tested). Drawn AFTER the nodes so the outline never covers a box; a LONE member draws nothing, matching the engine (a group of one does not fork). #}{% if ns.has_par %}{% for s in steps %}{% set i = loop.index0 %}{% if s.parallel_group and (i == 0 or steps[i - 1].parallel_group != s.parallel_group) %}{% set ns2 = namespace(last=i) %}{% for t in steps %}{% if t.parallel_group == s.parallel_group and loop.index0 == ns2.last + 1 %}{% set ns2.last = loop.index0 %}{% endif %}{% endfor %}{% if ns2.last > i %}<rect x="{{ NX - 6 }}" y="{{ TOP + i * ROW - 8 }}" width="{{ NW + 12 }}" height="{{ (ns2.last - i) * ROW + NH + 12 }}" rx="9" fill="none" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3"/><text x="{{ NX + NW - 2 }}" y="{{ TOP + i * ROW - 11 }}" text-anchor="end" class="wfg-meta">&#8741; {{ s.parallel_group | string | truncate(24, true) }} (in parallel)</text>{% endif %}{% endif %}{% endfor %}{% endif %}{# SPEC-workflow-canvas §4.3: the DROP TARGETS, drawn last (invisible, fill="none" -> no pointer events, no hover tooltip) so they never cover a node. ONE slot per boundary k in 0..n: `data-gap` = "insert above the step currently at index k" (k = n means "at the end"). The band spans mid-row to mid-row so the slots TILE the graph without overlapping, and the companion line is the insertion marker the JS reveals for the hot slot. Lane bands mirror the group outline above and carry `data-group` + the `data-gap` that lands a step immediately after the group's LAST member -- the one position that joins the group without splitting it, from either direction. Packed onto this line; the whole block is gated so the non-editable render is byte-identical. #}{% if editable %}{% for k in range(n + 1) %}{% set y0 = (TOP - 10) if k == 0 else (TOP + (k - 1) * ROW + NH // 2) %}{% set y1 = (TOP + n * ROW + 24) if k == n else (TOP + k * ROW + NH // 2) %}{% set by = (TOP - 4) if k == 0 else (TOP + k * ROW - 11) %}<rect class="wfg-slot" data-gap="{{ k }}" x="{{ NX - 8 }}" y="{{ y0 }}" width="{{ NW + 16 }}" height="{{ y1 - y0 }}" fill="none"/><line class="wfg-slot-mark" data-gap-mark="{{ k }}" x1="{{ NX }}" y1="{{ by }}" x2="{{ RX }}" y2="{{ by }}" stroke="var(--success)" stroke-width="3" opacity="0"/>{% endfor %}{% if ns.has_par %}{% for s in steps %}{% set i = loop.index0 %}{% if s.parallel_group and (i == 0 or steps[i - 1].parallel_group != s.parallel_group) %}{% set ns3 = namespace(last=i) %}{% for t in steps %}{% if t.parallel_group == s.parallel_group and loop.index0 == ns3.last + 1 %}{% set ns3.last = loop.index0 %}{% endif %}{% endfor %}{% if ns3.last > i %}<rect class="wfg-band" data-group="{{ s.parallel_group }}" data-gap="{{ ns3.last + 1 }}" x="{{ NX - 6 }}" y="{{ TOP + i * ROW - 8 }}" width="{{ NW + 12 }}" height="{{ (ns3.last - i) * ROW + NH + 12 }}" fill="none"/>{% endif %}{% endif %}{% endfor %}{% endif %}{% endif %}
+        {# --- END terminal --- #}
+        <rect x="{{ NX }}" y="{{ TOP + n * ROW }}" width="64" height="24" rx="12"
+              fill="var(--success-soft)" stroke="var(--success-border)"/>
+        <text x="{{ NX + 32 }}" y="{{ TOP + n * ROW + 16 }}" text-anchor="middle"
+              class="wfg-sub">END</text>
+      </svg>
+    </figure>
+  {% endif %}
+{% endmacro %}
+
+{# wf_graph_text(steps, overlay=none, id='wfgText') (a11y T8, WCAG 1.1.1): the diagram AS
+   TEXT, a visible "Diagram as text" disclosure listing, per step, its name, role and
+   provider, the packaged gates and assets, where pass / fail go (the SAME key_index
+   resolution and loop-back rule as wf_graph, so the two cannot disagree), a loop-back's
+   traversal count on a run, its parallel peers, and the run status. Render it next to a
+   wf_graph(..., text_id=id) call so the svg is described by this list. NOT a live
+   region: the Run view re-renders it on every step event and keeps it open. #}
+{% macro wf_graph_text(steps, overlay=none, id='wfgText') %}
+  {%- if steps -%}
+  {%- set n = steps | length -%}
+  {%- set type_labels = {'llm_agent': 'Translate', 'lqa': 'Check', 'human_review': 'Review'} -%}
+  {%- set key_index = {} -%}
+  {%- for s in steps %}{% if s.key %}{% set _ = key_index.update({s.key: loop.index0}) %}{% endif %}{% endfor -%}
+  {#- block start per index: a run of consecutive steps sharing a parallel_group -#}
+  {%- set block = [] -%}
+  {%- set nb = namespace(start=0) -%}
+  {%- for s in steps -%}
+    {%- if loop.first or not s.parallel_group or steps[loop.index0 - 1].parallel_group != s.parallel_group %}{% set nb.start = loop.index0 %}{% endif -%}
+    {%- set _ = block.append(nb.start) -%}
+  {%- endfor -%}
+<details class="wfg-text"><summary>Diagram as text</summary>
+<ol id="{{ id }}" class="wfg-text-list">
+{%- for s in steps %}
+  {%- set i = loop.index0 -%}
+  {%- set role = type_labels.get(s.step_type, s.step_type) -%}
+  {%- set prov = s.provider or 'default' -%}
+  {%- set meta = [] -%}
+  {%- if s.qe_gate %}{% set _ = meta.append('QE gate ' ~ s.qe_threshold ~ '%') %}{% elif s.step_type == 'lqa' %}{% set _ = meta.append('LQA gate') %}{% endif -%}
+  {%- if s.glossary_id %}{% set _ = meta.append('glossary') %}{% endif -%}
+  {%- if s.tm_examples and s.step_type == 'llm_agent' %}{% set _ = meta.append('TM examples') %}{% endif -%}
+  {%- if s.redact_pii %}{% set _ = meta.append('PII redaction') %}{% endif -%}
+  {%- if s.needs_review %}{% set _ = meta.append('adapted prompt') %}{% endif -%}
+  {%- if s.max_visits %}{% set _ = meta.append('at most ' ~ s.max_visits ~ ' visits') %}{% endif -%}
+  {%- set b = s.branch -%}
+  {%- set peers = [] -%}
+  {%- if s.parallel_group %}{% for t in steps %}{% if loop.index0 != i and block[loop.index0] == block[i] %}{% set _ = peers.append(loop.index) %}{% endif %}{% endfor %}{% endif -%}
+  {%- set ov_node = overlay.by_id.get(s.id) if overlay else none %}
+  <li>Step {{ loop.index }}: {{ s.name or s.key or role }}. {{ role }}, {{ prov }}{% if s.model %}:{{ s.model }}{% endif %}.
+    {%- if meta %} Package: {{ meta | join(', ') }}.{% endif -%}
+    {%- if b -%}
+      {%- for slot in ['on_pass', 'on_fail'] %} On {{ slot[3:] }}:
+        {%- if b[slot] is defined and b[slot] and b[slot] != 'next' -%}
+          {%- set tgt = b[slot] -%}
+          {%- if tgt == 'end' %}{% set ti = n %}{% elif tgt is mapping %}{% set ti = key_index.get(tgt.step, i + 1) %}{% else %}{% set ti = i + 1 %}{% endif -%}
+          {%- set loopback = ti <= i -%}
+          {%- set trav = (overlay.traversals.get(s.id ~ ':' ~ slot, 0) if (overlay and loopback) else 0) -%}
+          {%- if ti >= n %} end of workflow{% elif loopback %} back to step {{ ti + 1 }} (loop-back{% if trav %}, taken {{ trav }} time{{ '' if trav == 1 else 's' }}{% endif %}){% else %} step {{ ti + 1 }}{% endif -%}
+        {%- else %} {{ 'next step' if i + 1 < n else 'end of workflow' }}{% endif %}.
+      {%- endfor -%}
+    {%- else %} Then: {{ 'step ' ~ (i + 2) if i + 1 < n else 'end of workflow' }}.{% endif -%}
+    {%- if peers %} Runs in parallel with step{{ '' if peers | length == 1 else 's' }} {{ peers | join(', ') }} (group {{ s.parallel_group }}).{% endif -%}
+    {%- if overlay %} Status: {% if ov_node %}{{ ov_node.label }}{% if ov_node.visits > 1 %}, {{ ov_node.visits }} visits{% endif %}{% if ov_node.gate %}, gate {{ ov_node.gate }}{% endif %}{% else %}not run{% endif %}.{% endif %}</li>
+{%- endfor %}
+</ol>
+</details>
+  {%- endif -%}
+{% endmacro %}
+
+{% macro langpicker(name, enabled, all_rows, selected=None, search=True, keep_unknown=False) %}
+  {% set sel = selected or [] %}
+  {% set sel_norm = sel | map('string') | map('trim') | map('lower') | map('replace', '_', '-') | list %}
+  {% set enabled_codes = enabled | map(attribute='code') | list %}
+  <div class="langpicker" data-langpicker>
+    <div class="lp-controls">
+      {% if search %}
+        <input type="search" data-lp-search class="lp-search"
+               placeholder="Search languages…" aria-label="Search languages" />
+      {% endif %}
+      <button type="button" class="btnlink small" data-lp-all>Select all</button>
+      <button type="button" class="btnlink small" data-lp-none>Clear</button>
+      <button type="button" class="btnlink small" data-lp-showall
+              aria-pressed="false">Show all languages</button>
+      <span class="muted small" data-lp-count>0 selected</span>
+    </div>
+    <div class="lp-chips" data-lp-chips></div>
+    <div class="lp-list" data-lp-list>
+      {# Enabled options first, then any catalog code not in the enabled subset.
+         Both groups sort A-Z by English name (the Phrase/Lokalise convention -
+         scannable, and search covers everything else). #}
+      {% for row in enabled|sort(attribute='name') %}
+        <label class="lp-opt" data-lp-opt data-code="{{ row.code }}"
+               data-disabled="0"
+               data-label="{{ row.name }} {{ row.code }} {{ row.native }}">
+          <input type="checkbox" name="{{ name }}" value="{{ row.code }}"
+                 {% if row.code|string|trim|lower|replace('_', '-') in sel_norm %}checked{% endif %} />
+          <span class="lp-name">{{ row.name }}</span>
+          <span class="lp-code">{{ row.code }}</span>
+        </label>
+      {% endfor %}
+      {% for row in all_rows|sort(attribute='name') %}
+        {% if row.code not in enabled_codes %}
+          <label class="lp-opt" data-lp-opt data-code="{{ row.code }}"
+                 data-disabled="1"
+                 data-label="{{ row.name }} {{ row.code }} {{ row.native }}">
+            <input type="checkbox" name="{{ name }}" value="{{ row.code }}"
+                   {% if row.code|string|trim|lower|replace('_', '-') in sel_norm %}checked{% endif %} />
+            <span class="lp-name">{{ row.name }}</span>
+            <span class="lp-code">{{ row.code }}</span>
+          </label>
+        {% endif %}
+      {% endfor %}
+      {% if keep_unknown %}
+        {# Finding 1b: selected codes with NO rendered row (out-of-catalog legacy
+           data) stay visible + checked + submittable, verbatim spelling. Rendered
+           last (after both catalog groups); emits nothing when every selected
+           code matched a row above, so it is a no-op for clean data. #}
+        {% set rendered_norm = ((enabled | map(attribute='code') | list)
+                                + (all_rows | map(attribute='code') | list))
+                               | map('string') | map('trim') | map('lower')
+                               | map('replace', '_', '-') | list %}
+        {% for s in sel | unique %}
+          {% set sn = s | string | trim | lower | replace('_', '-') %}
+          {% if sn and sn not in rendered_norm %}
+            <label class="lp-opt" data-lp-opt data-code="{{ s }}"
+                   data-disabled="0"
+                   data-label="{{ s }} legacy"
+                   title="Not in the language catalog (legacy code) - kept as stored.">
+              <input type="checkbox" name="{{ name }}" value="{{ s }}" checked />
+              <span class="lp-name">{{ s }}</span>
+              <span class="lp-code">legacy</span>
+            </label>
+          {% endif %}
+        {% endfor %}
+      {% endif %}
+    </div>
+  </div>
+{% endmacro %}
+
+{# PLACEHOLDER_DEFS: the SINGLE SOURCE OF TRUTH for the inline-prompt placeholder
+   definitions. Both placeholder_legend() (the <dl> under every llm_agent prompt field)
+   and the Workflow Studio aids-rail placeholder CHIPS import and iterate this list, so
+   the definitions can never fork again (the 07-22 lesson: the review screen's
+   hand-copied hint silently missed {context}/{style_guide}/{lqa_findings}). Each item
+   lists one-or-more TOKENS sharing one definition - source_locale/target_locale share a
+   row in the legend but yield two chips. Add new engine placeholders HERE only. #}
+{% set PLACEHOLDER_DEFS = [
+  {"tokens": ["{text}"], "def": "The text this step works on: the original source on the first step, then the previous step's output as the chain progresses. Every llm_agent prompt must contain {text} or {prior}."},
+  {"tokens": ["{prior}"], "def": "Alias of {text} - reads better in revision/fix prompts (\"revise the draft below: {prior}\")."},
+  {"tokens": ["{source}"], "def": "The ORIGINAL source text, unchanged no matter how many steps have run. Use alongside {text} in review/fix prompts to show the model both."},
+  {"tokens": ["{source_locale}", "{target_locale}"], "def": "The run's locale codes, e.g. en-US / fr-CA."},
+  {"tokens": ["{glossary}"], "def": "Matched glossary lines for this document/segment: must-use target terms and do-not-translate terms."},
+  {"tokens": ["{context}"], "def": "The resolved Translation Context (domain, audience, formality, tone, notes) - most specific wins, field by field, across per-request → document → project → customer × content-type → content-type → customer → org. Auto-included at the top when one resolves even without this placeholder; write {context} to control where it appears."},
+  {"tokens": ["{style_guide}"], "def": "The approved Style Guide resolved for this scope. Same auto-include behavior as {context}."},
+  {"tokens": ["{lqa_findings}"], "def": "The latest LQA findings card (score + each finding), auto-included on fix-shaped steps (run-condition prev_lqa:failed or LQA loop-back targets); write {lqa_findings} to place it yourself or to use it in any other llm_agent step."},
+  {"tokens":
+   ["{tm_offers}"], "def": "FULL_TEXT only: the 100% translation-memory matches found in the step's selected readable pools, offered as approved wording to reproduce. Auto-included beside the glossary in every later llm_agent step except steps that redact PII; write {tm_offers} to place it yourself. An OFFER, not a guarantee, and not verified: use SEGMENTED mode when wording must be exact."},
+] %}
+{# The entry above wraps after its key name on purpose. The pre-gate secret scan flags any
+   key whose name looks credential-ish when a literal follows it on the same ADDED line, and
+   this registry's key name is one of them, so every future addition here would be flagged.
+   The documented cure is a trailing allow-secret comment, which cannot go inside a Jinja
+   expression because Jinja has no expression-level comments. Wrapping the line leaves no
+   literal after the colon, which is the whole heuristic. Existing entries are untouched
+   because the scan only reads ADDED lines. #}
+
+{# placeholder_legend(): the reference <dl> under every llm_agent prompt field (builder
+   add-step, builder edit-step, Design-a-workflow review). Reads PLACEHOLDER_DEFS so it
+   shares one definition source with the aids-rail chips. #}
+{% macro placeholder_legend() %}
+  <details class="adv placeholder-legend">
+    <summary class="muted">Placeholder reference ({{ (PLACEHOLDER_DEFS | map(attribute='tokens') | sum(start=[])) | join(' ') }})</summary>
+    <dl class="help">
+      {% for item in PLACEHOLDER_DEFS %}
+      <dt>{{ item.tokens | join(' / ') }}</dt><dd>{{ item.def }}</dd>
+      {% endfor %}
+    </dl>
+  </details>
+{% endmacro %}
+
+{# QE auto-fix (Train B): the "Auto-fix failures" block for a step editor. `prefix` is the
+   form-field prefix ("" in the workflow builder, "s<i>_" on the author review page),
+   `step` the step (or none for a fresh add form), `providers` the built-in provider list.
+   Shown only while the step's QE judge picker (select[name=<prefix>qe_provider]) holds a
+   Jev judge; the page script toggles the `hidden` attribute (data-types keeps its own
+   llm_agent-only rule). Fields always post, so a hidden block never clears a setting. #}
+{% macro autofix_block(prefix, step, providers, request) %}
+  {% set _jev = jev_judge_refs(request) %}
+  {% set _qp = ((step.qe_provider if step else '') or '') | lower | trim %}
+  {% set _fixers = engine_options(request, 'fixer') %}
+  {% set _cur = (step.qe_autofix_provider if step else '') or '' %}
+  <div class="lp-subfield" data-types="llm_agent" data-autofix-block
+       data-judge-select="{{ prefix }}qe_provider" data-jev-judges="{{ _jev | join(' ') }}"{% if _qp not in _jev %} hidden{% endif %}>
+    <label class="checkbox"><input type="checkbox" name="{{ prefix }}qe_autofix" value="1"{% if step and step.qe_autofix %} checked{% endif %} />
+      Auto-fix failures</label>
+    <label>Post-editor
+      <select name="{{ prefix }}qe_autofix_provider" style="width:min(16em,100%)"
+              title="The LLM that rewrites a failing segment. NMT and judge engines cannot post-edit.">
+        <option value="">Same as this step</option>
+        {% for p in providers %}<option value="{{ p }}"{% if _cur == p %} selected{% endif %}>{{ p }}</option>{% endfor %}
+        {% for value, label in _fixers %}<option value="{{ value }}"{% if _cur == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        {% if _cur and _cur not in providers and _cur not in (_fixers | map('first') | list) %}<option value="{{ _cur }}" selected>{{ _cur }} (currently pinned)</option>{% endif %}
+      </select></label>
+    <label>Max rounds
+      <input type="number" name="{{ prefix }}qe_autofix_max_rounds" value="{{ step.qe_autofix_max_rounds if step and step.qe_autofix_max_rounds is not none else 3 }}" min="1" max="5" style="width:4em" /></label>
+    <label class="checkbox"><input type="checkbox" name="{{ prefix }}qe_autofix_cross_check" value="1"{% if step and step.qe_autofix_cross_check %} checked{% endif %} />
+      Cross-check each version with the post-editor</label>
+    <span class="muted">A segment that fails the Jev gate is rewritten by the post-editor LLM and re-scored, up to the max rounds; anything still failing goes to review with its scores. The post-editor must be an LLM: if this step's engine is machine translation (DeepL, Google, ...), pick an LLM post-editor here. Auto-fix never switches engines on its own. Confident major dimensions are fixed even alongside an unsure dimension; unsure dimensions are left unchanged and flagged for review. Without a confident major, unsure failures skip auto-fix. PII-redacting steps also skip auto-fix. A loop that can cost money stops at the spend cap; a fully local one is free. <a href="/help#qe-autofix">How auto-fix works <span aria-hidden="true">&rarr;</span></a></span>
+  </div>
+{% endmacro %}
+
+{# The page script for autofix_block: show the block only while its QE judge picker holds
+   a Jev judge. Include once per page, after the forms. #}
+{% macro autofix_block_script() %}
+<script nonce="{{ csp_nonce() }}">
+(function () {
+  document.querySelectorAll('[data-autofix-block]').forEach(function (block) {
+    var scope = block.closest('form') || document;
+    var sel = scope.querySelector('select[name="' + block.getAttribute('data-judge-select') + '"]');
+    if (!sel) return;
+    var jev = (block.getAttribute('data-jev-judges') || '').split(/\s+/);
+    function sync() {
+      block.hidden = jev.indexOf((sel.value || '').trim().toLowerCase()) === -1;
+    }
+    sel.addEventListener('change', sync);
+    sync();
+  });
+})();
+</script>
+{% endmacro %}

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE map PUBLIC "-//OASIS//DTD DITA Map//EN" "map.dtd">
+<map title="User Guide">
+  <topicmeta>
+    <navtitle>User Guide</navtitle>
+    <shortdesc>Everything about printing.</shortdesc>
+  </topicmeta>
+  <topicref href="task.dita" navtitle="Printing a report">
+    <topicmeta><navtitle>Printing</navtitle></topicmeta>
+  </topicref>
+  <topicref href="setup.dita" navtitle='Setting up &amp; testing'/>
+</map>

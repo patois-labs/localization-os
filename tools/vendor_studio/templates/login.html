@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vendor Studio - sign in</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="login">
+  <h1>Vendor Studio</h1>
+  <p class="muted">The vendor side of the Localization OS wire.</p>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  {% if sso_enabled %}
+  <p class="muted">Open Vendor Studio from Localization OS (single sign-on), or sign in with a
+    Localization OS API key below.</p>
+  {% endif %}
+  <form method="post" action="/login/apikey" class="card">
+    <h2>Sign in with a Localization OS API key</h2>
+    <input name="api_key" type="password" placeholder="Localization OS API key" autocomplete="off">
+    <button type="submit">Verify &amp; sign in</button>
+    <p class="muted small">Verified against {{ locstudio_url or "(no Localization OS URL configured)" }}</p>
+  </form>
+</main>
+</body>
+</html>

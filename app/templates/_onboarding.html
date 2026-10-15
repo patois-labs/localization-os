@@ -1,0 +1,72 @@
+{# SPEC-onboarding-tour Phase 1: server-rendered first-run "Get started" setup
+   checklist. Zero JS beyond the native <details> collapse - works fully with
+   JavaScript disabled (plain links + the data-np-open project-dialog trigger).
+   The `onboarding` context is built by services.onboarding.dashboard_panel and
+   passed by the dashboard route; this partial only renders when it is truthy.
+
+   Reuses existing tokens + the .card/.prog/.prog-bar/.badge families; all
+   new selectors are scoped under .onboarding. The done/undone marks use the
+   signal-dot status_badge macro (exact = Growth-Green dot; status = neutral). #}
+{% import "_macros.html" as m %}
+{%- set _ob_meta = {
+      'customer': {'href': '/customers', 'np': false, 'spot': '/customers?spotlight=customer'},
+      'project':  {'href': '/projects#new', 'np': true, 'spot': '/projects?spotlight=project'},
+      'workflow': {'href': '/workflows/new', 'np': false, 'spot': '/workflows/new?spotlight=workflow'},
+      'provider': {'href': '/setup-ai', 'np': false, 'spot': '/setup-ai?spotlight=provider'}
+    } -%}
+<section class="card onboarding" data-onboarding-panel>
+  <details class="ob-details"{% if not onboarding.all_done %} open{% endif %}>
+    <summary class="ob-summary">
+      <div class="ob-head">
+        <h2 class="ob-title">{{ tl(request, 'page.onboarding.title') }}</h2>
+        <p class="muted small ob-sub">
+          {%- if onboarding.all_done %}{{ tl(request, 'page.onboarding.all_done_msg') }}
+          {%- else %}{{ tl(request, 'page.onboarding.subtitle') }}{% endif -%}
+        </p>
+      </div>
+      <div class="ob-progress">
+        <span class="muted small data-mono ob-count" aria-live="polite">{{ tl(request, 'page.onboarding.progress', done=onboarding.done_count, total=onboarding.total) }}</span>
+        <div class="prog ob-meter" role="progressbar" aria-label="{{ t(request, 'page.onboarding.title') }}" aria-valuemin="0" aria-valuemax="{{ onboarding.total }}" aria-valuenow="{{ onboarding.done_count }}">
+          <div class="prog-bar{{ ' done' if onboarding.all_done }}" style="width:{{ (onboarding.done_count / onboarding.total * 100)|round|int }}%"></div>
+        </div>
+      </div>
+    </summary>
+
+    <ol class="ob-steps">
+      {% for s in onboarding.steps %}
+        {%- set meta = _ob_meta[s.key] -%}
+        <li class="ob-step{{ ' is-done' if s.done }}" data-tour-step="{{ s.key }}">
+          <span class="ob-mark">
+            {%- if s.done %}{{ m.status_badge('done', label=t(request, 'page.onboarding.done')) }}
+            {%- else %}{{ m.status_badge('todo', label=t(request, 'page.onboarding.todo')) }}{% endif -%}
+          </span>
+          <span class="ob-body">
+            <span class="ob-step-title">{{ tl(request, 'page.onboarding.step_' ~ s.key ~ '_title') }}</span>
+            <span class="muted small ob-step-desc">{{ tl(request, 'page.onboarding.step_' ~ s.key ~ '_desc') }}</span>
+          </span>
+          {% if not s.done %}
+          <a class="btnlink small ob-cta" href="{{ meta.href }}"{% if meta.np %} data-np-open{% endif %}>{{ tl(request, 'page.onboarding.step_' ~ s.key ~ '_cta') }} <span aria-hidden="true">→</span></a>
+          {# Phase 2 spotlight garnish: the quiet "Show me" affordance. Rendered
+             [hidden] so it is invisible/inert with JS disabled (progressive
+             enhancement) - onboarding.js unhides it only when driver.js loaded,
+             and clicking it spotlights this CTA then continues on the target page
+             (?spotlight=<key>). Popover strings come from these data-attrs (no
+             hardcoded English in the JS). #}
+          <button type="button" class="ob-showme" data-spotlight-step="{{ s.key }}"
+                  data-spotlight-url="{{ meta.spot }}"
+                  data-spotlight-title="{{ t(request, 'page.onboarding.step_' ~ s.key ~ '_title') }}"
+                  data-spotlight-desc="{{ t(request, 'page.onboarding.spot_cta_hint') }}"
+                  hidden>{{ tl(request, 'page.onboarding.showme') }}</button>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ol>
+
+    <div class="ob-foot">
+      <form method="post" action="/onboarding/dismiss" class="ob-dismiss-form">
+        {% include "_csrf.html" %}
+        <button type="submit" class="btnlink small ghost ob-dismiss">{{ tl(request, 'page.onboarding.dismiss') }}</button>
+      </form>
+    </div>
+  </details>
+</section>

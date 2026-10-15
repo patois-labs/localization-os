@@ -1,0 +1,56 @@
+# ALLOW-LIST build context (issue #255). A Docker build sends the WORKING TREE, so a
+# deny-list silently shipped every local folder nobody remembered to list (test-instance
+# keyfiles, databases, API keys and logins under .test-instances/, sample docs, logs).
+# Now NOTHING is sent to the builder unless a `!` line below names it, so a new local
+# folder can never reach the image by default.
+#
+# The list is exactly what the image needs to build and run:
+#   * the application package, its migrations and runtime assets (fonts for images);
+#   * the entrypoint, pyproject.toml (release fallback version) and the dependency locks;
+#   * scripts/saml_smoke.py (the SAML build smoke) and scripts/convert_db_encryption.py
+#     (imported by `loc-tms db encrypt|decrypt`);
+#   * the license files (LICENSE, NOTICE, THIRD_PARTY_NOTICES.md).
+# Anything else (tests, docs, deploy, tools, data, .env, .claude, ...) stays
+# out. tests/verify_docker_image.py fails when a runtime reference is not allow-listed
+# here or when a secret-bearing or gitignored path could slip back in.
+
+*
+
+!app/
+!alembic/
+!alembic.ini
+!assets/
+!docker-entrypoint.sh
+!pyproject.toml
+!requirements.lock
+!requirements-postgres.lock
+!requirements-saml.lock
+!scripts/locks/requirements-saml-lxml.lock
+!scripts/locks/requirements-build.lock
+!requirements-ldap.lock
+!requirements-sqlcipher.lock
+!scripts/saml_smoke.py
+!scripts/convert_db_encryption.py
+!LICENSE
+!NOTICE
+!THIRD_PARTY_NOTICES.md
+!README.md
+
+# Re-excluded inside the allowed folders: bytecode, editor cruft, and anything
+# secret-shaped that a local run could leave behind.
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.DS_Store
+**/Thumbs.db
+**/.env
+**/.env.*
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/.enc_key
+**/.session_secret
+app/resources/tbx/*.rng
+app/resources/tbx/*.sch
+app/resources/tbx/*.tbx

@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Workflows{% endblock %}
+{% block content %}
+<div class="ux-workflows">
+
+{# SPEC Workflow Studio Wave A: /workflows is a MANAGEMENT DASHBOARD. The create
+   surface lives on its own page (/workflows/new). One lean table over every
+   standalone workflow + each multilingual group collapsed to a single row, carrying
+   single-sourced usage + quality stats (workflow_stats). Spend is visible to ALL
+   roles that can see the list (owner's explicit call). All new selectors are scoped
+   under .wf-dash (past app-wide-leak lesson). #}
+
+{%- macro sortlink(field, label, dash) -%}
+  {%- set is_active = dash.active_sort == field -%}
+  {%- set next_dir = 'asc' if (is_active and dash.active_dir == 'desc') else ('desc' if is_active else 'desc') -%}
+  {#- a non-active column starts descending (most activity first is the useful default);
+      the active column toggles. -#}
+  {%- set arrow = ' ↓' if (is_active and dash.active_dir == 'desc') else (' ↑' if is_active else '') -%}
+  <a class="wf-sort{{ ' on' if is_active }}" href="/workflows?sort={{ field }}&dir={{ next_dir }}"
+     >{{ label }}<span aria-hidden="true">{{ arrow }}</span></a>
+{%- endmacro -%}
+
+{%- macro sort_attr(field, dash) -%}
+  {% if dash.active_sort == field %}aria-sort="{{ 'descending' if dash.active_dir == 'desc' else 'ascending' }}"{% endif %}
+{%- endmacro -%}
+
+{% set workflow_title %}Workflows <a class="help-hint" href="/help/workflows" title="Workflows guide" aria-label="Workflows guide">?</a>{% endset %}
+{% set workflow_meta %}<p>Ordered multi-agent pipelines: translate, review, QA, human steps. Click a row to open its builder.</p>{% endset %}
+{% set workflow_primary %}{% if (not app_meta().auth_on) or can_tune_ai(current_user(request)) %}<a class="btn-primary wf-new-cta" href="/workflows/new"
+       data-spotlight-anchor="workflow"
+       data-spotlight-title="{{ t(request, 'page.onboarding.step_workflow_title') }}"
+       data-spotlight-desc="{{ t(request, 'page.onboarding.spot_workflow_target') }}">Create a new workflow</a>{% endif %}{% endset %}
+{{ m.page_header(workflow_title, meta=workflow_meta, primary=(workflow_primary if workflow_primary|trim else none)) }}
+{#- Archive filter (residual sweep): default hides archived workflows; toggle to view. -#}
+<p class="chips filter-chips">
+  {% if archived_filter == 'only' %}
+    <a class="chip active" href="/workflows"><span aria-hidden="true">←</span> Back to active</a>
+    <span class="chip active">Archived only</span>
+  {% else %}
+    <a class="chip" href="/workflows?archived=only">Show archived</a>
+  {% endif %}
+</p>
+
+{# Wave C: the Workflows-area tab strip. This is the DEFAULT tab (Dashboard). #}
+{% include "_workflows_tabs.html" %}
+
+{% set dash = {'active_sort': active_sort, 'active_dir': active_dir} %}
+
+<section class="card flat wf-dash">
+  {% if has_any %}
+  <div class="data-table-region" role="region" aria-label="Workflows" tabindex="0">
+    <table class="data-table wf-table">
+      <thead>
+        <tr>
+          <th scope="col" {{ sort_attr('name', dash) }}>{{ sortlink('name', 'Name', dash) }}</th>
+          <th scope="col" {{ sort_attr('scope', dash) }}>{{ sortlink('scope', 'Scope', dash) }}</th>
+          <th scope="col">Customer</th>
+          <th scope="col">Shape</th>
+          <th scope="col">Origin</th>
+          <th scope="col" class="num">Steps</th>
+          <th scope="col" class="num">Variants</th>
+          <th scope="col" class="num" {{ sort_attr('runs', dash) }}>{{ sortlink('runs', 'Runs', dash) }}</th>
+          <th scope="col" class="num" {{ sort_attr('runs30', dash) }}>{{ sortlink('runs30', '30d', dash) }}</th>
+          <th scope="col" {{ sort_attr('last', dash) }}>{{ sortlink('last', 'Last run', dash) }}</th>
+          <th scope="col" class="num" {{ sort_attr('customers', dash) }}>{{ sortlink('customers', 'Customers', dash) }}</th>
+          <th scope="col" class="num" {{ sort_attr('spend', dash) }}>{{ sortlink('spend', 'Spend', dash) }}</th>
+          <th scope="col">Quality</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+          {% set st = r.stats %}
+          <tr>
+            <td>
+              <a class="trunc" href="{{ r.href }}" style="max-width:26ch">{{ r.name }}</a>
+              {% if st.active %}<span class="wf-active">{{ m.status_badge('running', 'ACTIVE') }}</span>{% endif %}
+            </td>
+            <td><span class="chip">{{ r.scope }}</span></td>
+            <td><span class="trunc" style="max-width:18ch">{{ r.customer }}</span></td>
+            <td>{% for c in r.shape_chips %}<span class="chip" title="{{ c.hint }}">{{ c.label }}</span> {% endfor %}</td>
+            <td>{% if r.origin %}<span class="chip">{{ r.origin }}</span>{% endif %}</td>
+            <td class="num data-mono">{{ r.steps }}</td>
+            <td class="num data-mono">{{ r.variants if r.variants is not none else '-' }}</td>
+            <td class="num data-mono">{{ st.runs_total }}</td>
+            <td class="num data-mono">{{ st.runs_30d }}</td>
+            <td class="data-mono muted">{% if st.last_run_at %}{{ st.last_run_at[:10] }}{% else %}-{% endif %}</td>
+            <td class="num data-mono">{{ st.customers_served }}</td>
+            <td class="num data-mono">{% if st.spend_usd is not none %}${{ '%.2f'|format(st.spend_usd) }}{% if st.spend_partial %}<span class="muted" title="Partial - some runs recorded no cost (finished before spend tracking, or nothing stamped yet); the true total is higher.">+</span>{% endif %}{% else %}<span class="muted" title="No spend recorded yet (runs finished before spend tracking, or spent nothing priced).">-</span>{% endif %}</td>
+            <td class="wf-quality">
+              {% if st.lqa_gate_count %}
+                {% set pct = (st.lqa_pass_rate * 100)|round|int %}
+                <span class="badge {{ 'exact' if st.lqa_pass_rate >= 0.9 else ('warn' if st.lqa_pass_rate >= 0.7 else 'danger') }}"
+                      title="LQA gate passed {{ (st.lqa_pass_rate * st.lqa_gate_count)|round|int }} of {{ st.lqa_gate_count }} outcome(s)">LQA {{ pct }}%</span>
+              {% endif %}
+              {% if st.needs_review_count %}
+                <span class="badge warn"
+                      title="{{ st.needs_review_count }} run(s) paused at a human checkpoint (unresolved)">{{ (st.needs_review_rate * 100)|round|int }}% review</span>
+              {% endif %}
+              {% if not st.lqa_gate_count and not st.needs_review_count %}<span class="muted">-</span>{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    {% set workflow_empty_action %}
+      {% if (not app_meta().auth_on) or can_tune_ai(current_user(request)) %}
+      <a href="/workflows/new">Create your first workflow <span aria-hidden="true">&rarr;</span></a>
+      {% endif %}
+    {% endset %}
+    <div class="empty">{{ m.empty_state('No workflows yet.', action=workflow_empty_action) }}</div>
+  {% endif %}
+</section>
+
+<style>
+/* Scoped to the workflows dashboard (page-ancestor selectors only - the app-wide
+   leak lesson). Existing tokens only; no new colors. */
+.wf-new-cta { flex: 0 0 auto; white-space: nowrap; text-decoration: none; }
+.wf-dash .wf-table th.num, .wf-dash .wf-table td.num { text-align: right; }
+.wf-dash .wf-table td.wf-quality { white-space: nowrap; }
+.wf-dash .wf-table .wf-active { margin-left: var(--space-1); }
+.wf-dash a.wf-sort { color: inherit; text-decoration: none; display: inline-block; padding: 4px 0; min-height: 24px; }
+.wf-dash .wf-sort:hover { text-decoration: underline; }
+.wf-dash .wf-sort.on { color: var(--primary-2, var(--terracotta-text)); font-weight: 600; }
+</style>
+
+{# SPEC-ask-draft section 4: the grounded "Ask about this page" panel. Hidden (and
+   its route 404s) when the assist_enabled kill switch is off. #}
+{% with assist_module = 'workflows' %}{% include "_assist_panel.html" %}{% endwith %}
+
+</div>
+{% endblock %}

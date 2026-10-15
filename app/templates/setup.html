@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+{% import "_form_errors.html" as fe %}
+{% import "_macros.html" as m %}
+<html lang="en"{{ theme_attrs(request) }}>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <title>{% if page_error(request, error) %}{{ t(request, 'errors.title_prefix') }} {% endif %}{{ compose_title('First-run setup') }}</title>
+  {# No-FOUC theme bootstrap: runs synchronously BEFORE the stylesheet so the
+     saved theme is applied before first paint (no flash). Absent/invalid value
+     or no-JS -> attribute stays off -> :root dark default, exactly today. #}
+  <script nonce="{{ csp_nonce() }}">
+    (function () {
+      try {
+        var el = document.documentElement;
+        var p = el.getAttribute('data-theme-pref');  // ADR 0063: the signed-in account's choice
+        var t = (p === 'light' || p === 'dark' || p === 'system') ? p : localStorage.getItem('loc_theme');
+        if (t === 'light' || t === 'dark') el.setAttribute('data-theme', t);
+        else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) el.setAttribute('data-theme', 'light');  // #564 p1: no saved choice follows the OS
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/style.css?v={{ static_v('style.css') }}" />
+  <script src="/static/busy.js?v={{ static_v('busy.js') }}"></script>
+</head>
+<body class="authbody">
+{% include "_busy.html" %}
+  <main class="authcard setup-page">
+    <div class="brand-big"><span class="mark" aria-hidden="true">◐</span> {{ app_meta().org }}</div>
+    {{ m.page_header("Create the administrator", meta="No accounts exist yet. This first account is the admin.") }}
+    {{ fe.error_summary(request, error) }}
+    <form method="post" action="/auth/setup" class="form">
+      {% include "_csrf.html" %}
+      {% if token_required %}
+      <label>Setup token <input type="password" name="setup_token" id="setup-token" autocomplete="one-time-code" required{{ fe.invalid_attrs(request, 'setup-token', 'setup-token-help', when=(error_field|default('') == 'setup-token')) }} /></label>
+      <p class="help" id="setup-token-help">It is in the server log at startup and in the <code>.setup_token</code> file in the data folder.</p>
+      {% endif %}
+      <label>Full name <input type="text" name="name" id="setup-name" autocomplete="name" placeholder="Jane Admin" value="{{ name|default('') }}" /></label>
+      <label>Email <input type="email" name="email" id="setup-email" autocomplete="username" value="{{ email|default('') }}" required autofocus{{ fe.invalid_attrs(request, 'setup-email', when=(error_field|default('') == 'setup-email')) }} /></label>
+      <label>Password <input type="password" name="password" id="setup-password" autocomplete="new-password" required minlength="{{ password_rules().min_length }}"{{ fe.invalid_attrs(request, 'setup-password', 'setup-password-rules', when=(error_field|default('') == 'setup-password')) }} /></label>
+      <p class="help" id="setup-password-rules">At least {{ password_rules().min_length }} characters.</p>
+      <details class="help setup-rules"><summary>All password rules</summary><p>{{ password_rules().summary }}</p></details>
+      <button type="submit" data-busy-label="{{ t(request, 'busy.signing_in') }}">Create admin &amp; sign in</button>
+    </form>
+    <p class="help mt">You can add more users and roles after signing in.</p>
+  </main>
+<script src="/static/form_errors.js?v={{ static_v('form_errors.js') }}"></script>
+</body>
+</html>

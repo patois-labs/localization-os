@@ -1,0 +1,607 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ doc.filename }} - Document{% endblock %}
+{% block content %}
+<div class="documents-page">
+{#- T5 (a11y, WCAG 3.1.2): lang (and dir for RTL) on the elements holding only source or
+    target text. `selected` may be the dash placeholder: langattrs then emits nothing. -#}
+{% set src_lang = project.source_locale|langattrs %}{% set tgt_lang = selected|langattrs %}
+
+<p><a href="/projects/{{ project.id }}" class="back"><span aria-hidden="true">←</span> {{ project.name }}</a></p>
+
+<section class="document-heading has-layout-edit">
+  {% set page_title %}{{ doc.filename }}{% endset %}
+  {% set doc_meta %}<p>{{ doc.fmt }} document in <a href="/projects/{{ project.id }}">{{ project.name }}</a>, {{ project.source_locale }} source.</p>{% endset %}
+  {% set layout_action %}<button type="button" class="ghost layout-edit-btn" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>{% endset %}
+  {{ m.page_header(page_title, meta=doc_meta, secondary=layout_action) }}
+  {% for warning in (doc.skeleton or {}).get('file_warnings', []) %}
+  <p class="notice warn" role="status">{{ warning.message }} ({{ warning.part }})</p>
+  {% endfor %}
+  {# SPEC-wave3 §4.2: the document-scoped queries panel. Gated on the kill switch so it
+     vanishes with the feature (test 16f). #}
+  {% if feature_enabled('queries') %}<p class="small"><a href="/queries?document={{ doc.id }}"><span aria-hidden="true">💬</span> Queries on this document <span aria-hidden="true">&rarr;</span></a></p>{% endif %}
+  <div class="fact-strip">
+    <div class="fact"><span class="fact-lbl">Mode</span>
+      <span class="fact-val"><span class="chip">{{ doc.mode }}</span></span></div>
+    <div class="fact"><span class="fact-lbl">Format</span>
+      <span class="fact-val">{{ doc.fmt }}</span></div>
+    <div class="fact"><span class="fact-lbl">Status</span>
+      <span class="fact-val">{{ m.status_badge(doc_status, doc_status_label) }}</span></div>
+    <div class="fact"><span class="fact-lbl">Paragraphs</span>
+      <span class="fact-val">{{ unit_count }}</span></div>
+    <div class="fact"><span class="fact-lbl">Est. tokens</span>
+      <span class="fact-val">~{{ est_tokens_total }}</span></div>
+    <div class="fact"><span class="fact-lbl">Segments ({{ selected or '-' }})</span>
+      <span class="fact-val">{{ segments|length }}</span></div>
+    <div class="fact"><span class="fact-lbl">MT engine</span>
+      <span class="fact-val"><strong>{{ engine_name }}</strong>
+        {% if engine_is_mock %}<span class="badge warn">MOCK (offline demo)</span>
+        {% elif provider_live %}<span class="badge exact">live</span>
+        {% else %}<span class="badge danger" title="This engine has no key, so translation is refused">no key: blocked</span>{% endif %}</span></div>
+    {% if ocr_pages %}
+    <div class="fact"><span class="fact-lbl">OCR</span>
+      <span class="fact-val"><span class="badge fuzzy">{{ ocr_pages }} page(s) OCR'd</span></span></div>
+    {% endif %}
+  </div>
+
+  {% if locales|length > 1 %}
+    <div class="tabs">
+      {% for l in locales %}
+        <a class="tab {% if l == selected %}active{% endif %}"
+           href="/documents/{{ doc.id }}?locale={{ l }}">{{ l }}</a>
+      {% endfor %}
+    </div>
+  {% endif %}
+  {% if locale_seeding %}
+  <p class="muted small" id="localeSeedingNotice" role="status">The language {{ selected }} is still being added to this document, so some segments are not here yet. Counts for it are incomplete until setup finishes; start a translation for the language to finish it.</p>
+  {% endif %}
+
+  {# --- rename / delete (SPEC-rename-delete) --- #}
+  <div class="doc-admin-actions" id="doc-admin-actions">
+  {% if can_write %}
+  <details class="inline-edit">
+    <summary class="btnlink small">Rename document</summary>
+    <div class="mt">
+      <form method="post" action="/documents/{{ doc.id }}/rename" class="form inline-form">
+        {% include "_csrf.html" %}
+        <input type="text" name="filename" aria-label="New filename for {{ doc.filename }}" value="{{ doc.filename }}" required />
+        <button type="submit" class="btn-small">Rename</button>
+      </form>
+    </div>
+  </details>
+  {% endif %}
+  {% if is_admin %}
+  {# SECURITY: a static confirm message only - never interpolate the (user-controlled)
+     filename into the confirm() text or an inline on* handler (that path was a stored
+     XSS once; see customer.html for the data-attribute escaping pattern when a name
+     must appear in the message). #}
+  <form method="post" action="/documents/{{ doc.id }}/delete" class="inline-form"
+        data-confirm-delete-doc>
+    {% include "_csrf.html" %}
+    <label><input type="checkbox" name="privacy_erasure" value="true"> Privacy erasure: also delete the translation memory rows from this document</label>
+    <button type="submit" class="small danger-btn">Delete document</button>
+  </form>
+  <script nonce="{{ csp_nonce() }}">
+  (function () {
+    document.querySelectorAll('form[data-confirm-delete-doc]').forEach(function (f) {
+      f.addEventListener('submit', function (e) {
+        if (window.LocAsk && window.LocAsk.guard) { window.LocAsk.guard(e, 'Delete this document? This removes its upload, segments, '
+            + 'and translations. This cannot be undone.'); }
+      else { e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+  {% endif %}
+  </div>
+</section>
+
+{# --- Translation context (SPEC-context-metadata phase 4: EFFECTIVE + provenance) --- #}
+<div id="page-layout" class="page-layout" data-layout-page="document">
+<section class="card" data-card="context">
+  <h2>Translation context</h2>
+  <p class="help">The <strong>effective</strong> context the model saw (most specific
+    layer wins). Used as reference, never instructions.</p>
+  {% if request.query_params.get('saved') %}<p class="ok">Context saved.</p>{% endif %}
+  {% if effective %}
+    <dl class="kv">
+      {% for k in ["domain", "content_kind", "audience", "formality", "tone", "char_limit", "notes"] %}
+        {% if effective.get(k) %}
+          <dt>{{ k }}</dt>
+          <dd>{% if k == 'tone' %}{{ effective['tone'] | join(', ') }}{% else %}{{ effective[k] }}{% endif %}
+            <span class="muted small">- from {{ prov_labels.get(k, provenance.get(k, '?')) }}</span></dd>
+        {% endif %}
+      {% endfor %}
+      {% if effective.get("source") %}
+        {% set src = effective["source"] %}
+        {% for k in ["title", "section"] %}
+          {% if src.get(k) %}<dt>source.{{ k }}</dt><dd>{{ src[k] }}
+            <span class="muted small">- from {{ prov_labels.get('source', provenance.get('source', '?')) }}</span></dd>{% endif %}
+        {% endfor %}
+        {% if src.get("labels") %}<dt>source.labels</dt><dd>{{ src["labels"] | join(', ') }}
+          <span class="muted small">- from {{ prov_labels.get('source', provenance.get('source', '?')) }}</span></dd>{% endif %}
+      {% endif %}
+      {% for ck, cv in (effective.get("custom") or {}).items() %}
+        <dt>custom.{{ ck }}</dt><dd>{{ cv }}
+          <span class="muted small">- from {{ prov_labels.get('custom', provenance.get('custom', '?')) }}</span></dd>
+      {% endfor %}
+    </dl>
+  {% else %}
+    <p class="muted">No context resolves for this document - the model sees no
+      translation-context block. Set a document-level override below or add a customer /
+      content-type card.</p>
+  {% endif %}
+  {% if context_block %}
+    <details><summary class="btnlink small">What the model sees (rendered prompt block)</summary>
+      <pre class="code small">{{ context_block }}</pre>
+    </details>
+    {% if selected and selected != '\u2014' %}
+    <form method="post" action="/documents/{{ doc.id }}/context-ab" class="mt small inline-form">
+      {% include "_csrf.html" %}
+      <input type="hidden" name="locale" value="{{ selected }}" />
+      <button type="submit" class="btn-small"
+              title="Run the same segments with context ON vs OFF, score both with the QE judge, and measure the delta (fires real LLM calls + spend)" data-busy-label="{{ t(request, 'busy.running_ab') }}">
+        A/B test context (measure the quality delta)</button>
+      <span class="muted small">Numbers, not vibes{% if not provider_live %} - mock engine gives a structural test only{% endif %}.</span>
+    </form>
+    {% endif %}
+  {% endif %}
+
+  {% with fscope='document', fobj=doc %}{% include "_formality.html" %}{% endwith %}
+
+  {% if style_guide_block %}
+    <details class="mt"><summary class="btnlink small">Style guide the model sees - {{ style_guide_name }}</summary>
+      <pre class="code small">{{ style_guide_block }}</pre>
+    </details>
+    {% if selected and selected != '\u2014' %}
+    <form method="post" action="/documents/{{ doc.id }}/style-ab" class="mt small inline-form">
+      {% include "_csrf.html" %}
+      <input type="hidden" name="locale" value="{{ selected }}" />
+      <button type="submit" class="btn-small"
+              title="Run the same segments with the style guide ON vs OFF, score both with the QE judge, and measure the delta (fires real LLM calls + spend)" data-busy-label="{{ t(request, 'busy.running_ab') }}">
+        A/B test style guide (measure the quality delta)</button>
+      <span class="muted small">Numbers, not vibes{% if not provider_live %} - mock engine gives a structural test only{% endif %}.</span>
+    </form>
+    {% endif %}
+  {% endif %}
+
+  {% if can_edit_context %}
+  <details class="inline-edit mt">
+    <summary class="btnlink small">Edit document-level context override</summary>
+    <div class="mt">
+      <p class="help">These fields override the resolved cards for THIS document
+        only. Leave a field blank to inherit; clear them all to remove the override.</p>
+      <form method="post" action="/documents/{{ doc.id }}/context" class="form">
+        {% include "_csrf.html" %}
+        <label>Domain <input type="text" name="domain" value="{{ doc_context.get('domain', '') }}" /></label>
+        <label>Content kind <input type="text" name="content_kind" value="{{ doc_context.get('content_kind', '') }}" /></label>
+        <label>Audience <input type="text" name="audience" value="{{ doc_context.get('audience', '') }}" /></label>
+        <label>Formality
+          <select name="formality">
+            <option value="" {% if not doc_context.get('formality') %}selected{% endif %}>(inherit)</option>
+            {% for f in ["formal", "informal", "neutral"] %}
+              <option value="{{ f }}" {% if doc_context.get('formality') == f %}selected{% endif %}>{{ f }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Tone <input type="text" name="tone" value="{{ doc_context.get('tone', []) | join(', ') }}" placeholder="comma-separated tone words" /></label>
+        <label>Char limit <input type="number" name="char_limit" min="1" value="{{ doc_context.get('char_limit', '') }}" /></label>
+        <label>Notes <textarea name="notes" rows="2">{{ doc_context.get('notes', '') }}</textarea></label>
+        {% set src = doc_context.get('source') or {} %}
+        <label>Source title <input type="text" name="source_title" value="{{ src.get('title', '') }}" /></label>
+        <label>Source section <input type="text" name="source_section" value="{{ src.get('section', '') }}" /></label>
+        <label>Source labels <input type="text" name="source_labels" value="{{ src.get('labels', []) | join(', ') }}" placeholder="comma-separated" /></label>
+        <button type="submit" class="btn-small">Save context</button>
+      </form>
+    </div>
+  </details>
+  {% endif %}
+</section>
+
+{% if selected and selected != '\u2014' %}
+<section class="card" data-card="workflow">
+  <h2>Run a multi-agent workflow</h2>
+  {% if workflows %}
+    <form method="post" action="/documents/{{ doc.id }}/run" class="form inline-form">
+      {% include "_csrf.html" %}
+      <input type="hidden" name="locale" value="{{ selected }}" />
+      <label>Workflow
+        <select name="workflow_id" id="run-workflow-select"{% if preferred_workflow_id is none %} required{% endif %}>
+          {% if preferred_workflow_id is none %}<option value="" selected disabled>Choose a workflow for {{ selected }}</option>{% endif %}
+          {% for w in workflows %}<option value="{{ w.id }}"{% if w.id == preferred_workflow_id %} selected{% endif %}>{{ w.name }}</option>{% endfor %}
+        </select>
+      </label>
+      <button type="submit" class="ghost" data-busy-label="{{ t(request, 'busy.starting_run') }}"><span aria-hidden="true">▶</span> Run on {{ selected }}</button>
+    </form>
+    <p class="help">Runs write the result back per segment (segmented docs) or to the whole document (full-text mode).</p>
+    {% if locales|length > 1 %}
+    {# Fan-out trigger (SPEC-workflows-redesign Phase 5a): run one workflow across ALL of
+       this document's target locales as a single observable, spend-capped batch. Only
+       offered when the document has more than one target locale. #}
+    <details class="mt">
+      <summary><strong><span aria-hidden="true">▶▶</span> Run all languages</strong> <span class="muted">({{ locales|length }} locales as one batch)</span></summary>
+      <form method="post" action="/documents/{{ doc.id }}/run-batch" class="form mt">
+        {% include "_csrf.html" %}
+        <label>Workflow
+          <select name="workflow_id">
+            {% for w in workflows %}<option value="{{ w.id }}">{{ w.name }}</option>{% endfor %}
+          </select>
+        </label>
+        <fieldset class="mt">
+          <legend class="small">Locales <span class="muted">(all selected by default)</span></legend>
+          {% for l in locales %}
+            <label class="inline"><input type="checkbox" name="locales" value="{{ l }}" checked /> {{ l }}</label>
+          {% endfor %}
+        </fieldset>
+        <label>Max parallel
+          <input type="number" name="max_parallel" value="{{ batch_default_parallel }}" min="1" max="8" />
+        </label>
+        <label class="inline"><input type="checkbox" name="fail_fast" value="1" /> Stop launching more locales if one fails (fail-fast)</label>
+        <button type="submit" class="ghost mt" data-busy-label="{{ t(request, 'busy.starting_run') }}"><span aria-hidden="true">▶▶</span> Run batch</button>
+      </form>
+      <p class="help">One member run per locale, launched under the concurrency ceiling. Un-launched locales (spend cap / fail-fast / already running) stay visible on the batch page.</p>
+    </details>
+    {% endif %}
+  {% else %}
+    <p class="muted">No workflows yet - <a href="/workflows/new">build one</a> (translator → reviewer → QA → human review).</p>
+  {% endif %}
+  {% set translate_primary %}
+  <button type="button" class="small" id="translateBtn" data-busy-label="{{ t(request, 'busy.translating') }}"
+          data-action="translate" data-id="{{ doc.id }}" data-locale="{{ selected }}"><span aria-hidden="true">▶</span> Translate {{ selected }} (live)</button>
+  {% endset %}
+  {% set translate_secondary %}
+  <form method="post" action="/documents/{{ doc.id }}/translate">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="locale" value="{{ selected }}" />
+    <button type="submit" class="small ghost" data-busy-label="{{ t(request, 'busy.starting_translation') }}" title="Runs as a background job - safe to close this page."><span aria-hidden="true">⏱</span> Translate {{ selected }} in background</button>
+  </form>
+  <form method="post" action="/documents/{{ doc.id }}/apply-tm">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="locale" value="{{ selected }}" />
+    <button type="submit" class="small ghost" data-busy-label="{{ t(request, 'busy.applying_tm') }}">Apply 100% TM matches to {{ selected }}</button>
+  </form>
+  {% if locales|length > 1 %}
+  <form method="post" action="/documents/{{ doc.id }}/translate">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="locale" value="all" />
+    <button type="submit" class="small ghost" data-busy-label="{{ t(request, 'busy.starting_translation') }}"><span aria-hidden="true">⏱</span> Translate all {{ locales|length }} languages</button>
+  </form>
+  {% endif %}
+  {% endset %}
+  {{ m.action_bar("Translation actions", primary=translate_primary, secondary=translate_secondary) }}
+  {# One line per action: what it does and which language(s) it touches (#563). #}
+  <ul class="small muted translate-hints">
+    <li id="hint-translate-live"><strong>Translate {{ selected }} (live)</strong>: runs now, one segment at a time, and you watch it fill in; keep this page open. Only {{ selected }} is translated.</li>
+    <li id="hint-translate-background"><strong>Translate {{ selected }} in background</strong>: the same, as a background job you can leave; only {{ selected }}.</li>
+    <li id="hint-apply-tm"><strong>Apply 100% TM matches to {{ selected }}</strong>: fills only the {{ selected }} segments that already have an exact translation-memory match. No machine translation is used and nothing is spent.</li>
+    {% if locales|length > 1 %}<li id="hint-translate-all"><strong>Translate all {{ locales|length }} languages</strong>: starts one background job for each of {{ locales|join(', ') }}.</li>{% endif %}
+  </ul>
+  {% if engine_blocked %}
+  <p class="notice warn" id="translateBlocked">The engine for this document, <strong>{{ engine_name }}</strong>, has no
+    API key, so translation is blocked rather than faked.
+    {% if can_tune_ai(current_user(request)) %}<a href="/setup-ai">Add a key in Setup AI</a>, or choose Mock there for an offline demo (placeholder text only).{% else %}Ask an administrator to add a key in Setup AI, or to choose Mock for an offline demo (placeholder text only).{% endif %}</p>
+  {% endif %}
+  {# Live progress and the refusal sit WITH the buttons that start them (#561). #}
+  <p id="translateStatus" class="muted"></p>
+  <p id="translateFix" class="small" hidden>{% if can_tune_ai(current_user(request)) %}<a href="/setup-ai">Open Setup AI</a>{% else %}Ask an administrator to open Setup AI.{% endif %}</p>
+  {% if runs %}
+    <h3 class="mt">Recent runs</h3>
+    <ul class="list">
+      {% for r in runs %}
+        <li><a href="/runs/{{ r.id }}">Run #{{ r.id }}</a> - {{ m.status_badge(r.status, m.status_label(r.status)) }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</section>
+{% endif %}
+
+
+<section class="card flat" data-card="chunks" data-card-title="Chunk plan">
+  <details>
+  <summary>Chunk plan <span class="muted">(how the orchestrator would split this for MT)</span></summary>
+  {% if chunk_plan %}
+    {% set column_0 %}Chunk{% endset %}
+    {% set column_1 %}Paragraphs{% endset %}
+    {% set column_2 %}Est. tokens{% endset %}
+    {% set column_3 %}{% endset %}
+{% call m.data_table('Chunk plan', [{'label': column_0}, {'label': column_1}, {'label': column_2}, {'label': column_3}]) %}
+        {% for c in chunk_plan %}
+          <tr>
+            <td class="data-mono">#{{ c.index + 1 }}</td>
+            <td class="data-mono">{{ c.unit_count }}</td>
+            <td class="data-mono">~{{ c.est_tokens }}</td>
+            <td>{% if c.oversized %}<span class="badge warn">oversized → will sub-split</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+    <p class="muted">{{ chunk_plan|length }} chunk(s) at a ~{{ max_chunk_tokens }}-token budget per request.</p>
+  {% else %}
+    {{ m.empty_state('No content to chunk.') }}
+  {% endif %}
+  </details>
+</section>
+
+<section class="card flat" data-card="segments">
+  <div class="row-between">
+    <h2>Segments</h2>
+    {# Work-on-results actions. The Translate actions live in the "Translation actions"
+       bar of the workflow card above (UX branch 07), under the same locale guard. #}
+    <div class="row-actions">
+      {% if selected and selected != '\u2014' %}
+        <a class="btnlink small" href="/documents/{{ doc.id }}/editor?locale={{ selected }}"><span aria-hidden="true">✎</span> Open Post Editor</a>
+        <a class="btnlink small" href="/documents/{{ doc.id }}/lqa?locale={{ selected }}"><span aria-hidden="true">◎</span> LQA scorecard</a>
+        <a class="btnlink small" id="export-doc-link" data-export-dialog href="/documents/{{ doc.id }}/export?locale={{ selected }}"><span aria-hidden="true">⤓</span> Export {{ doc.fmt }}</a>
+        {% if doc.fmt == 'mo' %}<a class="btnlink small" id="export-doc-po-link" data-export-dialog href="/documents/{{ doc.id }}/export?locale={{ selected }}&amp;as_fmt=po"><span aria-hidden="true">⤓</span> Export as po</a>{% endif %}
+        {# feat/run-doc-xliff-surfaces: the selected locale has one or more OPEN wire-less
+           (manual) vendor legs -> offer the vendor hand-off here (the Segments page the maintainer
+           looked at first). round-2 #4: render EACH open wire-less leg (parallel lanes can
+           produce more than one), each with its own download + a jump to ITS run's hand-off
+           card. round-2 #5: the run-view anchor is only offered for states where that card
+           exists (dispatched/quoted) and its copy is honest per state - a DISPATCHED leg has
+           the upload box, a QUOTED leg is quote-gated (download only, no upload yet). Admin-
+           only (the route computed wireless_handoffs). #}
+        {% for h in wireless_handoffs %}
+        <span class="act-sep" aria-hidden="true"></span>
+        {# ffadmin Wave 3 (LOW-1) DELIBERATE EXCEPTION: with Vendors off the leg FACT stays
+           (forensic), but the live download link into /vendors becomes PLAIN TEXT. #}
+        {% if feature_enabled('vendors') %}
+        <a class="btnlink small"
+           href="/vendors/{{ h.vendor_id }}/dispatches/{{ h.dispatch_id }}/xliff"><span aria-hidden="true">⤓</span> Download XLIFF (vendor dispatch #{{ h.dispatch_id }})</a>
+        {% if h.state == 'dispatched' %}
+        <a class="btnlink small"
+           href="/runs/{{ h.run_id }}#vendor-handoff">Vendor hand-off: download / upload <span aria-hidden="true">↗</span></a>
+        {% elif h.state == 'quoted' %}
+        <a class="btnlink small"
+           href="/runs/{{ h.run_id }}#vendor-handoff">Vendor hand-off (quote-gated) <span aria-hidden="true">↗</span></a>
+        {% endif %}
+        {% else %}
+        <span class="small muted">Vendor dispatch #{{ h.dispatch_id }} (Vendors switched off)</span>
+        {% endif %}
+        {% endfor %}
+      {% endif %}
+      {# #388: generating candidates fires a paid provider call, so it is a POST form
+         (CSRF token + same-origin + write-role gate), never a bare link a viewer or a
+         cross-site navigation could trigger. #}
+      <form method="post" action="/documents/{{ doc.id }}/glossary-suggest" class="inline-form">
+        {% include "_csrf.html" %}
+        <button type="submit" class="small ghost">Suggest glossary terms</button>
+      </form>
+    </div>
+  </div>
+  <p id="translateAnnounce" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+  <p id="translateAlert" class="sr-only" role="alert" aria-atomic="true"></p>
+  {% if selected and selected != '\u2014' %}
+    <p id="translateEstimate" class="muted small" data-doc="{{ doc.id }}" data-locale="{{ selected }}">Estimating…</p>
+    <script nonce="{{ csp_nonce() }}">
+      (function () {
+        var el = document.getElementById('translateEstimate');
+        if (!el) return;
+        var url = '/documents/' + el.dataset.doc + '/estimate?locale=' +
+                  encodeURIComponent(el.dataset.locale);
+        fetch(url).then(function (r) { return r.json(); }).then(function (e) {
+          if (!e || e.segments === undefined) { el.textContent = ''; return; }
+          if (!e.segments) { el.textContent = 'Estimate: nothing left to translate.'; return; }
+          var mins = Math.max(1, Math.round((e.seconds || 0) / 60));
+          el.textContent = 'Estimate: ' + e.segments + ' segment(s), ~' +
+            e.input_tokens + ' in / ~' + e.output_tokens + ' out tokens, ~' +
+            (e.seconds < 90 ? (e.seconds + 's') : ('~' + mins + ' min')) +
+            ' (@' + e.tokens_per_sec + ' tok/s on ' + e.provider + ').';
+        }).catch(function () { el.textContent = ''; });
+      })();
+    </script>
+  {% endif %}
+  {% if request.query_params.get('job') %}
+    <div class="job-watch" id="jobWatch">
+      <div class="prog"><div class="prog-bar" style="width:0%"></div></div>
+      <p class="muted small job-label">Queued…</p>
+    </div>
+    <script src="/static/jobs.js?v=1"></script>
+    <script nonce="{{ csp_nonce() }}">watchJob({{ request.query_params.get('job')|int }}, document.getElementById('jobWatch'));</script>
+  {% endif %}
+  {% if request.query_params.get('tm_applied') %}
+    <p class="ok">Applied {{ request.query_params.get('tm_applied')|int }} exact TM match(es).</p>
+  {% endif %}
+  {% if request.query_params.get('translated') %}
+    <p class="ok">Translated {{ request.query_params.get('translated')|int }} segment(s).</p>
+  {% endif %}
+  {# a11y T7: a ?err= error renders once, as a sentence, in the summary at the top of
+     main (base.html + _form_errors.html), never as a raw code here. #}
+  {% if rows %}
+    {% set column_0 %}#{% endset %}
+    {% set column_1 %}Source{% endset %}
+    {% set column_2 %}Target ({{ selected }}){% endset %}
+    {% set column_3 %}TM{% endset %}
+    {% set column_4 %}Terms{% endset %}
+    {% set column_5 %}Tags{% endset %}
+{% call m.data_table('Segments', [{'label': column_0}, {'label': column_1}, {'label': column_2}, {'label': column_3}, {'label': column_4}, {'label': column_5}]) %}
+        {% for r in rows %}
+          <tr>
+            <td class="num">{{ r.seg.order_index + 1 }}</td>
+            <td class="src"{{ src_lang }}>{{ r.seg.source_text|tagchips }}</td>
+            <td class="tgt {% if not r.seg.target_text %}muted{% endif %}" id="tgt-{{ r.seg.order_index }}"{{ tgt_lang }}>
+              {% if r.seg.target_text %}{{ r.seg.target_text|tagchips }}
+              {% elif r.tm %}<span class="suggest" title="TM suggestion">{{ r.tm.target_text|tagchips }}</span>
+              {% else %}-{% endif %}
+            </td>
+            <td class="tm">
+              {% if r.tm %}
+                <span class="badge {% if r.tm.match_pct == 100 %}exact{% else %}fuzzy{% endif %}">{{ r.tm.match_pct }}%</span>
+              {% endif %}
+            </td>
+            <td class="terms">
+              {% for t in r.terms %}
+                <span class="term {% if t.dnt %}dnt{% endif %}" title="{% if t.sense_label %}sense: {{ t.sense_label }}{% elif t.dnt %}do not translate{% endif %}">
+                  <span{{ src_lang }}>{{ t.source_term }}</span>{% if t.dnt %} <span aria-hidden="true">🔒</span><span class="sr-only"> (do not translate)</span>{% elif t.target_term %} → <span{{ tgt_lang }}>{{ t.target_term }}</span>{% endif %}{% if t.sense_label %} <em>({{ t.sense_label }})</em>{% endif %}
+                </span>
+              {% endfor %}
+            </td>
+            <td class="tags">
+              {% if r.seg.inline_tags %}{{ r.seg.inline_tags|taglist }}{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+    {% if pages and pages > 1 %}
+      {{ m.pager('/documents/' ~ doc.id, page, pages, total_segments, 'segments', '&locale=' ~ selected) }}
+    {% endif %}
+  {% else %}
+    {{ m.empty_state('No segments.') }}
+  {% endif %}
+</section>
+</div>
+{% with layout_page = 'document' %}{% include "_page_layout.html" %}{% endwith %}
+
+<script nonce="{{ csp_nonce() }}">
+{% include '_html_escape.js' %}
+// Read-only preview helper: HTML-escape, then render inline-fidelity placeholder
+// tokens (⟦r1⟧, ⟦g1⟧…⟦/g1⟧, ⟦x1⟧) as compact tag chips so the live-translate
+// grid never flashes raw ⟦ ⟧. Mirrors the server-side `tagchips` filter.
+function chips(s) {
+  const str = String(s == null ? '' : s);
+  const closed = new Set();
+  let mm; const re = /⟦(\/?)([a-z]?)(\d+)⟧/g;
+  while ((mm = re.exec(str))) { if (mm[1]) closed.add(mm[3]); }
+  // esc() comes from the shared _html_escape.js include above: it also escapes quotes, so
+  // the title="" attribute this builds cannot be broken out of even if a future caller
+  // passes attacker text. The previous local copy handled only < > & (the #170 accident).
+  const escd = esc(str);
+  return escd.replace(re, (_all, slash, k, num) => {
+    const kind = slash ? 'close' : (closed.has(num) ? 'open' : 'point');
+    const title = slash ? 'formatting tag (close)' : (kind === 'point' ? 'formatting tag' : 'formatting tag (open)');
+    return `<span class="tag-chip ${kind}" title="${title}">${slash}${k}${num}</span>`;
+  });
+}
+function startTranslate(docId, locale) {
+  const btn = document.getElementById('translateBtn');
+  const status = document.getElementById('translateStatus');
+  // Busy indicators: the shared spinner + translated "Translating..." label + elapsed
+  // counter + top bar for the whole live stream; released on done or give-up.
+  if (btn && window.LocBusy && window.LocBusy.isBusy(btn)) return;
+  // T4 (a11y, WCAG 4.1.3): #translateStatus is written on EVERY segment, so it stays
+  // non-live; the sr-only regions next to it get the same throttle as the Run view
+  // (polite at most every 10 s, last wins; a 2 s settle window after each connect).
+  const announcer = makeAnnouncer(document.getElementById('translateAnnounce'), document.getElementById('translateAlert'), { minGapMs: 10000, settleMs: 2000 });
+  const segs = (n) => `${n} segment${n === 1 ? '' : 's'}`;
+  // No-LocBusy fallback: restore the button's own nodes (its icon glyph is an
+  // aria-hidden span, so a flat textContent reset would expose it to screen readers).
+  const btnNodes = btn ? Array.from(btn.childNodes) : [];
+  let busyDone = () => { if (btn) { btn.disabled = false; btn.replaceChildren(...btnNodes); } };
+  if (btn && window.LocBusy) { busyDone = window.LocBusy.start(btn, { announce: false }); }
+  else if (btn) { btn.disabled = true; btn.textContent = '… translating'; }
+  let done = 0;
+  // #283: starting live MT is a POST (CSRF token + same-origin + write-role gate), so a
+  // cross-site link cannot start it. The event stream is the POST response body, read with
+  // fetch; there is no auto-reconnect, since a reconnect would start a second paid run.
+  const url = `/documents/${encodeURIComponent(docId)}/translate-stream`;
+  let finished = false;
+
+  function onMessage(e) {
+    const ev = JSON.parse(e.data);
+    if (ev.type === 'segment') {
+      const cell = document.getElementById('tgt-' + ev.index);
+      if (cell) {
+        cell.innerHTML = ev.target ? chips(ev.target) : '-';
+        cell.classList.remove('muted');
+        cell.classList.add('justfilled');
+      }
+      done += 1;
+      announcer.say(`Translated ${segs(done)}.`);
+      if (status) status.textContent = `Translated ${done} segment(s)…`;
+    } else if (ev.type === 'summary') {
+      // #58/#59: surface needs_review (and errors) when nonzero, so a wholly wrong-
+      // language document is never reported as a clean "N translated" success. A soft-
+      // flagged segment is committed but must not ship unreviewed.
+      if (status) status.textContent =
+        `Done. ${ev.translated} translated · ${ev.from_segment_tm} from segment TM · ` +
+        `${ev.from_full_text_tm} from full-text TM · ${ev.provider_calls} provider call(s)` +
+        (ev.needs_review ? ` · ${ev.needs_review} need review` : '') +
+        (ev.errors ? ` · ${ev.errors} error(s)` : '') +
+        (ev.failovers ? ` · ${ev.failovers} failover(s)` : '');
+    } else if (ev.type === 'error') {
+      fail(ev.error || 'Translation failed.');
+    } else if (ev.type === 'done') {
+      finished = true;
+      announcer.flush(status ? status.textContent : 'Translation completed.');
+      busyDone();
+    }
+  }
+
+  function fail(message) {
+    if (finished) return;
+    finished = true;
+    busyDone();
+    // The refusal is shown ONCE, beside the buttons (the screen-reader alert is a hidden
+    // twin of it), with a link to the place that fixes it.
+    if (status) { status.textContent = message; status.classList.add('error'); status.classList.remove('muted'); }
+    const fix = document.getElementById('translateFix');
+    if (fix) fix.hidden = false;
+    if (status && status.scrollIntoView) status.scrollIntoView({ block: 'nearest' });
+    announcer.alert(message);
+  }
+
+  // A refused start says WHY: the server's own sentence (the JSON error of a fetch
+  // refusal, else the error page's message, read as text only, never as HTML), with a
+  // plain sentence per status when the body carries none.
+  async function refusal(res) {
+    let msg = '';
+    try {
+      const kind = res.headers.get('content-type') || '';
+      if (kind.includes('json')) {
+        const j = await res.json();
+        const err = j && typeof j.error === 'string' && j.error !== 'session_expired' ? j.error : '';
+        msg = (j && typeof j.message === 'string' && j.message) || err;
+      } else {
+        const page = new DOMParser().parseFromString(await res.text(), 'text/html');
+        const p = page.querySelector('p.error');
+        msg = p ? p.textContent.trim() : '';
+      }
+    } catch (_e) { msg = ''; }
+    if (msg) return msg;
+    return res.status === 401 ? 'Your session expired. Refresh the page and sign in again.'
+      : res.status === 403 ? 'This action was refused. Refresh the page and try again.'
+      : res.status === 404 ? 'This document was not found.'
+      : res.status === 409 ? 'Machine translation is switched off for this project.'
+      : res.status === 429 ? 'The translation budget for this month is used up.'
+      : 'Translation could not start. Refresh the page and try again.';
+  }
+
+  const lost = 'Connection lost. Refresh the page to see the latest status.';
+  const body = new URLSearchParams({ locale: locale });
+  const hdrs = new Headers({ Accept: 'text/event-stream' });
+  hdrs.set('X-CSRF-Token', window.CSRF_TOKEN || '');
+  fetch(url, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: hdrs,
+    body: body,
+  }).then(async (res) => {
+    if (!res.ok || !res.body) {
+      fail(await refusal(res));
+      return;
+    }
+    announcer.settle();
+    announcer.say('Translation started.');
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done: eof } = await reader.read();
+      if (eof) break;
+      buf += decoder.decode(value, { stream: true });
+      let cut;
+      while ((cut = buf.indexOf('\n\n')) >= 0) {
+        const block = buf.slice(0, cut);
+        buf = buf.slice(cut + 2);
+        const data = block.split('\n').filter((l) => l.startsWith('data:'))
+          .map((l) => l.slice(5).replace(/^ /, '')).join('\n');
+        if (data) onMessage({ data: data });
+      }
+    }
+    if (!finished) fail(lost);
+  }).catch(() => fail(lost));
+}
+</script>
+
+</div>
+<script defer src="/static/export_dialog.js?v={{ static_v('export_dialog.js') }}"></script>
+{% endblock %}

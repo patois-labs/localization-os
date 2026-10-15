@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Offline stand-in for curl, used ONLY by test/run-dry.sh. Serves the Cloudflare lists.
+dir="$(dirname "$0")"
+for a in "$@"; do
+  case "$a" in
+    https://www.cloudflare.com/ips-v4) cat "$dir/cf-ips-v4.txt"; exit 0 ;;
+    https://www.cloudflare.com/ips-v6) cat "$dir/cf-ips-v6.txt"; exit 0 ;;
+  esac
+done
+echo "SHIM curl: unexpected URL: $*" >&2
+exit 22
