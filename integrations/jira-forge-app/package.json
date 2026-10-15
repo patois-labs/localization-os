@@ -8,7 +8,7 @@
     "@forge/api": "4.0.0",
     "@forge/bridge": "4.0.0",
     "@forge/react": "10.0.0",
-    "@forge/resolver": "1.6.0",
+    "@forge/resolver": "2.0.1",
     "react": "18.2.0"
   }
 }
