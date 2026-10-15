@@ -1,0 +1,105 @@
+# Canonical factory spec - describes the REAL, shipped Strapi connector.
+#
+# PURPOSE: `python scripts/factory/generate.py check scripts/factory/specs/strapi.yaml`
+# must PASS against the real tree. That is the proof the factory templates reproduce a
+# real connector's parametric touchpoints - where Strapi's real entries deviate from a
+# template, the TEMPLATE is fixed, never Strapi. Strapi is the template-conformant
+# reference (it is the one connector whose T2 write uses the STOCK SubResourceStrategy
+# unmodified, so it also exercises the stock strategy path in the generated skeleton).
+#
+# The four other hand-builds (Contentful, Shopify, HubSpot, WordPress) can each get a
+# spec later if useful, but that is OPTIONAL future work: they diverge from the templates
+# in genuinely SEMANTIC ways (bespoke strategy subclasses, extra routes, T3/validation UI
+# panels) that the factory deliberately does NOT generate (inventory §7b), so a spec for
+# them would only cover the parametric subset. strapi.yaml is the one that must stay green.
+#
+# NOTE: prose fields (api_docstring, item_units, docs_row_body, ...) carry Strapi's EXACT
+# shipped wording so `check` (whitespace-normalized substring match) confirms the tree
+# matches. `new` would also emit repo-consistent entries from these fields.
+
+connector:
+  kind: strapi
+  name: Strapi
+  class_name: StrapiConnector
+  icon: "🧩"
+  cat: "Headless CMS"
+  blurb: >-
+    Translate Strapi collection-type entries into any language using the i18n plugin. Each
+    translation is written back as the entry's per-locale variant (via documentId on v5, or
+    a localization on v4), so the source entry is never overwritten.
+  docs_url: "https://docs.strapi.io/dev-docs/plugins/i18n"
+  supports_oauth: false
+  archived: false
+
+  # -> capability = Capability(...) block
+  topology: T2
+  auth: [api_key]
+  api_version: "v5"
+  rich_text: none
+  regions: base_url
+  change_signals:
+    webhook_sig: null
+    poll_field: updatedAt
+    stale_flag: null
+    thin_payload: false
+  anti_loop_label: false
+
+  # -> store.py thin delegator + _TRANSLATE_KINDS + _RETRY_ARTICLE_KINDS
+  retry_noun: entry
+  delegator_extra_guard: ""      # Strapi has no extra guard (WordPress's _refuse_archived_sync is the drift-#10 case)
+
+  # -> harvest.py one-line mapper
+  harvest_title_field: title
+
+  # -> app/web/api.py route + docstring
+  article_id_shape: "<content-type>:<id>"
+  api_docstring: >-
+    Translate Strapi collection-type entry(ies) on the fly into one or more locales,
+    writing each back as the entry's per-locale variant (T2; v5 documentId / v4
+    localization).
+
+  # -> app/cli/cmd_connector.py leaf
+  article_noun_phrase: "a Strapi"
+  cli_parser_help: >-
+    Translate Strapi collection-type entries into the connection's locales as per-locale
+    entry variants.
+
+  # -> app/templates/connection.html item_units caption
+  item_units:
+    scan: "your Strapi collection-type entries"
+    becomes: "the entry's per-locale variant (documentId on v5 / a localization on v4; written to the DRAFT on v5, never auto-published)"
+
+  # -> app/templates/help.html Part-2 table row body
+  help_row_body: "Translate Strapi collection-type entry(ies) as per-locale variants. Body: <code>article_ids</code>/<code>article_id</code> (<code>&lt;contentType&gt;:&lt;id&gt;</code>), <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  # -> docs/CLI.md capability table row body
+  docs_row_body: "Translate Strapi collection-type entries into the connection's locales as per-locale entry variants (T2; v5 documentId / v4 localization). `--article-ids` are `<contentType>:<id>` (or a bare id for a single-content-type connection)."
+
+  # -> tests/verify_cli_parity.py EXPECTED_COMMANDS value
+  cli_expected_desc: "translate Strapi collection-type entries into per-locale entry variants (T2 SubResourceStrategy; v5 documentId / v4 localization; POST /api/connectors/{cid}/strapi/translate parity)"
+
+  # -> THIRD_PARTY_NOTICES.md entry (bb-io reference studied)
+  bb_io:
+    repo: "bb-io/Strapi"
+    url: "https://github.com/bb-io/Strapi"
+    license_verified_date: "2026-08-06"
+    copyright_holder: "Blackbird"
+
+  # config_fields / secret_fields / setup_steps drive `new` (the module skeleton) only;
+  # they are not check-verified against the real tree (the module body is hand-finished,
+  # inventory §7b). A minimal set is recorded here for completeness / future regeneration.
+  config_fields:
+    - {name: base_url, label: "Base URL", help: "Your Strapi site root, e.g. https://cms.acme.com. The connector appends /api.", placeholder: "https://cms.acme.com"}
+    - {name: content_types, label: "Content type IDs", help: "Comma-separated plural API IDs of the collection types to translate.", placeholder: "articles, pages"}
+    - {name: strapi_version, label: "Strapi version", help: "'v5' (default) or 'v4'.", required: false, placeholder: "v5"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated Strapi locale codes to create.", required: false, placeholder: "fr, de, es"}
+  secret_fields:
+    - {name: api_token, label: "API token", help: "Settings -> API Tokens -> Create new API Token with Read + Write. Sent as a Bearer token.", secret: true, placeholder: "a long token"}
+  setup_steps:
+    - "Install/enable the Internationalization (i18n) plugin and add every target locale under Settings -> Internationalization."
+    - "Enable Localization on each collection type you want to translate."
+    - "Create an API token (Settings -> API Tokens) with Read + Write access to those content types."
+  other_side: >-
+    Change detection is poll-based: run on a schedule. Strapi's updatedAt is the
+    content-changed signal, and unchanged entries are suppressed by content hash.

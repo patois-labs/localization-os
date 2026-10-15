@@ -1,0 +1,6 @@
+Type,Identification,Field,Locale,Market,Status,Default content,Translated content
+PRODUCT,'8123456789,title,de,,outdated,Classic Cotton Tee,
+PRODUCT,'8123456789,body_html,de,,outdated,"<p>Soft, breathable cotton. Machine washable.</p>",
+PRODUCT,'8123456789,handle,de,,,classic-cotton-tee,
+COLLECTION,'4401,title,de,,translated,Summer Sale,Sommerschlussverkauf
+ONLINE_STORE_THEME,'1,general.cart.checkout,de,,outdated,Check out,

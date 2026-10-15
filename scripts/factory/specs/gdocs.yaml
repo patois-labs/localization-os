@@ -1,0 +1,98 @@
+# Factory spec - Google Docs connector (Drive folder round trip), connector parity wave 3.
+#
+# Source of truth for the parametric touchpoints. The SEMANTIC build (the Docs structural write,
+# the T3 id map over translated copies, the held-back rule, the fake Google) is hand-written.
+#
+# DESIGN:
+#   - Source Google Docs live in a configured Drive folder (My Drive or a shared drive). Each
+#     translation is a NEW Google Doc in <target folder>/<locale>/ (the folder tree is mirrored).
+#     Source docs are never written.
+#   - FIDELITY: the translated doc is a Drive files.copy of the source (styles, lists, tables,
+#     images, headers, footers, page setup, tabs all survive byte-for-byte) whose text runs are then
+#     replaced through ONE atomic Docs documents.batchUpdate (insert translation, delete old text,
+#     restore the run styles incl. links). Chosen over export-to-DOCX + re-import (lossy: Docs-only
+#     features, smart chips, tabs).
+#   - TOPOLOGY = T3 (a Doc has no per-locale object; we own the id map).
+#   - AUTH = service account (JSON key pasted into the secret store), JWT bearer against
+#     oauth2.googleapis.com; the source and target folders are shared to the service account's
+#     email. Scope = drive (drive.file cannot see files merely shared with a service account).
+#     Optional domain-wide delegation via "Impersonate user".
+#   - NO bb-io code was read (bb-io/GoogleDrive is MIT but the Drive/Docs calls come from Google's
+#     own documentation), so there is no bb_io block and no THIRD_PARTY_NOTICES entry.
+#   - NO alembic migration.
+
+connector:
+  kind: gdocs
+  name: Google Docs
+  class_name: GoogleDocsConnector
+  icon: "📄"
+  cat: "Files / documents"
+  blurb: >-
+    Translate the Google Docs in a Drive folder (My Drive or a shared drive). Each translation is
+    written as a new Google Doc in a per-locale folder with the formatting, lists, tables and
+    links kept, and the source documents are never changed.
+  docs_url: "https://developers.google.com/workspace/docs/api/how-tos/overview"
+  supports_oauth: false
+  archived: false
+
+  topology: T3
+  auth: [api_key]
+  api_version: "v1"
+  rich_text: none
+  regions: fixed url
+  change_signals:
+    webhook_sig: null
+    poll_field: modifiedTime
+    stale_flag: null
+    thin_payload: false
+  anti_loop_label: false
+
+  retry_noun: document
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<drive-file-id>"
+  api_docstring: >-
+    Translate Google Docs in the connection's source Drive folder into one or more locales,
+    writing each translation as a new Google Doc in the locale's folder under the target folder
+    (T3 document per locale). Each id must be the Drive file id of a Google Doc inside the
+    configured source folder.
+
+  article_noun_phrase: "a Google Doc"
+  cli_parser_help: >-
+    Translate Google Docs from the connection's source Drive folder into the connection's locales
+    as new Google Docs in per-locale folders.
+
+  item_units:
+    scan: "the Google Docs in your source Drive folder"
+    becomes: "a new Google Doc in the locale's folder under the target folder (the source document is never changed, and a translated doc you edited by hand is never overwritten; Google Docs has no draft state, so every write is live for anyone reading the translated doc)"
+
+  help_row_body: "Translate Google Docs from a Drive folder as new Google Docs in per-locale folders (T3). Body: <code>article_ids</code>/<code>article_id</code> (Drive file ids of Docs in the source folder), <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Translate Google Docs from the connection's source Drive folder into per-locale Google Docs under the target folder (T3 document per locale; the source is never written). `--article-ids` are Drive file ids of Docs inside the source folder."
+
+  cli_expected_desc: "translate Google Docs into new Google Docs in per-locale Drive folders (T3 document per locale; POST /api/connectors/{cid}/gdocs/translate parity)"
+
+  config_fields:
+    - {name: source_folder, label: "Source folder", help: "The Drive folder that holds the Docs to translate: paste its folder ID or its URL. Share it with the service account (Viewer is enough). Never My Drive root.", placeholder: "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"}
+    - {name: target_folder, label: "Target folder", help: "The Drive folder that receives one sub-folder per locale: its ID or URL. Share it with the service account as Editor (Content manager on a shared drive). Must not be inside the source folder or contain it.", placeholder: "1ZyXwVuTsRqPoNmLkJiHgFeDcBa987654"}
+    - {name: source_locale, label: "Source locale", help: "The language of the source documents, e.g. en-US.", placeholder: "en-US"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated locale codes; each becomes a folder name under the target folder.", required: false, placeholder: "fr-FR, de-DE"}
+    - {name: include_subfolders, label: "Include subfolders", help: "1 to translate Docs in sub-folders too (the tree is mirrored), 0 for the top level only.", required: false, placeholder: "1"}
+    - {name: max_files, label: "Max documents", help: "Safety cap on documents scanned per run.", required: false, placeholder: "50"}
+    - {name: impersonate_user, label: "Impersonate user", help: "Optional, Google Workspace only, ADMIN ONLY, off by default: a user email to act as through domain-wide delegation, so translated Docs are owned by that user instead of the service account. It lets the key act as that person everywhere in Drive, so leave it blank unless you need a plain My Drive folder.", required: false, placeholder: "alex@example.com"}
+    - {name: update_in_place, label: "Update in place", help: "1 (default) rewrites an existing translated Doc in place when the source changed (same link, sharing and comments kept) whenever its structure is unchanged; 0 always builds a new Doc and trashes the old one.", required: false, placeholder: "1"}
+  secret_fields:
+    - {name: service_account_json, label: "Service account key (JSON)", help: "The JSON key file of a service account (Google Cloud, IAM, Service accounts, Keys). Paste the whole file, or its one-line form. It is checked, stored encrypted and never shown or logged again.", secret: true, placeholder: "{\"type\": \"service_account\", ...}"}
+  setup_steps:
+    - "In Google Cloud create a project, enable the Google Drive API and the Google Docs API, create a service account and download a JSON key for it."
+    - "Put the Docs in a Drive folder (best: a folder in a shared drive) and share it with the service account's email address. Create an empty target folder in the same place and share it as Editor."
+    - "Paste the JSON key here and the two folder IDs (the last part of each folder's URL). Translations appear in the target folder, one sub-folder per locale."
+    - "A plain My Drive folder works only when you also set Impersonate user (domain-wide delegation): service accounts have no storage of their own, so a shared drive is the simple route. The runbook has the details."
+  other_side: >-
+    Change detection is poll-based: run on a schedule. A document's modified time moves only when
+    it is edited, and each (document, locale) copy is re-checked against a stored content hash, so
+    unchanged documents are neither re-read nor re-translated. A translated Doc that someone edited
+    after our last write is never overwritten. No webhook receiver in scope.

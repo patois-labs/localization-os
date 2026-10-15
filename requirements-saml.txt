@@ -1,0 +1,2 @@
+# Optional SAML runtime profile, also exercised by development tests.
+python3-saml>=1.16,<2

@@ -1,0 +1,24 @@
+{% import "_macros.html" as m %}
+{% if ledger_status %}
+<div class="insight-ledger-status" data-insight-ledger-status>
+{% if not ledger_status.envelopes_enabled %}
+<div class="card err" role="alert">{{ m.status_badge('paused', 'envelope recording is OFF') }}</div>
+{% endif %}
+{% if ledger_status.raw_age_out_frozen and ledger_status.retained_raw_files %}
+<div class="card" role="status">Raw capture is off. {{ ledger_status.retained_raw_files }} retained raw files;
+oldest last-write date: {{ ledger_status.oldest_raw_date }} (UTC).
+Their age-out is FROZEN while capture is off. Envelopes continue unless separately disabled.</div>
+{% endif %}
+{% if ledger_status.retention_max_bytes is defined %}
+<div class="card" role="status" data-ledger-retention>
+{% if ledger_status.raw_bytes is not none %}Raw capture on disk: {{ (ledger_status.raw_bytes / 1048576) | round(1) }} MB in {{ ledger_status.retained_raw_files }} files.{% else %}Raw capture on disk: {{ ledger_status.retained_raw_files }} files in your scope.{% endif %}
+Kept for {% if ledger_status.retention_ttl_days %}{{ ledger_status.retention_ttl_days }} days{% else %}an unlimited time (age and size pruning are off){% endif %};
+size cap {{ (ledger_status.retention_max_bytes / 1048576) | round(0) | int }} MB{% if ledger_status.retention_ttl_days %} (oldest files are pruned first){% endif %}.
+{% if ledger_status.raw_age_out_frozen %}Pruning is paused while raw capture is off.{% endif %}
+{% if ledger_status.last_prune %}Last prune: {{ ledger_status.last_prune.at }} (UTC), removed
+{{ ledger_status.last_prune.deleted + ledger_status.last_prune.size_pruned }} files,
+{{ ((ledger_status.last_prune.freed_bytes + ledger_status.last_prune.size_freed_bytes) / 1048576) | round(1) }} MB.
+{% elif ledger_status.raw_bytes is not none %}No prune has run yet.{% endif %}</div>
+{% endif %}
+</div>
+{% endif %}

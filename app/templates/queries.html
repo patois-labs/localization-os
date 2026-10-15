@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_review_runs_status.html" as rs %}
+{% block title %}Queries{% endblock %}
+{% block content %}
+<div class="review-runs-page">
+
+{% set header_actions %}
+<button type="button" class="ghost layout-edit-btn" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+{% endset %}
+{% set header_meta %}<p class="muted">Threaded questions and comments on a project, document, segment or
+    key. A query is one conversation, visible whole to everyone who can see the
+    project.</p>
+{% endset %}
+{{ m.page_header("Queries", meta=header_meta, secondary=header_actions) }}
+<nav class="review-runs-sections" aria-label="{{ t(request, 'page.review_runs.nav_label') }}"><a href="#rr-open_query">Open a query</a><a href="#rr-threads">Threads</a><a href="#rr-about">About query notifications</a></nav>
+
+<div id="page-layout" class="page-layout" data-layout-page="queries">
+<section class="card" id="rr-open_query" data-card="open_query">
+  <h2>Open a query</h2>
+  {% if disclosure %}
+  <p class="banner warn">{{ disclosure }}</p>
+  {% endif %}
+  <form method="post" action="/queries" class="form">
+{% call m.form_section("rr-fields-1", "Open a query") %}
+    {% include "_csrf.html" %}
+    {% if scope_segment %}<input type="hidden" name="segment_id" value="{{ scope_segment }}">
+    {% elif scope_key %}<input type="hidden" name="key_id" value="{{ scope_key }}">
+    {% elif scope_document %}<input type="hidden" name="document_id" value="{{ scope_document }}">
+    {% elif scope_project %}<input type="hidden" name="project_id" value="{{ scope_project }}">
+    {% else %}
+    <label>Project id
+      <input type="number" name="project_id" min="1" required>
+    </label>
+    {% endif %}
+    <label>Subject
+      <input type="text" name="subject" maxlength="200" placeholder="a short subject">
+    </label>
+    <label>Question
+      <textarea name="body" maxlength="4000" rows="3" required></textarea>
+    </label>
+    <label>Assignee email (optional)
+      <input type="email" name="assignee_email"
+             placeholder="an existing active user in this project's scope">
+    </label>
+    <button type="submit" class="btn">Open query</button>
+  {% endcall %}
+</form>
+</section>
+
+<section class="card" id="rr-threads" data-card="threads">
+  <h2>Threads</h2>
+  <form method="get" action="/queries" class="filters">
+{% call m.form_section("rr-fields-2", "Threads") %}
+    <label>Status <select name="status">
+      <option value="" {{ 'selected' if not f_status }}>any status</option>
+      <option value="open" {{ 'selected' if f_status == 'open' }}>open</option>
+      <option value="answered" {{ 'selected' if f_status == 'answered' }}>answered</option>
+      <option value="closed" {{ 'selected' if f_status == 'closed' }}>closed</option>
+    </select></label>
+    <label>Project ID <input type="number" name="project" min="1" placeholder="project id"
+           value="{{ f_project }}"></label>
+    <label>Document ID <input type="number" name="document" min="1" placeholder="document id"
+           value="{{ f_document }}"></label>
+    <label><input type="checkbox" name="mine" value="1" {{ 'checked' if f_mine }}> mine</label>
+    <label><input type="checkbox" name="assignee" value="me" {{ 'checked' if f_assignee }}> assigned to me</label>
+    <button type="submit" class="btn">Filter</button>
+  {% endcall %}
+</form>
+
+  {% if threads %}
+  {% call m.data_table("Threads", [{"label": "#"}, {"label": "Status"}, {"label": "Project"}, {"label": "Subject"}, {"label": "Author"}, {"label": "Assignee"}, {"label": "Posts"}, {"label": "Updated"}]) %}
+      {% for t in threads %}
+      <tr>
+        <td><a href="/queries/{{ t.id }}">#{{ t.id }}</a></td>
+        <td>{{ rs.localized_status_badge(request, t.status, 'page.review_runs.status_') }}</td>
+        <td>{{ project_names.get(t.project_id, t.project_id) }}</td>
+        <td><a href="/queries/{{ t.id }}">{{ t.subject or '(no subject)' }}</a></td>
+        <td>{{ t.author or ('vendor' if t.author_kind == 'vendor' else '-') }}</td>
+        <td>{{ t.assignee_email or '-' }}</td>
+        <td>{{ t.post_count }}</td>
+        <td>{{ t.updated_at | utcdt }}</td>
+      </tr>
+      {% endfor %}
+    {% endcall %}
+  <p class="muted">Showing {{ offset + 1 }}&ndash;{{ offset + shown }} of {{ total }}
+    thread(s).</p>
+  {% if has_prev or has_next %}
+  <p class="pager">
+    {% if has_prev %}<a class="btnlink small" href="?{{ prev_qs }}"><span aria-hidden="true">&larr;</span> Prev</a>{% endif %}
+    {% if has_next %}<a class="btnlink small" href="?{{ next_qs }}">Next <span aria-hidden="true">&rarr;</span></a>{% endif %}
+  </p>
+  {% endif %}
+  {% else %}
+  {{ m.empty_state("No query threads match.") }}
+  {% endif %}
+</section>
+
+{# SPEC-wave3 §4.6: the honest-limitation block, verbatim (also on the queries card). #}
+<section class="card" id="rr-about" data-card="about">
+  <h2>About query notifications</h2>
+  <p class="muted small">Query notifications are email only. There is no in-app
+    notification centre, no digest, no Slack or webhook target, and no per-user
+    notification preferences. If SMTP is not configured, no notification is sent and
+    <strong>nothing is logged</strong> (<code>mailer.configured()</code> returns False
+    and the send is a silent no-op) - the only in-app signal that a query is
+    waiting for you is the <strong>My work</strong> page and the query lists. An
+    unassigned query notifies nobody, by design.</p>
+</section>
+</div>
+{% with layout_page = 'queries' %}{% include "_page_layout.html" %}{% endwith %}
+
+</div>
+{% endblock %}

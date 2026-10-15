@@ -1,0 +1,28 @@
+// App strings (hand-written JSON5 fixture)
+{
+  /* Greeting shown on the home page */
+  greeting: 'Hello, {name}!',
+  "farewell": "Goodbye",  // same-line note belongs to farewell
+  'quoted': 'It\'s "fine"',
+  multi: 'first half \
+second half',
+  escapes: "Tab\there é \x41 \v",
+  $dollar_key: 'Dollar',
+  count: 0x1F,
+  ratio: .5,
+  big: +Infinity,
+  nothing: NaN,
+  flag: true,
+  empty: null,
+  id: "#00ff00",
+  printf: "%1$s has %d items",
+  nested: {
+    list: [
+      'One',
+      "Two",
+      3,
+      '---',
+    ],
+    html: "<b>Bold</b> text",
+  },
+}

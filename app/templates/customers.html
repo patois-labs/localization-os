@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Customers{% endblock %}
+{% block content %}
+{% set customers_intro %}<p>Customers scope workflows, connectors and group projects. <a href="/help/documents">How customers work</a></p>{% endset %}
+{% set customers_primary %}<a class="btn-primary" href="#new-customer">New customer</a>{% endset %}
+{{ m.page_header("Customers", meta=customers_intro, primary=customers_primary) }}
+
+<section class="card" id="new-customer">
+  <h2>New customer</h2>
+  <form method="post" action="/customers" class="form inline-form"
+        data-spotlight-anchor="customer"
+        data-spotlight-title="{{ t(request, 'page.onboarding.step_customer_title') }}"
+        data-spotlight-desc="{{ t(request, 'page.onboarding.spot_customer_target') }}">
+    {% include "_csrf.html" %}
+    <label>Customer name <input type="text" name="name" placeholder="Acme Games" required /></label>
+    <button type="submit">Add customer</button>
+  </form>
+</section>
+
+{% call m.card(flat=true) %}
+  <h2 class="sr-only">Customers</h2>
+  <p><span class="count-chip">{{ customers|length }} customer{{ '' if customers|length == 1 else 's' }}</span></p>
+  {% if customers %}
+    {% call m.data_table('Customers', [{"label": 'Name'}, {"label": 'Projects'}, {"label": 'Active'}, {"label": 'Done'}, {"label": '', "actions": true}]) %}
+
+        {% for c in customers %}
+          {% set sc = status_counts.get(c.id, {}) %}
+          <tr>
+            <td><span class="cell-primary"><a class="trunc" href="/customers/{{ c.id }}" style="max-width:28ch">{{ customer_label(c) }}</a></span></td>
+            <td class="data-mono">{{ counts.get(c.id, 0) }}</td>
+            <td class="data-mono">{{ sc.get('active', 0) }}</td>
+            <td class="data-mono">{{ sc.get('done', 0) }}</td>
+            <td class="row-actions">
+              {% call m.row_menu('cm-' ~ c.id, 'More actions for ' ~ customer_label(c)) %}
+                <a role="menuitem" href="/customers/{{ c.id }}">Open 360</a>
+              {% endcall %}
+            </td>
+          </tr>
+        {% endfor %}
+
+{% endcall %}
+  {% else %}
+    {% set empty_message %}No active customers yet - add one above. Customers scope workflows, connectors and group projects.{% endset %}{{ m.empty_state(empty_message) }}
+  {% endif %}
+{% endcall %}
+
+{# SPEC-customer-archive: archived customers are retired from every picker + the list
+   above, but stay reachable here (and via their 360) so an admin can unarchive one. #}
+{% if archived_customers %}
+{% call m.card() %}
+  <h2>Archived ({{ archived_customers|length }})</h2>
+  <p class="help">These customers are retired from pickers. Their existing projects and connections keep working. Open one to unarchive it.</p>
+  {% call m.data_table('Archived', [{"label": 'Name'}, {"label": 'Projects'}, {"label": '', "actions": true}] + ([{"label": '', "actions": true}] if is_admin else [])) %}
+
+      {% for c in archived_customers %}
+        <tr>
+          <td><a class="trunc" href="/customers/{{ c.id }}" style="max-width:26ch">{{ customer_label(c) }}</a> <span class="small muted">(archived)</span></td>
+          <td class="data-mono">{{ counts.get(c.id, 0) }}</td>
+          <td><a class="small ghost" href="/customers/{{ c.id }}">Open 360<span aria-hidden="true"> →</span></a></td>
+          {% if is_admin %}
+          <td>
+            <form method="post" action="/customers/{{ c.id }}/unarchive" class="form inline-form">
+              {% include "_csrf.html" %}
+              <button type="submit" class="small ghost">Unarchive</button>
+            </form>
+          </td>
+          {% endif %}
+        </tr>
+      {% endfor %}
+
+{% endcall %}
+{% endcall %}
+{% endif %}
+
+{% endblock %}

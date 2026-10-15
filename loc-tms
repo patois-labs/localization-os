@@ -1,0 +1,18 @@
+#!/bin/sh
+# Localization OS headless CLI wrapper (POSIX shell). Forwards all args to the CLI,
+# preferring the project virtualenv's Python so services import cleanly.
+#
+# Usage:  ./loc-tms <command> [args...]
+#   e.g.  ./loc-tms init --from-env
+#         ./loc-tms config list
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# The repo root on PYTHONPATH lets the wrapper run from any folder (output lands in the CWD).
+PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
+if [ -x "$here/.venv/bin/python" ]; then
+    exec "$here/.venv/bin/python" -m app.cli "$@"
+elif command -v python3 >/dev/null 2>&1; then
+    exec python3 -m app.cli "$@"
+else
+    exec python -m app.cli "$@"
+fi

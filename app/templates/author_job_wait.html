@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Drafting{% endblock %}
+{% block content %}
+{# The progress page of a background author job (app/web/author_jobs.py). The draft runs
+   on the server; this page polls GET /workflows/draft-jobs/{id}.json and reloads itself when the
+   draft is ready, which renders the finished review in place. Without JS a meta-style
+   refresh link and the plain reload do the same. Clicking Design again elsewhere joins
+   this draft instead of starting another one. #}
+<section class="card author-job-wait" data-author-job="{{ job_id }}"
+         data-elapsed="{{ elapsed_s }}" data-give-up="{{ give_up_min * 60 }}">
+  {% if kind == 'workflow_repair' %}
+  <h1>Fixing your workflow draft</h1>
+  {% elif kind == 'step_prompt' %}
+  <h1>Drafting your step prompt</h1>
+  {% else %}
+  <h1>Drafting your workflow</h1>
+  {% endif %}
+  {% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
+  {% if timed_out %}
+  <p class="error" role="alert" id="author-job-msg">This draft is still running after {{ give_up_min }} minutes,
+  which is much longer than expected. The AI engine may be overloaded or stuck. You can
+  <a href="/workflows/draft-jobs/{{ job_id }}">check again</a>, or go back and try a faster provider or model.</p>
+  {% else %}
+  <p id="author-job-msg" role="status" aria-live="polite">The AI model is drafting on the server. A local
+  model can take a few minutes; you can leave this page open and it opens the result when
+  it is ready.</p>
+  {# The ticking counter stays OUTSIDE the live region (busy.js pattern), so a screen reader
+     is not re-read the sentence every second. #}
+  <p class="muted" aria-hidden="true">Running for <span id="author-job-elapsed">{{ elapsed_s }}</span> seconds.</p>
+  <noscript><p><a href="/workflows/draft-jobs/{{ job_id }}">Check again</a> (this page does not refresh by itself without JavaScript).</p></noscript>
+  {% endif %}
+  {% if description %}
+  <details>
+    <summary>What you asked for</summary>
+    <p class="muted" style="white-space: pre-wrap">{{ description }}</p>
+  </details>
+  {% endif %}
+  <p><a href="{{ back_url }}"><span aria-hidden="true">&larr;</span> {{ back_label }}</a></p>
+</section>
+<script nonce="{{ csp_nonce() }}">
+(function () {
+  var box = document.querySelector('[data-author-job]');
+  if (!box || !window.fetch) return;
+  var id = box.dataset.authorJob;
+  var giveUp = parseInt(box.dataset.giveUp, 10) || 900;
+  var elapsed = parseInt(box.dataset.elapsed, 10) || 0;
+  if (elapsed >= giveUp) return;
+  var elEl = document.getElementById('author-job-elapsed');
+  var msg = document.getElementById('author-job-msg');
+  var t0 = Date.now() - elapsed * 1000;
+  var fails = 0;
+  var tick = setInterval(function () {
+    if (elEl) elEl.textContent = String(Math.round((Date.now() - t0) / 1000));
+  }, 1000);
+  function poll() {
+    fetch('/workflows/draft-jobs/' + id + '.json', { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        fails = 0;
+        if (d && d.status === 'running' && !d.timed_out) { setTimeout(poll, 3000); return; }
+        clearInterval(tick);
+        // Done, failed or timed out: the same URL now renders the result (or the message).
+        window.location.reload();
+      })
+      .catch(function () {
+        if (++fails >= 5) {
+          clearInterval(tick);
+          if (msg) msg.textContent = 'Lost contact with the server. Reload this page to check ' +
+            'on the draft; if you were signed out, sign in again.';
+          return;
+        }
+        if (msg) msg.textContent = 'Lost contact with the server. Retrying...';
+        setTimeout(poll, 6000);
+      });
+  }
+  setTimeout(poll, 3000);
+})();
+</script>
+{% endblock %}

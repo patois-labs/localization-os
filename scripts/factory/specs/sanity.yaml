@@ -1,0 +1,78 @@
+connector:
+  kind: sanity
+  name: Sanity
+  class_name: SanityConnector
+  icon: "🧱"
+  cat: "Headless CMS"
+  blurb: >-
+    Translate Sanity documents into any language. Supports both localization models: field-level
+    (sanity-plugin-internationalized-array: each translation is a new language item inside the
+    same document) and document-level (@sanity/document-internationalization: each translation
+    is its own document linked by a translation.metadata document). Writes land on the draft and
+    never publish. Portable Text is translated block by block with links and marks kept.
+  docs_url: "https://www.sanity.io/docs/localization"
+  supports_oauth: false
+  archived: false
+
+  topology: T1
+  auth: [api_key]
+  api_version: "v2025-02-19"
+  rich_text: portable_text
+  regions: fixed-region
+  change_signals:
+    webhook_sig: null
+    poll_field: _updatedAt
+    stale_flag: null
+    thin_payload: true
+  anti_loop_label: false
+
+  retry_noun: document
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<documentId>"
+  api_docstring: >-
+    Translate Sanity document(s) on the fly into one or more languages. Field-level projects
+    get a new language item in each internationalized array field of the same document;
+    document-level projects get a linked translation document. Both write to the draft and
+    never publish. The document id must be one of the connection's configured document types.
+  article_noun_phrase: "a Sanity"
+  cli_parser_help: >-
+    Translate Sanity documents into the connection's languages (field-level language items or
+    linked per-language documents, as configured), writing drafts only.
+
+  item_units:
+    scan: "your Sanity documents of the configured types"
+    becomes: "a language item inside the same document's internationalized array fields (field-level) or a linked per-language document (document-level); always written to the draft, never published"
+
+  help_row_body: "Translate Sanity document(s) as language items (field-level) or linked per-language documents (document-level), draft only. Body: <code>article_ids</code>/<code>article_id</code> (<code>&lt;documentId&gt;</code>), <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Translate Sanity documents into the connection's languages, either as language items inside internationalized-array fields (field-level) or as linked per-language documents (document-level); writes drafts only. `--article-ids` are Sanity document ids of the configured types."
+
+  cli_expected_desc: "translate Sanity documents into per-language items or linked per-language documents (draft only; POST /api/connectors/{cid}/sanity/translate parity)"
+
+  config_fields:
+    - {name: project_id, label: "Project ID", help: "Your Sanity project ID (sanity.io/manage). Lowercase letters, digits and hyphens only.", placeholder: "abc12xyz"}
+    - {name: dataset, label: "Dataset", help: "The dataset to translate (default 'production').", required: false, placeholder: "production"}
+    - {name: i18n_model, label: "Localization model", help: "'field' for sanity-plugin-internationalized-array (default) or 'document' for @sanity/document-internationalization.", required: false, placeholder: "field"}
+    - {name: document_types, label: "Document types", help: "Comma-separated schema type names to translate.", placeholder: "post, page"}
+    - {name: languages, label: "Languages", help: "Comma-separated language ids configured in your Studio. Targets outside this list are rejected.", placeholder: "en, fr, de"}
+    - {name: source_locale, label: "Source language", help: "The language id to translate from (default: the first language).", required: false, placeholder: "en"}
+    - {name: target_locales, label: "Target languages", help: "Comma-separated language ids to write.", required: false, placeholder: "fr, de"}
+    - {name: fields, label: "Translatable fields", help: "Optional allowlist of field names. Blank = auto-select.", required: false, placeholder: "title, body"}
+    - {name: exclude_fields, label: "Exclude fields", help: "Field names to never translate.", required: false, placeholder: "slug"}
+    - {name: language_field, label: "Language field (document model)", help: "Name of the field holding a document's language (default 'language').", required: false, placeholder: "language"}
+    - {name: max_entries, label: "Max documents", help: "Safety cap on documents scanned per run.", required: false, placeholder: "50"}
+  secret_fields:
+    - {name: api_token, label: "API token", help: "A Sanity API token with Editor permission (manage > API > Tokens). Sent as a Bearer token.", secret: true, placeholder: "sk..."}
+  setup_steps:
+    - "In sanity.io/manage open your project and note the Project ID and dataset."
+    - "Create an API token with Editor permission (API > Tokens > Add API token)."
+    - "Decide the model: field-level (internationalized-array plugin) or document-level (document-internationalization plugin)."
+    - "Enter the Project ID, document types, the Studio's language ids and the token."
+  other_side: >-
+    Change detection is poll-based: run on a schedule. Sanity's _updatedAt bumps on any edit, so
+    unchanged documents are suppressed by a per-(document, language) content hash. Writes go to
+    the draft with a revision check and are never published; publish in the Studio when ready.

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PackageProject xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" Guid="7d1c2a40-5b6e-4f70-8a91-0b2c3d4e5f60" PackageGuid="c0ffee00-1234-4abc-9def-001122334455" PackageName="demo-2026-10-10" PackageType="ProjectPackage" PackageCreatedAt="2026-10-10T18:00:00Z" PackageCreatedBy="PM" Comment="" Version="4.0.0.0" Name="demo">
+  <LanguageDirections>
+    <LanguageDirection Guid="11111111-2222-4333-8444-555555555555" SettingsBundleGuid="aaaaaaaa-0000-4000-8000-000000000001" TargetLanguageCode="de-DE" SourceLanguageCode="en-US" />
+    <LanguageDirection Guid="11111111-2222-4333-8444-666666666666" SettingsBundleGuid="aaaaaaaa-0000-4000-8000-000000000002" TargetLanguageCode="fr-FR" SourceLanguageCode="en-US" />
+  </LanguageDirections>
+  <ProjectFiles>
+    <ProjectFile Guid="99999999-0000-4000-8000-000000000001" Name="guide.docx" Path="" Role="Translatable" FilterDefinitionId="WordprocessingML v. 2">
+      <LanguageFiles>
+        <LanguageFile Guid="99999999-0000-4000-8000-0000000000a1" Path="en-US\" LanguageCode="en-US"><FileVersions><FileVersion Guid="99999999-0000-4000-8000-0000000000b1" VersionNumber="1" FileName="guide.docx" PhysicalPath="en-US\guide.docx" /></FileVersions></LanguageFile>
+        <LanguageFile Guid="99999999-0000-4000-8000-0000000000a2" Path="de-DE\" LanguageCode="de-DE"><FileVersions><FileVersion Guid="99999999-0000-4000-8000-0000000000b2" VersionNumber="1" FileName="guide.docx.sdlxliff" PhysicalPath="de-DE\guide.docx.sdlxliff" /></FileVersions></LanguageFile>
+        <LanguageFile Guid="99999999-0000-4000-8000-0000000000a3" Path="fr-FR\" LanguageCode="fr-FR"><FileVersions><FileVersion Guid="99999999-0000-4000-8000-0000000000b3" VersionNumber="1" FileName="guide.docx.sdlxliff" PhysicalPath="fr-FR\guide.docx.sdlxliff" /></FileVersions></LanguageFile>
+      </LanguageFiles>
+    </ProjectFile>
+  </ProjectFiles>
+  <PackageTasks><TaskRef TaskId="12121212-3434-4565-8787-909090909090" /></PackageTasks>
+</PackageProject>

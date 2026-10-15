@@ -1,0 +1,46 @@
+/* App-shell ownership: Console navigation and top bar. */
+.sidebar .brand { overflow-wrap: anywhere; }
+.sidebar .brand .nav-label { min-width: 0; }
+.side-nav { padding: 2px; scroll-padding-block: 8px; }
+.side-nav a { min-height: 36px; font-size: .875rem; gap: 10px; }
+.nav-glyph { display: inline-flex; flex: 0 0 18px; align-items: center; justify-content: center; }
+.nav-glyph svg { width: 18px; height: 18px; }
+.nav-label { overflow-wrap: anywhere; }
+.nav-group { padding: 8px 0 2px; }
+.nav-disclosure { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 32px; padding: 6px 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); font: inherit; letter-spacing: inherit; text-transform: inherit; text-align: left; cursor: pointer; }
+.nav-disclosure::after { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); margin: 0 3px 3px 10px; flex-shrink: 0; }
+.nav-disclosure[aria-expanded="false"]::after { transform: rotate(-45deg); }
+.nav-disclosure:hover { background: var(--panel); color: var(--text); }
+.nav-section-closed > a { display: none; }
+.sidebar.editing .nav-section-closed > a { display: flex; }
+.sidebar.editing .nav-disclosure { pointer-events: none; }
+.sidebar .newbtn { background: var(--panel); color: var(--text); border: 1px solid var(--input-border); min-height: 36px; padding: 7px 10px; }
+.topbar2 { gap: 16px; }
+.topbar2 .crumbs { flex: 1; min-width: 0; font-family: var(--font-body); font-size: .8125rem; font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
+.crumbs a { color: inherit; }
+.topsearch-form { position: relative; order: 1; flex: 0 1 360px; min-width: 100px; margin: 0; }
+.topbar2 .topsearch { border-radius: var(--radius-sm) !important; padding: 8px 68px 8px 12px !important; }
+.search-hint { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); color: var(--muted); border: 1px solid var(--input-border); border-radius: 4px; padding: 1px 4px; font-size: .6875rem; pointer-events: none; }
+.topactions { order: 2; margin-left: 0; gap: 8px; }
+.usermenu > summary { border-radius: var(--radius-sm); min-height: 36px; }
+.usermenu .avatar { background: var(--panel); }
+.um-name { max-width: 160px; overflow-wrap: anywhere; }
+.shell-nav-tooltip { position: fixed; z-index: 50; max-width: 260px; padding: 6px 10px; border: 1px solid var(--input-border); border-radius: var(--radius-sm); color: var(--text); background: var(--panel); font-size: .8125rem; overflow-wrap: anywhere; pointer-events: none; }
+@media (min-width: 901px) {
+  html.sb-js.sb-collapsed .nav-group { padding: 6px 4px; }
+  html.sb-js.sb-collapsed .nav-disclosure { display: none; }
+  html.sb-js.sb-collapsed .nav-section-closed > a { display: flex; }
+}
+@media (max-width: 1100px) {
+  .topbar2 { gap: 10px; padding-inline: 16px; }
+  .topactions .um-id { display: none; }
+}
+@media (max-width: 900px) {
+  .topbar2 { flex-wrap: wrap; gap: 8px; }
+  .topsearch-form { order: 3; flex: 1 1 100%; max-width: none; }
+  .side-nav a, .nav-disclosure { min-height: 40px; }
+  .sidebar { max-width: calc(100vw - 48px); }
+  html:not(.sb-js) .sidebar { visibility: visible; transform: none; position: static; max-width: none; width: 100%; height: auto; }
+  html:not(.sb-js) .app { flex-direction: column; }
+}
+/* End app-shell ownership. */

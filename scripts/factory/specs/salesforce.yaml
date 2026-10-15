@@ -1,0 +1,71 @@
+# Factory spec for the REBUILT Salesforce Knowledge connector (connector parity). Describes the
+# real shipped tree; `python scripts/factory/generate.py check scripts/factory/specs/salesforce.yaml`
+# must PASS. No bb-io code was read (built from Salesforce vendor docs only), so no bb_io block.
+
+connector:
+  kind: salesforce
+  name: Salesforce Knowledge
+  class_name: SalesforceConnector
+  module: salesforce
+  icon: "☁"
+  cat: "Knowledge base / help center"
+  blurb: >-
+    Translate Salesforce Lightning Knowledge articles into your target languages. Each
+    language is written as the article's own translation version (submit-for-translation ->
+    fill the Draft -> set-complete -> publish), correlated by KnowledgeArticleId, so the
+    master article and other languages are never overwritten. Draft by default. Translatable
+    fields are discovered per record type via Describe (rediscover fields).
+  docs_url: "https://developer.salesforce.com/docs/atlas.en-us.knowledge_dev.meta/knowledge_dev/"
+  supports_oauth: false
+  archived: false
+
+  topology: T2
+  auth: [jwt, api_key]
+  api_version: "v65.0"
+  rich_text: html
+  regions: dynamic-from-token
+  change_signals:
+    webhook_sig: null
+    poll_field: LastModifiedDate
+    stale_flag: null
+    thin_payload: false
+  anti_loop_label: false
+
+  retry_noun: article
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<KnowledgeArticleId>"
+  api_docstring: >-
+    Translate Salesforce Knowledge article(s) on the fly into one or more
+    languages, writing each back as the article's own translation version (T2).
+    article_id(s) are KnowledgeArticleIds.
+
+  article_noun_phrase: "a Salesforce"
+  cli_parser_help: >-
+    Translate Salesforce Knowledge articles into the connection's languages, each written as the
+    article's own translation version (T2).
+
+  item_units:
+    scan: "your Salesforce Knowledge articles"
+    becomes: "the article's own translation version (Draft by default; run Rediscover fields below first so per-record-type fields are mapped)"
+
+  help_row_body: "Translate Salesforce Knowledge article(s). Body: <code>article_ids</code>/<code>article_id</code>, <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Translate Salesforce Knowledge articles (default: the connection's record-type scope). `--article-ids` takes KnowledgeArticleIds; ids and locale overrides are comma/space separated."
+
+  cli_expected_desc: "translate Salesforce Knowledge articles into per-language translation versions (T2 SubResourceStrategy; POST /api/connectors/{cid}/salesforce/translate parity)"
+
+  config_fields:
+    - {name: login_url, label: "Login URL", help: "Salesforce OAuth login host.", required: false, placeholder: "test.salesforce.com"}
+    - {name: username, label: "Integration username", help: "JWT mode only.", required: false, placeholder: "svc@example.com.sandbox"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated BCP-47 locales to write.", required: false, placeholder: "de-DE, fr, zh-CN"}
+  secret_fields:
+    - {name: client_id, label: "Consumer key", help: "External Client App consumer key.", secret: true, placeholder: "3MVG9"}
+  setup_steps:
+    - "Create an External Client App with the api scope and either the Client Credentials or the JWT Bearer flow."
+  other_side: >-
+    Salesforce change detection polls published master articles and gates re-translation on a
+    per-(article,locale) source-content hash.

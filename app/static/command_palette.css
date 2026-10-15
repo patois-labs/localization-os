@@ -1,0 +1,63 @@
+/* Command palette component; Direction A tokens, no shell geometry changes. */
+.topsearch-form .search-hint[data-command-palette-open] {
+  pointer-events: auto; z-index: 1; min-width: 48px; min-height: 24px; margin: 0;
+  background: var(--panel); color: var(--text-dim); cursor: pointer;
+  transform: translateY(-50%);
+}
+/* The button already draws the hint border; the inner kbd must not draw a second one. */
+.topsearch-form .search-hint[data-command-palette-open] kbd {
+  border: 0; background: none; padding: 0; font: inherit; color: inherit;
+}
+/* Ctrl+K does nothing while the search field has focus, so dim the hint there. No opacity:
+   the hint is still a clickable button, so its text must keep 4.5:1 contrast. */
+.topsearch-form:has(input[name="q"]:focus) .search-hint[data-command-palette-open] { border-color: transparent; color: var(--muted); }
+.command-palette {
+  box-sizing: border-box; width: min(600px, calc(100vw - 32px)); max-height: 80dvh;
+  margin: 10dvh auto auto; padding: var(--space-4); overflow: auto;
+  border: 1px solid var(--input-border); border-radius: var(--radius-card);
+  background: var(--panel); color: var(--text); box-shadow: var(--elevation-overlay);
+}
+.command-palette::backdrop { background: #0008; }
+.command-palette-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.command-palette h2 { margin: 0; font-size: var(--font-size-section); }
+.command-palette button { min-height: 36px; }
+#command-palette-input { box-sizing: border-box; width: 100%; margin-top: var(--space-4); min-height: 40px; }
+.command-palette p { color: var(--text-dim); font-size: var(--font-size-caption); margin: var(--space-3) 0; }
+#command-palette-results { max-height: 48dvh; overflow-y: auto; scroll-padding: 4px; }
+.command-palette-option { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); min-height: 40px; padding: var(--space-2) var(--space-3); border-radius: var(--radius-control); cursor: pointer; overflow-wrap: anywhere; }
+.command-palette-option small { color: var(--text-dim); text-align: end; }
+.command-palette-option:hover { background: var(--panel-2); }
+.command-palette-option[aria-selected="true"] { background: var(--primary-soft); outline: 2px solid var(--ring); outline-offset: -2px; }
+.command-palette :focus-visible, .topsearch-form [data-command-palette-open]:focus-visible { outline: var(--focus-width) solid var(--ring); outline-offset: var(--focus-offset); }
+/* #564 p8: no keyboard on a phone, so the Ctrl+K hint is noise there; clicking the field still opens the search. */
+@media (max-width: 600px), (pointer: coarse) {
+  .topsearch-form .search-hint[data-command-palette-open] { display: none; }
+}
+@media (max-width: 600px) {
+  .command-palette { width: 100%; max-width: 100%; margin: 0; max-height: 100dvh; border-radius: 0 0 var(--radius-card) var(--radius-card); }
+  .command-palette button, .topsearch-form .search-hint[data-command-palette-open] { min-height: 40px; }
+  .command-palette-option { flex-wrap: wrap; }
+}
+
+/* Search dialog: grouped live results, and the /search results page. */
+.command-palette-heading { margin: var(--space-3) var(--space-3) var(--space-1); color: var(--text-dim); font-size: var(--font-size-caption); font-weight: 600; }
+.command-palette-all { font-weight: 600; }
+.command-palette-note { padding: var(--space-2) var(--space-3); color: var(--text-dim); font-size: var(--font-size-caption); }
+.search-page-form label { display: block; font-weight: 600; margin-bottom: var(--space-2); }
+.search-page-row { display: flex; gap: var(--space-2); }
+.search-page-row input { flex: 1 1 auto; min-width: 0; min-height: 40px; }
+.search-page-row button { min-height: 40px; }
+.search-message, .search-summary { margin: var(--space-4) 0 var(--space-3); overflow-wrap: anywhere; }
+.search-group-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-2); }
+.search-group-head h2 { margin: 0; font-size: var(--font-size-section); }
+.search-count { color: var(--text-dim); font-size: var(--font-size-caption); white-space: nowrap; }
+.search-hits { list-style: none; margin: 0; padding: 0; }
+.search-hits li { display: grid; gap: 2px; padding: var(--space-2) 0; border-top: 1px solid var(--border-soft); overflow-wrap: anywhere; }
+.search-hits li:first-child { border-top: 0; }
+.search-hit-title { font-weight: 600; }
+.search-hit-sub, .search-hit-detail { color: var(--text-dim); font-size: var(--font-size-caption); }
+.search-group-foot { display: flex; flex-wrap: wrap; gap: var(--space-4); margin-top: var(--space-2); }
+@media (max-width: 600px) {
+  .search-page-row { flex-direction: column; }
+  .search-page-row button { width: 100%; }
+}

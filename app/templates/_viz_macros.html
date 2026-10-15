@@ -1,0 +1,153 @@
+{# Visualization quick-wins (VIZ-RESEARCH-2026-07-21): small, reusable render
+   helpers for the TM-leverage stacked bar. New file (not _macros.html, which the
+   run-view surface owns) so this wave doesn't touch that file at all.
+
+   Band -> color convention matches the EXISTING reserved-status palette used by
+   the segment-status chips and TM-match badges elsewhere (style.css: .chip.st-mt/
+   .chip.st-new use --muted, .badge.exact uses --success, .badge.fuzzy uses --warn)
+   - no new hues invented for this wave. #}
+
+{# The "new" band (tm_match_pct is None, target present) is labeled "No TM match"
+   everywhere below - NOT "New (MT)". It covers ANY translated segment with no
+   cited TM reference: net-new MT AND human-typed/edited/imported segments alike
+   (none of those write tm_match_pct - see app/services/tm.py::leverage_bands's
+   docstring). Labeling it as machine-translated would misreport real translator
+   work as MT, including in the aria-label/sr-only text an accessibility user
+   relies on verbatim - keep this wording in sync if the band ever grows a truer
+   split. #}
+{% macro tm_leverage_bar(bands, total, heading=none) %}
+{% if total %}
+<div class="tmlev">
+  {% if heading %}<p class="tmlev-heading">{{ heading }}</p>{% endif %}
+  <div class="tmlev-bar" role="img"
+       aria-label="TM leverage: {{ bands.exact }} exact match, {{ bands.fuzzy }} fuzzy match, {{ bands.new }} no TM match, {{ bands.untranslated }} untranslated, out of {{ total }} segments">
+    {% for key, label, cls in [('exact', 'Exact match', 'tmlev-exact'),
+                                ('fuzzy', 'Fuzzy match', 'tmlev-fuzzy'),
+                                ('new', 'No TM match', 'tmlev-new'),
+                                ('untranslated', 'Untranslated', 'tmlev-untranslated')] %}
+      {% set v = bands[key] %}
+      {% if v %}
+      <div class="tmlev-seg {{ cls }}" style="width:{{ (100.0 * v / total)|round(2) }}%"
+           title="{{ label }}: {{ v }} ({{ (100 * v / total)|round }}%)"></div>
+      {% endif %}
+    {% endfor %}
+  </div>
+  <ul class="tmlev-legend">
+    <li class="tmlev-key tmlev-exact"><span class="tmlev-swatch"></span>Exact match
+      <b class="data-mono">{{ bands.exact }}</b></li>
+    <li class="tmlev-key tmlev-fuzzy"><span class="tmlev-swatch"></span>Fuzzy match
+      <b class="data-mono">{{ bands.fuzzy }}</b></li>
+    <li class="tmlev-key tmlev-new"><span class="tmlev-swatch"></span>No TM match
+      <b class="data-mono">{{ bands.new }}</b></li>
+    <li class="tmlev-key tmlev-untranslated"><span class="tmlev-swatch"></span>Untranslated
+      <b class="data-mono">{{ bands.untranslated }}</b></li>
+  </ul>
+  <p class="sr-only">
+    TM leverage out of {{ total }} total segments: {{ bands.exact }} exact match,
+    {{ bands.fuzzy }} fuzzy match, {{ bands.new }} translated with no TM match
+    (machine-translated, human-typed/edited, or imported), {{ bands.untranslated }}
+    not yet translated.
+  </p>
+</div>
+{% else %}
+<p class="muted small">No segments yet.</p>
+{% endif %}
+{% endmacro %}
+
+
+{# CV-5: accessible spend/budget METER (role="img" + aria-label), reusing the
+   existing .prog/.prog-bar track + .spend-meter* classes the Setup-AI spend-cap
+   card already ships - no new hues, and the sighted figure/percent is echoed
+   verbatim in the aria-label so a screen-reader user reads the same numbers.
+
+   `figure`   the visible headline (e.g. "$42.00 / $100.00 cap" or
+              "42,000 / 500,000 tokens").
+   `fill_pct` the bar fill 0..100 (caller pre-floors/clamps - meter_state already
+              does for the $ meter; the token meter floors/clamps below).
+   `aria`     the full screen-reader sentence (never omit - this IS the a11y text).
+   `over`     True flips the fill to the danger colour (cap reached / over budget).
+   `tick_pct` optional 0..100 cap marker (the $ meter's auto-pause tick); omit for
+              a plain used/limit meter.
+   `badge`    optional trailing badge HTML (already-escaped snippet built by the
+              caller from a fixed vocabulary - never user text).
+   `tick_title` the hover title for the tick marker - its MEANING differs per caller
+              (the AI-spend meter's tick is the auto-pause cap; the CV-2 project meter's
+              tick is committed-but-unpaid spend), so it must never be hardcoded (M5). #}
+{% macro budget_meter(figure, fill_pct, aria, over=false, tick_pct=none, badge=none, tick_title="Cap - auto-pause threshold") %}
+<div class="spend-meter">
+  <p class="spend-meter-figure data-mono">{{ figure }}</p>
+  <div class="spend-meter-track" role="img" aria-label="{{ aria }}">
+    <div class="prog">
+      <div class="prog-bar{% if over %} spend-danger{% endif %}" style="width:{{ fill_pct }}%"></div>
+    </div>
+    {% if tick_pct is not none %}
+    <span class="spend-meter-tick" style="left:{{ tick_pct }}%"
+          title="{{ tick_title }}"></span>
+    {% endif %}
+  </div>
+  {% if badge %}<p class="spend-meter-legend small">{{ badge|safe }}</p>{% endif %}
+</div>
+{% endmacro %}
+
+
+{# CV-5: a COMPACT accessible token-usage bar for a table cell (department budgets).
+   `used`/`limit` are token counts; a limit <= 0 means UNLIMITED (no cap) and renders
+   as muted text with no bar (honest - there is nothing to fill against). Otherwise a
+   small role="img" bar with the used/limit/percent in its aria-label; the fill is
+   floored and clamped to 100, coloured danger at/over the cap. #}
+{% macro usage_bar(label, used, limit) %}
+{% if limit and limit > 0 %}
+{% set pct = (100.0 * used / limit) %}
+{% set fill = ([pct|round(0, 'floor'), 100]|min)|int %}
+{# L8: the role="img" wrapper is the BAR only (its aria-label carries the full reading);
+   the visible % sits OUTSIDE it so assistive tech isn't asked to swallow inner text. #}
+<div class="usage-bar">
+  <div class="prog" role="img"
+       aria-label="{{ label }} budget: {{ '{:,}'.format(used) }} of {{ '{:,}'.format(limit) }} tokens used ({{ pct|round|int }}%){% if used >= limit %} - over budget{% endif %}">
+    <div class="prog-bar{% if used >= limit %} spend-danger{% endif %}" style="width:{{ fill }}%"></div>
+  </div>
+  <span class="usage-bar-pct small data-mono">{{ pct|round|int }}%</span>
+</div>
+{% else %}
+<span class="muted small">unlimited</span>
+{% endif %}
+{% endmacro %}
+
+
+{# CV-1: the 7-band WORD-based TM-leverage bar (the real vendor-cost model, surfaced
+   project-wide). `rows` is vendor_cost.estimate_band_rows(estimate) - one row per band
+   in best-leverage-first order, each {band, label, words, segments, covered, billable}.
+   `total_words` is estimate.total_words. Accessible: the role="img" bar's aria-label is
+   the SINGLE place the per-band figures are announced (L8: the sr-only note below adds
+   only the covered-vs-billable EXPLANATION, never re-reading the numbers). Number
+   formatting is unified ({:,}) across aria-label, legend and title. The covered bands
+   (reps/context/exact) share the leverage-green family, the three fuzzy tiers the amber
+   family, `new` the muted family - three hue families, seven labelled bands, legible
+   without inventing seven hues. #}
+{% macro leverage7_bar(rows, total_words) %}
+{% if total_words and total_words > 0 %}
+<div class="lev7">
+  <div class="lev7-bar" role="img"
+       aria-label="Word-based TM leverage over {{ '{:,}'.format(total_words) }} source words: {% for r in rows %}{{ '{:,}'.format(r.words) }} {{ r.label }}{% if not loop.last %}, {% endif %}{% endfor %}.">
+    {% for r in rows %}
+      {% if r.words %}
+      <div class="lev7-seg lev7-{{ r.band }}" style="width:{{ (100.0 * r.words / total_words)|round(2) }}%"
+           title="{{ r.label }}: {{ '{:,}'.format(r.words) }} words ({{ (100 * r.words / total_words)|round }}%)"></div>
+      {% endif %}
+    {% endfor %}
+  </div>
+  <ul class="lev7-legend">
+    {% for r in rows %}
+    <li class="lev7-key lev7-{{ r.band }}"><span class="lev7-swatch"></span>{{ r.label }}
+      <b class="data-mono">{{ '{:,}'.format(r.words) }}</b></li>
+    {% endfor %}
+  </ul>
+  <p class="sr-only">
+    The repetitions, context and exact bands are already leveraged (no new human
+    translation); the three fuzzy tiers and the new band are the post-edit scope.
+  </p>
+</div>
+{% else %}
+<p class="muted small">No segmented content yet - no word-based leverage to show.</p>
+{% endif %}
+{% endmacro %}

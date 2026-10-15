@@ -1,0 +1,69 @@
+# Factory spec for the REBUILT Zendesk Guide connector (connector parity, un-archived 2026-10-10).
+# `python scripts/factory/generate.py check scripts/factory/specs/zendesk.yaml` must PASS.
+# Zendesk predates the factory, so this spec only records the parametric touchpoints; the
+# module body is hand-written (see app/services/connectors/zendesk.py).
+
+connector:
+  kind: zendesk
+  name: Zendesk Guide
+  class_name: ZendeskConnector
+  icon: "🎫"
+  cat: "Knowledge base / help center"
+  blurb: >-
+    Translate Zendesk Guide (Help Center) articles into any language. Each translation is
+    written back as a per-locale translation object (draft by default), so the source
+    article is never overwritten.
+  docs_url: "https://developer.zendesk.com/api-reference/help_center/help-center-api/translations/"
+  supports_oauth: false
+  archived: false
+
+  topology: T2
+  auth: [api_key, oauth3lo]
+  api_version: "v2"
+  rich_text: html
+  regions: subdomain
+  change_signals:
+    webhook_sig: hmac_sha256_b64
+    poll_field: edited_at
+    stale_flag: outdated_locales
+    thin_payload: true
+  anti_loop_label: true
+
+  retry_noun: article
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<article id>"
+  api_docstring: >-
+    Translate Zendesk Guide article(s) on the fly into one or more locales, writing each
+    back as the article's per-locale translation object (T2). Article ids are digits only
+    and must sit inside the connection's configured section or category.
+
+  article_noun_phrase: "a Zendesk"
+  cli_parser_help: >-
+    Translate Zendesk Guide articles into the connection's locales as per-locale
+    translation objects.
+
+  item_units:
+    scan: "your Zendesk Guide articles"
+    becomes: "the article's per-locale translation object (written as a draft by default; a held title or body keeps its stored value)"
+
+  help_row_body: "Translate Zendesk Guide article(s) as per-locale translation objects. Body: <code>article_ids</code>/<code>article_id</code> (digits only, inside the connection's section or category), <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Translate Zendesk Guide articles into the connection's locales as per-locale translation objects (T2). `--article-ids` are digits only and must sit inside the connection's section or category."
+
+  cli_expected_desc: "translate Zendesk Guide articles into per-locale translation objects (T2 SubResourceStrategy)"
+
+  config_fields:
+    - {name: subdomain, label: "Zendesk subdomain", help: "Your Help Center subdomain, the 'acme' in acme.zendesk.com.", placeholder: "acme"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated Guide locales to create (must be enabled in Guide).", required: false, placeholder: "de, fr, es"}
+  secret_fields:
+    - {name: api_token, label: "API token", help: "Admin Center, Apps and integrations, APIs, Zendesk API, add an API token.", secret: true, placeholder: "abcd1234"}
+  setup_steps:
+    - "Enable Token access in Admin Center and add an API token."
+    - "Enable every target locale in Guide, Admin, Localization."
+  other_side: >-
+    Change detection combines an article.published webhook, a nightly incremental-export
+    sweep (edited_at watermark) and the outdated_locales stale flags.

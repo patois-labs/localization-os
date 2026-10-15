@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_form_errors.html" as fe %}
+{% block title %}Remove locale{% endblock %}
+{% block content %}
+<div class="project-confirmation">
+
+{% if preview.mode == 'stop' %}
+{% set confirmation_title %}Stop locale {{ preview.locale }} on {{ preview.project_name }}{% endset %}
+{{ m.page_header(confirmation_title) }}
+<div class="confirmation-notice" id="stop-locale-notice">
+  <p class="muted">This project is connected to a content source. The language stops at the next run:
+  runs no longer pull, translate or write {{ preview.locale }}. Nothing is deleted. Its segments and
+  translations stay readable and exportable, translation memory and glossary entries stay, and
+  nothing already written to the external system is touched. Its claims on shared items are released,
+  so another project may take the language. Add it again later to resume it.</p>
+</div>
+{% if preview.blocked %}
+<section class="card">
+  <h2>Cannot stop this locale</h2>
+  <p class="error">{{ preview.blocked_reason }}</p>
+  <p><a class="btnlink" href="/projects/{{ preview.project_id }}">Back to project</a></p>
+</section>
+{% else %}
+<section class="card">
+  <h2>What stays</h2>
+  <table class="table">
+    <tbody>
+      {% for k, v in preview.preserves.items() %}
+        <tr><td>{{ k.replace('_', ' ') }}</td><td><strong>{{ v }}</strong></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <form method="post" action="/projects/{{ preview.project_id }}/remove-locale" class="form mt">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="locale" value="{{ preview.locale }}" />
+    <button class="danger-btn" type="submit">Stop {{ preview.locale }} at the next run</button>
+  </form>
+  <p class="mt"><a class="btnlink" href="/projects/{{ preview.project_id }}">Cancel</a></p>
+</section>
+{% endif %}
+{% else %}
+{% set confirmation_title %}Remove locale {{ preview.locale }} from {{ preview.project_name }}{% endset %}
+{{ m.page_header(confirmation_title) }}
+<div class="confirmation-notice">
+  <p class="muted">This removes the locale and its segments (including any post-edit
+  work). Translation memory and glossary entries are kept, so re-adding the locale
+  later restores its TM matches.</p>
+  <p class="muted">A locale can only be removed BEFORE it has been translated. Once
+  any content for it has been translated (a segment has target text, or a
+  translation run has started), that locale's documents are permanent and cannot be
+  removed.</p>
+  {# a11y T7: a ?err= error renders once, as a sentence, in the summary at the top of
+     main (base.html + _form_errors.html), never as a raw code here. #}
+</div>
+
+{% if preview.blocked %}
+<section class="card">
+  <h2>Cannot remove this locale</h2>
+  <p class="error">{{ preview.blocked_reason }}</p>
+  <p><a class="btnlink" href="/projects/{{ preview.project_id }}">Back to project</a></p>
+</section>
+{% else %}
+<section class="card">
+  <h2>What will be deleted</h2>
+  <table class="table">
+    <tbody>
+      {% for k, v in preview.deletes.items() %}
+        <tr><td>{{ k.replace('_', ' ') }}</td><td><strong>{{ v }}</strong></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <h2>What is preserved</h2>
+  <table class="table">
+    <tbody>
+      {% for k, v in preview.preserves.items() %}
+        <tr><td>{{ k.replace('_', ' ') }}</td><td><strong>{{ v }}</strong></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <form method="post" action="/projects/{{ preview.project_id }}/remove-locale" class="form mt">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="locale" value="{{ preview.locale }}" />
+    <label>Type the locale code <strong>{{ preview.locale }}</strong> to confirm
+      <input type="text" name="confirm_locale" id="remove-locale-confirm" autocomplete="off" required{{ fe.invalid_attrs(request, 'remove-locale-confirm') }} /></label>
+    <button class="danger-btn" type="submit">Remove this locale</button>
+  </form>
+  <p class="mt"><a class="btnlink" href="/projects/{{ preview.project_id }}">Cancel</a></p>
+</section>
+{% endif %}
+{% endif %}
+
+</div>
+{% endblock %}

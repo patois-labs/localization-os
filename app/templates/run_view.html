@@ -1,0 +1,707 @@
+{% extends "base.html" %}
+{# Work surface: full width, not the centered list column (Console). #}
+{% set wide_page = true %}
+{% import "_macros.html" as m %}
+{% import "_review_runs_status.html" as rs %}
+{% block title %}Workflow run{% endblock %}
+{% block content %}
+<div class="review-runs-page">
+{% if run and run.status == "queued" %}
+<p class="muted" data-queued-run="{{ run.id }}">Waiting for capacity. This page updates automatically when the run starts.</p>
+<script src="/static/queuedrun.js" defer></script>
+{% endif %}
+
+<p><a href="/documents/{{ doc.id }}" class="back"><span aria-hidden="true">←</span> {{ doc.filename }}</a></p>
+
+{# feat/run-doc-xliff-surfaces round 2: surface the OUTCOME of a hand-off return posted from
+   this page. The wire-less upload form below posts next=/runs/{id}, so a refusal (wrong file,
+   duplicate id, source-echo, expired/closed leg, empty payload …) or a success lands back here
+   with ?err=<quoted> / ?saved=1 - mirror the vendor page's banner so the operator SEES it
+   rather than the refusal vanishing silently. `request` is in this template's context. #}
+{# a11y T7: a ?err= error renders once, as a sentence, in the summary at the top of
+   main (base.html + _form_errors.html), never as a raw code here. #}
+{% if request.query_params.get('saved') %}
+  <p class="ok">Return accepted - the vendor's content was admitted and the run resumes.</p>
+{% endif %}
+
+<section class="card">
+  {{ m.page_header("Run: " ~ wf.name) }}
+  {% if run and run.context and run.context.get('qe_steps') %}
+  <details><summary>QE and auto-fix counts by step visit</summary>
+    {% for visit in run.context.get('qe_steps') %}
+    <h3>{{ visit.step_name }} (visit {{ visit.visit }})</h3>
+    <p>QE: {% for key, value in visit.qe.items() %}{{ key }}={{ value }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
+    <p>Auto-fix: {% for key, value in visit.autofix.items() %}{{ key }}={{ value }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
+    {% endfor %}
+  </details>
+  {% endif %}
+  <p class="muted">
+    Document: {{ doc.filename }} · Target: <strong>{{ locale }}</strong>
+    {# Issue #602: the badge sits in a slot the live script rewrites when the run ends; the
+       localized labels of the end states ride along so the page never invents English. #}
+    {% if run %}{% set end_labels = {} %}{% for k in ['completed', 'failed', 'failed_budget', 'cancelled'] %}{% set lk = 'page.jobs.status_' ~ k %}{% set lv = t(request, lk) %}{% if end_labels.update({k: (m.status_label(k) if lv == lk else lv)}) %}{% endif %}{% endfor %} · Status: <span id="runStatusBadge" data-labels='{{ end_labels | tojson }}'>{{ rs.localized_status_badge(request, run.status) }}</span>{% endif %}
+  </p>
+  <p class="muted">Plan: {% for s in steps %}<span class="chip">{{ s.name or s.step_type }}</span>{% if not loop.last %} → {% endif %}{% endfor %}</p>
+  {# GitHub #106: the reason a RECONCILER put this run in its terminal state (a boot
+     reconcile after a crash, the staleness sweep, an operator cancel). Those paths write no
+     StepRun, so without this the page showed a bare status badge and an empty timeline. #}
+  {% if run_reason %}
+  <p class="muted" id="runReason"><strong>Reason:</strong> {{ run_reason.text }} <span class="chip">{{ run_reason.code }}</span></p>
+  {% endif %}
+  {# Run notes (e.g. a pinned glossary skipped because it does not cover this run's
+     languages). Muted, not error styling unless the run actually failed (mirrors
+     advanced_run.html). #}
+  {% if run and run.notes %}<p class="{{ 'error' if run.status in ('failed','failed_budget') else 'muted' }}">{{ run.notes }}</p>{% endif %}
+  {# GitHub #101: the last in-step progress the run published, for a page opened mid-run or
+     reloaded after the live stream closed; the SSE `progress` event then updates this same
+     line IN PLACE (see renderProgress below) so it never loses its liveness half.
+     ALWAYS rendered (hidden when the run has published nothing) so the live stream has a
+     home to write into on a page that was opened before the first tick. The data-*
+     attributes seed the client renderer with the server's view. #}
+  <p class="muted" id="runProgress"
+     data-done="{{ run_progress.done if run_progress else 0 }}"
+     data-total="{{ run_progress.total if run_progress else 0 }}"
+     data-unit="{{ run_progress.unit if run_progress else '' }}"
+     data-step="{{ run_progress.step if run_progress else '' }}"
+     data-step-index="{{ run_progress.step_index if run_progress else 0 }}"
+     data-at="{{ run_progress.at if (run_progress and run_progress.at) else '' }}"
+     {% if not (run_progress and run_progress.total) %}hidden{% endif %}></p>
+  <p id="runStatus" class="muted"></p>
+  <p id="runAnnounce" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+  <p id="runAlert" class="sr-only" role="alert" aria-atomic="true"></p>
+  {# Run-cancel (AUDIT BUG-A205): abort an in-flight run. Only rendered for a
+     pending/running/paused run to a caller who can_write (server re-checks). A confirm
+     guards the terminal, non-refunding action; cancelling also unblocks re-authoring. #}
+  {% if can_cancel %}
+  <form method="post" action="/runs/{{ run.id }}/cancel" class="form inline" id="runCancelForm"
+        data-action-confirm="Cancel this run? It becomes terminal and cannot be resumed (a new run can be launched). Any open vendor leg is closed; already-spent cost is not refunded.">
+    {% include "_csrf.html" %}
+    <button type="submit" class="danger">Cancel run</button>
+  </form>
+  {% endif %}
+</section>
+
+{# Run-level warnings. #}
+{% if (run.context or {}).get("tm_offers") %}
+<p>{{ run.context.tm_offers.message }} This is an offer, not a guarantee. If a string must be exact, FULL_TEXT is the wrong mode.</p>
+{% endif %}
+{% set _tm_sum = (run.context or {}).get("tm_match_summary") %}
+{% if _tm_sum and _tm_sum.total %}
+<p id="run-tm-summary" class="muted">TM match: <strong>{{ _tm_sum.filled|int }}</strong> of {{ _tm_sum.total|int }} segments filled from the translation memory{% if _tm_sum.relocked %}, {{ _tm_sum.relocked|int }} already had the exact TM text{% endif %}; {{ _tm_sum.unmatched|int }} not matched and sent on to the next step.</p>
+{% endif %}
+{% if run_warnings %}
+<section class="card" id="run-warnings">
+  <h2>Warnings</h2>
+  <ul>
+    {% for w in run_warnings %}
+    <li>{{ w.message }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<nav class="review-runs-sections" aria-label="{{ t(request, 'page.review_runs.nav_label') }}">
+  {% if steps %}<a href="#runGraphCard">How this run went</a>{% endif %}
+  <a href="#rr-steps">Steps</a>
+  {% if run and run.status == 'paused' and not external_paused %}<a href="#rr-review">Human review</a>{% endif %}
+</nav>
+{% if steps %}
+{% include "_run_graph_card.html" %}
+{% endif %}
+
+<section class="card" id="rr-steps">
+  <h2>Steps</h2>
+  {# GitHub #340: the 'Highlight differences' view - what each step changed, segment
+     by segment, word-level (ins/del, unchanged segments collapsed). Offered once the
+     run has more than one recorded step; the page picks a sensible default pair. #}
+  {% if not live and step_runs|length > 1 %}
+  <p class="muted"><a href="/runs/{{ run.id }}/step-diff">Highlight differences between steps</a> (segment-level, word-level diff)</p>
+  {% endif %}
+  {% if can_see_cost and not live and run_cost_usd is not none %}
+    <p class="muted small" id="runSpendTotal">Run total: <strong>${{ '%.4f'|format(run_cost_usd) }}</strong>{% if run_tokens_in is not none or run_tokens_out is not none %} · {{ (run_tokens_in or 0) + (run_tokens_out or 0) }} tokens ({{ run_tokens_in or 0 }} in / {{ run_tokens_out or 0 }} out){% endif %}</p>
+  {% endif %}
+  {# Wave C (decision 5): AI + Human = total spend, with the human estimate/actual label.
+     Only shown once a vendor leg contributes human spend (byte-identical otherwise). #}
+  {% if can_see_cost and not live and spend and spend.human_leg_count %}
+    <p class="muted small" id="runSpendSplit" title="AI = model spend; Human = vendor post-edit ({{ spend.human_spend_source }})">
+      AI <strong>${{ '%.4f'|format(spend.ai_spend_usd) }}</strong>
+      + Human <strong>${{ '%.2f'|format(spend.human_spend_usd) }}</strong>
+      <span class="chip">{{ spend.human_spend_source }}</span>
+      = <strong>${{ '%.4f'|format(spend.total_spend_usd) }}</strong>
+    </p>
+  {% endif %}
+  {#- T5 (a11y, WCAG 3.1.2): a translate-type step's output is target text and carries the
+      run locale's lang / dir; an LQA step's does not. The live stream reads the same
+      facts from the data-* attributes (the step handler below). text_locale is "" when a
+      legacy run's document has several target locales (no guess). -#}
+  {% set run_lang = text_locale|langattrs %}
+  <div id="stepLog" data-lang="{{ text_locale|langtag }}" data-dir="{{ text_locale|langdir }}" data-text-steps="{{ target_text_step_types }}" data-output-cap="{{ step_output_cap }}">
+    {% if not live %}{% for row in step_rows %}{% set sr = row.sr %}
+      <div class="runstep">
+        <div class="step-head">
+          <strong>Step {{ loop.index }}</strong>
+          {{ m.status_badge(row.ds_value, row.ds_label) }}
+          {% if sr.provider_used %}<span class="muted">{{ sr.provider_used }}{% if sr.model_used %} · {{ sr.model_used }}{% endif %}</span>{% endif %}
+          {% if sr.attempts and sr.attempts > 1 %}<span class="muted data-mono" title="provider attempts (retries + failover) for this step">· {{ sr.attempts }} attempts</span>{% endif %}
+          {% if sr.latency_ms %}<span class="muted data-mono">· {{ sr.latency_ms }}ms</span>{% endif %}
+          {% if can_see_cost and sr.cost_usd is not none %}<span class="muted data-mono" title="recorded spend for this step">· ${{ '%.4f'|format(sr.cost_usd) }}{% if sr.tokens_in is not none or sr.tokens_out is not none %} · {{ (sr.tokens_in or 0) + (sr.tokens_out or 0) }} tok{% endif %}</span>{% endif %}
+          {# run-190 Item C: the per-step failure SHAPE (metadata only) so the operator sees WHY a step failed without an SSH into the host Ledger. #}
+          {% if sr.finish_reason %}<span class="muted data-mono" title="provider finish reason">· finish={{ sr.finish_reason }}</span>{% endif %}
+          {% if sr.error_class %}<span class="muted data-mono" title="provider error class">· {{ sr.error_class }}</span>{% endif %}
+          {% if sr.output_chars is not none %}<span class="muted data-mono" title="translation characters produced">· {{ sr.output_chars }} chars</span>{% endif %}
+          {% if sr.error %}{% if sr.status == 'failed' %}<span class="badge warn">Failed</span><p class="error-inline">{{ sr.error }}</p>{% else %}<p class="muted small step-note">{{ sr.error }}</p>{% endif %}{% endif %}
+        </div>
+        {#- #339: the FULL output in a scrollable, focusable, labelled region (no silent cut).
+            Past step_output_cap the page renders the first cap characters and SAYS so, with a
+            link to the full-text endpoint. -#}
+        {% if sr.output_text %}{% set out_n = sr.output_text|length %}
+        <pre class="prompt step-output" tabindex="0" role="region" aria-label="Output of step {{ row.step_label }}"{% if row.target_text %}{{ run_lang }}{% endif %}>{{ sr.output_text|runtext(step_output_cap)|tagchips }}</pre>
+        {% if out_n > step_output_cap %}<p class="muted small step-note">Showing the first {{ '{:,}'.format(step_output_cap) }} of {{ '{:,}'.format(out_n) }} characters. <a href="/runs/{{ run.id }}/steps/{{ sr.id }}/output.json?format=text" target="_blank" rel="noopener">Show full text ({{ '{:,}'.format(out_n) }} characters)</a></p>{% endif %}{% endif %}
+      </div>
+    {% endfor %}{% endif %}
+  </div>
+</section>
+
+{# MED-2: a DEAD_LETTER / ESCALATED external pause is human-resumable, so it falls to the
+   human-review card below -- but that card alone gives ZERO context. This state-only banner
+   (rendered for EVERYONE, including non-admins: it names the state + consequence and carries
+   NO vendor identity / host / cost) sits above the card so the reviewer knows WHY they are
+   being asked to resume with machine output only. #}
+{% if run and run.status == 'paused' and external_pause_state in ('dead_letter', 'escalated') %}
+<section class="card">
+  <h2>External vendor step - escalated to human review</h2>
+  <p class="muted">The external vendor never {% if external_pause_state == 'dead_letter' %}received{% else %}returned{% endif %} this work
+  ({{ 'dead-lettered' if external_pause_state == 'dead_letter' else 'expired' }}), so it was escalated to a human. Resuming here
+  continues the workflow with the <strong>machine output only</strong> - no vendor post-edit
+  will arrive. A person must decide whether that is acceptable before approving.</p>
+</section>
+{% endif %}
+
+{% if run and run.status == 'paused' and external_paused %}
+<section class="card" id="vendor-handoff">
+  <h2>External vendor step{% if external_pause_state == 'wedged' %} - awaiting redrive{% elif external_pause_state == 'retry_wait' %} - retrying{% endif %}</h2>
+  {% if external_pause_state == 'wedged' %}
+  <p class="muted">This run's external vendor step returned its content, but the run did not
+  resume automatically (a wedge). It cannot be approved or resumed by hand - that would
+  overwrite the vendor's content with the pre-dispatch source. Recover it with
+  <code>vendor redrive --dispatch-id &lt;id&gt;</code>, which continues the run without
+  re-committing anything.</p>
+  {% elif external_pause_state == 'retry_wait' %}
+  <p class="muted">This run's external dispatch hit a transient delivery issue and is being
+  retried automatically on a backoff - it cannot be approved or resumed by hand while the
+  package is still trying to go out.</p>
+  {% elif wireless_handoff and wireless_handoff.state in ('dispatched', 'quoted') and not feature_enabled('vendors') %}
+  {# ffadmin Wave 3 (LOW-1) DELIBERATE EXCEPTION: a historical run keeps showing the vendor
+     FACT of a parked external dispatch (forensic record - the reads-stay-up principle), but
+     with Vendors switched off the hand-off renders as PLAIN TEXT - no live download / upload
+     / link into the removed /vendors surface. #}
+  <p class="muted">This run is parked on an external vendor dispatch (dispatch
+    #{{ wireless_handoff.dispatch_id }}). Vendors are switched off
+    (<code>vendors_enabled=0</code>) - the download / upload hand-off is unavailable until
+    Vendors is re-enabled.</p>
+  {% elif wireless_handoff and wireless_handoff.state == 'dispatched' %}
+  {# Wire-less (file-exchange, e.g. `manual`) DISPATCHED leg: delivery IS the operator
+     downloading the leg's XLIFF and the return IS a guarded upload, so the operator acts RIGHT
+     HERE. Both controls point at the EXISTING admin-gated /vendors/{vid}/dispatches/{did}
+     routes; the hidden `next` sends the redirect back to this run. Admin-only (the route
+     computed it). The upload form renders ONLY for DISPATCHED - a QUOTED leg's return is
+     REFUSED by assert_leg_admitting (round-2 finding #2), so it gets the quote-gate card below
+     instead of a doomed upload box. #}
+  <p class="muted">Manual delivery: download the XLIFF, translate/post-edit it in your CAT tool
+  (OmegaT / Trados / Weblate), then upload the finished file here - this is a wire-less vendor
+  leg, so its return arrives by hand rather than over the wire.</p>
+  <p>
+    <a class="btnlink small"
+       href="/vendors/{{ wireless_handoff.vendor_id }}/dispatches/{{ wireless_handoff.dispatch_id }}/xliff"><span aria-hidden="true">⤓</span> Download XLIFF (vendor dispatch #{{ wireless_handoff.dispatch_id }})</a>
+  </p>
+  <form method="post"
+        action="/vendors/{{ wireless_handoff.vendor_id }}/dispatches/{{ wireless_handoff.dispatch_id }}/return"
+        class="form" enctype="multipart/form-data">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="next" value="/runs/{{ run.id }}" />
+    <label>Upload the finished return (JSON or XLIFF) for dispatch {{ wireless_handoff.dispatch_id }}
+      <textarea name="payload" rows="3" placeholder='paste the return contract JSON, or choose a file below'></textarea>
+    </label>
+    <label class="small">…or choose a file (.json or .xlf) <input type="file" name="file" accept=".json,application/json,.xlf,.xliff,application/xml,application/xliff+xml" /></label>
+    <button type="submit" data-busy-label="{{ t(request, 'busy.uploading') }}">Upload return</button>
+  </form>
+  {% elif wireless_handoff and wireless_handoff.state == 'quoted' %}
+  {# Wire-less QUOTED leg (round-2 finding #2): this dispatch is quote-gated -
+     assert_leg_admitting REFUSES any return until the quote is approved and the leg moves to
+     DISPATCHED, so an upload box here would be a doomed form. Give it an HONEST card: the copy
+     names the quote gate, the Download-XLIFF link stays (defensible - the operator may want to
+     scope the file), and the quote controls live on the vendor page (record / approve /
+     decline), linked rather than duplicated. #}
+  <p class="muted">This dispatch is quote-gated - the vendor's quote must be recorded and
+  approved before work starts. Until then no return can be admitted; once the quote is approved
+  the leg moves to DISPATCHED and the download / upload hand-off appears here.</p>
+  <p>
+    <a class="btnlink small"
+       href="/vendors/{{ wireless_handoff.vendor_id }}/dispatches/{{ wireless_handoff.dispatch_id }}/xliff"><span aria-hidden="true">⤓</span> Download XLIFF (vendor dispatch #{{ wireless_handoff.dispatch_id }})</a>
+  </p>
+  <p class="muted small">Record or approve the quote on the
+    <a href="/vendors/{{ wireless_handoff.vendor_id }}">vendor page</a>.</p>
+  {% else %}
+  <p class="muted">This run is paused awaiting a return from an external vendor. Its content
+  re-enters through the vendor return path (webhook / poll / manual re-upload on the vendor
+  page) - it cannot be approved or resumed by hand here.</p>
+  {% endif %}
+</section>
+{% elif run and run.status == 'paused' %}
+<section class="card" id="rr-review">
+  <h2>Human review</h2>
+  <p class="muted">This step pauses the workflow for human post-editing. Edit the text and resume to run the remaining steps.</p>
+  <form method="post" action="/runs/{{ run.id }}/resume" class="form">
+    {% call m.form_section('rr-review-fields', 'Human review') %}
+    {% include "_csrf.html" %}
+    <input type="hidden" name="locale" value="{{ locale }}" />
+    <label>Text under review
+      <textarea name="edited_text" rows="10"{{ run_lang }}>{{ step_runs[-1].input_text if step_runs else '' }}</textarea>
+    </label>
+    <button type="submit" data-busy-label="{{ t(request, 'busy.resuming') }}">Approve &amp; resume</button>
+    {% endcall %}
+  </form>
+</section>
+{% endif %}
+
+{# Wave C (interop R5/R6): the per-leg vendor panel - every dispatch leg of this run,
+   parked or historical. NEVER renders the claim token, secret, or full endpoint URL
+   (host only, leg_to_dict's discipline). #}
+{% if vendor_legs %}
+<section class="card">
+  <h2>Vendor dispatch legs</h2>
+  {% for leg in vendor_legs %}
+  <div class="runstep">
+    <div class="step-head">
+      <strong>#{{ leg.id }} · {{ leg.vendor_name or ('vendor ' ~ leg.vendor_id) }}</strong>
+      <span class="badge{% if leg.status == 'dead_letter' %} danger{% elif leg.status in ('escalated','retry_wait') %} paused{% elif leg.status == 'returned' %} ok{% endif %}">{{ leg.status }}</span>
+      <span class="muted">{{ leg.target_locale }}</span>
+      {% if leg.endpoint_host %}<span class="muted data-mono">· {{ leg.endpoint_host }}</span>{% endif %}
+      {% if leg.protocol and leg.protocol != 'native' %}<span class="chip">{{ leg.protocol }}</span>{% endif %}
+    </div>
+    <p class="muted small">
+      {{ leg.segment_count }} segment(s) · {{ leg.word_count }} word(s) ·
+      returned {{ leg.returned_ids }}/{{ leg.dispatched_ids }}{% if leg.outstanding_ids %} ({{ leg.outstanding_ids }} outstanding){% endif %}
+      · est <strong>${{ '%.2f'|format(leg.estimate_cost_usd or 0) }}</strong>{% if leg.actual_cost_usd is not none %} · actual <strong>${{ '%.2f'|format(leg.actual_cost_usd) }}</strong>{% else %} · actual <span class="muted">pending</span>{% endif %} {{ leg.estimate_currency }}
+    </p>
+    <p class="muted small">
+      {% if leg.dispatched_at %}dispatched {{ leg.dispatched_at[:16].replace('T',' ') }}{% endif %}
+      {% if leg.expires_at %} · expires {{ leg.expires_at[:16].replace('T',' ') }}{% endif %}
+      {% if leg.returned_at %} · returned {{ leg.returned_at[:16].replace('T',' ') }}{% endif %}
+      {% if leg.escalated_at %} · escalated {{ leg.escalated_at[:16].replace('T',' ') }}{% endif %}
+    </p>
+    {% if leg.status == 'retry_wait' %}
+      <p class="muted small">Transient dispatch failure - retry {{ leg.attempt_count }} scheduled{% if leg.next_attempt_at %} for {{ leg.next_attempt_at[:16].replace('T',' ') }}{% endif %}.{% if not outbound_sync_enabled %} <span class="badge warn">retries paused - outbound sync is disabled</span>{% endif %}</p>
+    {% elif leg.status == 'dead_letter' %}
+      <p class="muted small">Dead-lettered after {{ leg.attempt_count }} attempt(s); escalated to human review.</p>
+    {% endif %}
+    {% if leg.last_error %}<p class="muted small step-note" title="sanitized transport error">{{ leg.last_error }}</p>{% endif %}
+    {% if leg.band_rows %}
+    <details>
+      <summary class="muted small">TM-leverage band breakdown</summary>
+      <table class="grid">
+        <thead><tr><th>Band</th><th>Segments</th><th>Words</th><th>Cost</th><th>Scope</th></tr></thead>
+        <tbody>
+          {% for r in leg.band_rows %}
+          <tr><td>{{ r.label }}</td><td class="data-mono">{{ r.segments }}</td><td class="data-mono">{{ r.words }}</td><td class="data-mono">${{ '%.2f'|format(r.cost) }}</td><td class="muted">{{ 'covered' if r.covered else 'billable' }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if live %}
+<section class="card" id="finalCard" style="display:none">
+  <h2>Final output</h2>
+  <pre class="prompt" id="finalText"{{ run_lang }}></pre>
+</section>
+
+<script src="/static/sse.js?v=1"></script>
+<script nonce="{{ csp_nonce() }}">
+(function () {
+  const log = document.getElementById('stepLog');
+  const status = document.getElementById('runStatus');
+  // T4 (a11y, WCAG 4.1.3): what a screen reader hears about a live run, through
+  // announce.js (loaded by _busy.html) and the two sr-only regions under #runStatus.
+  // #runProgress and #runStatus stay NON-live (the 1 Hz ageing beat would speak every
+  // second). Polite messages are at least 10 s apart (last wins); every (re)connect
+  // opens a 2 s settle window in which the observer's replay of recorded steps is only
+  // counted, then spoken as ONE summary. Step numbers are 1-based (order_index + 1).
+  const announcer = makeAnnouncer(document.getElementById('runAnnounce'), document.getElementById('runAlert'), { minGapMs: 10000, settleMs: 2000 });
+  let stepCount = 0, spokenStep = null, milestone = 0, startedSeen = false;
+  let doneSteps = new Set();
+  function onConnect() {
+    announcer.settle();
+    doneSteps = new Set();
+  }
+  function stepNo(ev) {
+    return (Number(ev.step_index) || 0) + 1;
+  }
+  // Progress: speak a step change, and the 25 / 50 / 75 % crossings within a step.
+  function announceProgress(ev) {
+    const step = String(ev.step_index) + ':' + ev.step;
+    const percent = ev.total ? ev.done / ev.total * 100 : 0;
+    const crossed = percent >= 75 ? 75 : percent >= 50 ? 50 : percent >= 25 ? 25 : 0;
+    if (step !== spokenStep) {
+      spokenStep = step;
+      milestone = crossed;
+      announcer.say(`Step ${stepNo(ev)}: ${ev.step}, ${ev.done} of ${ev.total} ${ev.unit || 'segments'}.`);
+    } else if (crossed > milestone) {
+      milestone = crossed;
+      announcer.say(`Step ${stepNo(ev)}: ${ev.step}, ${crossed}% done.`);
+    }
+  }
+  let runId = {{ run.id if run else 'null' }};
+  const url = `/runs/stream?run_id={{ run.id if run else '' }}`;
+  let conn;
+
+  // The ONE escaper this handler uses for every server-supplied value it splices
+  // into innerHTML. Quotes are escaped too: today every interpolation lands in
+  // element text, but the next one to land in an attribute must not reopen this.
+  {% include '_html_escape.js' %}
+
+  // Live graph + Gantt refresh (Run View v2, piece 2): the server-rendered
+  // "How this run went" card goes stale during a live run (it's a one-shot
+  // snapshot). On each step/paused/done event we fetch the graph-fragment
+  // endpoint (same RBAC as this page) ONCE and swap the card's markup - no
+  // client-side SVG, bounded to one refresh per event, no polling loop. If JS
+  // is off or the fetch fails, the static card simply stays until manual reload.
+  let refreshing = false;
+  function refreshGraph() {
+    if (refreshing || !runId) return;
+    refreshing = true;
+    fetch(`/runs/${runId}/graph-fragment`, {
+      credentials: 'same-origin', headers: { 'X-Loc-Background': '1' }
+    })
+      .then((r) => (r.ok ? r.text() : Promise.reject(r.status)))
+      .then((html) => {
+        const cur = document.getElementById('runGraphCard');
+        if (cur) {
+          // a11y T8: a reader who opened "Diagram as text" keeps it open across the swap,
+          // and focus inside the card returns to its summary instead of the page top.
+          // The card itself is NOT a live region (it re-renders on every step event).
+          const wasOpen = !!cur.querySelector('details.wfg-text[open]');
+          const hadFocus = cur.contains(document.activeElement);
+          cur.outerHTML = html;
+          const card = document.getElementById('runGraphCard');
+          const det = card ? card.querySelector('details.wfg-text') : null;
+          if (det && wasOpen) det.open = true;
+          if (hadFocus && det) det.querySelector('summary').focus();
+          if (window.locA11yEnhance) window.locA11yEnhance(card);
+        }
+      })
+      .catch(() => {})
+      .finally(() => { refreshing = false; });
+  }
+
+  // GitHub #101 / gate F round 1 M4: THE PROGRESS LINE KEEPS ITS LIVENESS HALF.
+  // The first cut overwrote the server-rendered "…(last update <ts>)" line with a bare
+  // `${done}/${total} ${unit}` on the first SSE `progress` event, so from then on a run
+  // whose counter froze five minutes ago was pixel-identical to one that ticked a second
+  // ago -- the exact discrimination this counter exists to provide. The event carries
+  // `at` (observe_run puts it there); it is rendered as a RELATIVE age and re-rendered
+  // once a second, so a frozen counter visibly ages while a live one keeps resetting.
+  // The step is named beside N/M because every step publishes a fresh 0-of-M: without it
+  // an ordinary step transition reads as the counter going backwards.
+  let progressState = null;
+  let progressTimer = null;
+  function ageText(atMs) {
+    if (!atMs) return '';
+    // Server timestamps are naive UTC; the browser clock can differ, so never show a
+    // negative age.
+    const secs = Math.max(0, Math.round((Date.now() - atMs) / 1000));
+    if (secs < 90) return `last update ${secs} s ago`;
+    if (secs < 5400) return `last update ${Math.round(secs / 60)} min ago`;
+    return `last update ${Math.round(secs / 3600)} h ago`;
+  }
+  function parseAt(at) {
+    if (!at) return 0;
+    // naive UTC from the server ("2026-09-06T04:12:33[.ffffff]") -- pin the zone, or the
+    // browser would read it as local time and the age would be hours off.
+    const iso = /(Z|[+-]\d{2}:?\d{2})$/.test(at) ? at : at + 'Z';
+    const ms = Date.parse(iso);
+    return Number.isNaN(ms) ? 0 : ms;
+  }
+  // Gate F round 3, L5: once the line has been FROZEN (the run really ended) a late or
+  // out-of-order `progress` event must not repaint an ageing line that nothing counts up
+  // any more -- it would leave a stale "last update 3 s ago" that never moves again.
+  // `progressTimer` is the wrong flag for this: seedProgress below renders BEFORE the beat
+  // is armed, so a `!progressTimer` guard would swallow the very first paint. Freezing is
+  // therefore its own one-way state.
+  let progressFrozen = false;
+  function renderProgress() {
+    const p = document.getElementById('runProgress');
+    if (progressFrozen) return;
+    if (!p || !progressState || !progressState.total) return;
+    const st = progressState;
+    const bits = [];
+    if (st.step) bits.push(`step ${st.stepIndex} ${st.step}`);
+    const age = ageText(st.atMs);
+    if (age) bits.push(age);
+    p.textContent = `Progress: ${st.done}/${st.total} ${st.unit}`
+      + (bits.length ? ` (${bits.join(', ')})` : '');
+    p.hidden = false;
+  }
+  function setProgress(ev) {
+    if (progressFrozen) return;
+    progressState = {
+      done: ev.done, total: ev.total, unit: ev.unit || 'units',
+      step: ev.step || '', stepIndex: ev.step_index || 0, atMs: parseAt(ev.at),
+    };
+    renderProgress();
+  }
+  (function seedProgress() {
+    const p = document.getElementById('runProgress');
+    if (!p) return;
+    const total = parseInt(p.dataset.total || '0', 10);
+    if (total > 0) {
+      setProgress({
+        done: parseInt(p.dataset.done || '0', 10), total: total,
+        unit: p.dataset.unit || 'units', step: p.dataset.step || '',
+        step_index: parseInt(p.dataset.stepIndex || '0', 10), at: p.dataset.at || '',
+      });
+    }
+    // Re-render on a beat so the age COUNTS UP: that is what makes a wedged run
+    // distinguishable from a slow one without any new event arriving.
+    progressTimer = setInterval(renderProgress, 1000);
+  })();
+  // Gate F round 2, L6: STOP AGEING A TERMINAL RUN. The beat above exists to say "this
+  // counter has not moved in N minutes" about a run that is still supposed to be moving.
+  // On a run that has ENDED it kept counting up forever, so a finished run's page read
+  // "last update 3 h ago" with no hint that nothing is coming -- the same false alarm the
+  // liveness half was added to prevent, pointed the other way.
+  // Gate F round 3, MED-1: freeze ONLY on an ending. `observe_run` emits `closed` from
+  // FIVE places (the run row is gone, the live pause, the already-replayed pause, a
+  // terminal status, and the ceiling -- round 4 carried note: the live-pause site inside
+  // the step loop makes it five, not three) and only the last is not an ending: it is its
+  // own 15-minute OBSERVER CEILING, which reports the run's real (still RUNNING) status and
+  // says so in its docstring: "the RUN is still whatever it is ... reported honestly
+  // rather than as a terminal verdict". Freezing on that close settled the line forever on
+  // the longest runs -- exactly the 10-25 minute llm_agent steps GitHub #101 exists for --
+  // and made a wedged run pixel-identical to a healthy one again. The predicate is stated
+  // as the LIVE statuses, so everything else -- the three terminal ones, `paused`, and an
+  // unknown or absent status (the run row is gone) -- still freezes: fail-safe, never a
+  // reconnect loop. verify_run_observability [P8] ratchets this list against `RunStatus`,
+  // so a new run status cannot slip past it silently.
+  const STILL_LIVE_STATUSES = ['pending', 'running'];
+  function freezeProgress(endedWord) {
+    progressFrozen = true;
+    if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+    const p = document.getElementById('runProgress');
+    if (!p || !progressState || !progressState.total) return;
+    const st = progressState;
+    const bits = [];
+    if (st.step) bits.push(`step ${st.stepIndex} ${st.step}`);
+    bits.push(endedWord);
+    p.textContent = `Progress: ${st.done}/${st.total} ${st.unit} (${bits.join(', ')})`;
+    p.hidden = false;
+  }
+
+  // Gate F round 3, MED-1: the observer ceiling ends the GENERATOR, not the run, so the
+  // page opens a fresh one and keeps tailing. `conn.close()` is what kills EventSource's
+  // own auto-reconnect, so the reopen has to be explicit; a fresh handle also resets
+  // sse.js's retry budget, which is never reset within a handle. Bounded, because a page
+  // left open on a wedged run must not reconnect forever: after MAX_CEILING_REOPENS
+  // windows the page says so instead. The ageing beat is deliberately LEFT RUNNING across
+  // the gap -- while the stream is between generators, `last update N min ago` climbing is
+  // the only thing that separates a working run from a wedged one.
+  //
+  // GATE F ROUND 4, MED-1: EVERY REOPEN IS A SERVER-SIDE COMMITMENT, SO ONLY A WATCHED TAB
+  // MAKES ONE. Streams and long waits are off the sync-route limiter. The dedicated
+  // LOC_TMS_STREAM_WORKERS limiter (default 32) charges one token per open SSE tab or waiting caller.
+  // Admission waits at most LOC_TMS_STREAM_WAIT_S, then sheds with 503 stream_capacity.
+  // The 24 reopen limit is a time policy, independent of the worker count:
+  // 24 additional windows x 15 min = 6 h, plus the initial 15-minute window.
+  // Before the round-3 reopen that cost was bounded by observe_run's own 15 min;
+  // renewing it 24 times unattended turns one forgotten background tab into six hours of
+  // held worker thread, on exactly the long/wedged runs where operators leave the page open
+  // (EventSource is NOT suspended in a hidden tab). So a hidden tab does not reopen at all:
+  // it parks the intent and reopens ONCE when the tab becomes visible again -- which is also
+  // when the operator could first read anything the stream would have painted. Nothing is
+  // lost by parking: a fresh generator REPLAYS the whole run from the top, and if the run
+  // ended while the tab was hidden, the reopened stream closes immediately with the terminal
+  // status and the line settles then. The ageing beat keeps running while parked, so a tab
+  // brought back to the front still shows how stale the counter is.
+  const MAX_CEILING_REOPENS = 24;  // 6 h of extra tailing after the initial 15 min, per VISIBLE tab
+  let ceilingReopens = 0;
+  let replayPending = false;
+  let reopenWhenVisible = false;
+  // Issue #602: when the stream reports that the run has ended, the page's own chrome has
+  // to agree with it: the Status badge shows the final state and the Cancel control (only
+  // meaningful for a run that can still be stopped) goes away. Paused keeps Cancel: a
+  // paused run can still be cancelled. Text is set with textContent only.
+  const END_BADGE_CLASS = { completed: 'exact', failed: 'danger', failed_budget: 'danger', cancelled: 'status' };
+  function settleRunChrome(finalStatus) {
+    const word = String(finalStatus || '');
+    if (!Object.prototype.hasOwnProperty.call(END_BADGE_CLASS, word)) return;
+    const slot = document.getElementById('runStatusBadge');
+    if (slot) {
+      let labels = {};
+      try { labels = JSON.parse(slot.getAttribute('data-labels') || '{}'); } catch (e) { labels = {}; }
+      const label = labels[word] || (word.charAt(0).toUpperCase() + word.slice(1).replace(/_/g, ' '));
+      const badge = slot.querySelector('.badge');
+      if (badge) {
+        badge.textContent = label;
+        badge.title = label;
+        badge.className = 'badge ' + END_BADGE_CLASS[word];
+      }
+      const wrap = slot.querySelector('.status-text');
+      if (wrap) wrap.setAttribute('data-status', word);
+    }
+    const cancel = document.getElementById('runCancelForm');
+    if (cancel) cancel.remove();
+  }
+  function onGiveUp() {
+    status.textContent = 'Connection lost. Refresh the page to see the latest status.';
+    announcer.alert(status.textContent);
+  }
+  function reopenStream() {
+    if (conn) conn.close();
+    conn = null;
+    if (document.visibilityState !== 'visible') {
+      // Parked, not abandoned: `visibilitychange` below reopens exactly once.
+      reopenWhenVisible = true;
+      return;
+    }
+    ceilingReopens += 1;
+    if (ceilingReopens > MAX_CEILING_REOPENS) {
+      // The one exit from this machinery that neither reconnects nor freezes: the run may
+      // genuinely still be executing, so settling the progress line would be a lie. The
+      // ageing beat keeps counting and the status line says the page stopped watching
+      // (round 4 carried note).
+      status.textContent = 'Live updates stopped after 6 hours. Refresh the page to keep watching.';
+      announcer.flush(status.textContent);
+      return;
+    }
+    // A fresh generator REPLAYS every recorded step from the top, so the cards this page
+    // already painted are dropped once the replay starts (see run_started) rather than
+    // doubling the timeline.
+    replayPending = true;
+    conn = connectSSE(url, { onMessage: onMessage, onGiveUp: onGiveUp, onConnect: onConnect });
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible' && reopenWhenVisible) {
+      reopenWhenVisible = false;
+      reopenStream();
+    }
+  });
+
+  function onMessage(e) {
+    const ev = JSON.parse(e.data);
+    if (ev.type === 'run_started') {
+      runId = ev.run_id;
+      stepCount = ev.steps;
+      if (!startedSeen) announcer.say(`Run started, ${stepCount} steps.`);
+      startedSeen = true;
+      if (replayPending) {
+        // Reopened after an observer-ceiling close: this is the replay of a run that never
+        // stopped, not a new run. Clear the cards the previous generator painted (the
+        // replay repaints them) and leave the status line alone -- it still carries the
+        // live "Working: N/M …" text, which is truer than "Running N step(s)…".
+        replayPending = false;
+        log.innerHTML = '';
+      } else {
+        status.textContent = `Running ${ev.steps} step(s)…`;
+      }
+    } else if (ev.type === 'progress') {
+      // GitHub #101: in-step progress. A single long llm_agent step used to stream
+      // `run_started` and then silence for 10-25 minutes, so this page could not tell a
+      // working run from a wedged one. The counter is published from inside the step and
+      // forwarded here only when it MOVES.
+      status.textContent = `Working: ${esc(ev.done)}/${esc(ev.total)} ${esc(ev.unit)} done…`;
+      setProgress(ev);
+      if (!announcer.settling()) announceProgress(ev);
+    } else if (ev.type === 'step') {
+      refreshGraph();
+      const div = document.createElement('div');
+      div.className = 'runstep justfilled';
+      const outCap = parseInt(log.dataset.outputCap, 10) || 50000;
+      // #605: the internal segment joiner (a line of U+27E6 bars U+27E7) is not shown to people.
+      const fullOut = (ev.output || '').split('\n\n\u27e6\u2015\u2015\u2015\u27e7\n\n').join('\n\n');
+      // EVERY interpolated field is escaped, not just the output (review F13).
+      // ev.error is the rawest of them all -- a provider's own message, and this
+      // page renders it on every reconnect from the persisted StepRun row, so an
+      // unescaped `<img onerror=...>` inside an error string was STORED script on
+      // an authenticated page. ev.step_name is operator-authored and ev.provider /
+      // ev.model come from engine config; all three are equally not markup.
+      div.innerHTML = `<div class="step-head"><strong>${esc(ev.step_name)}</strong>` +
+        `<span class="chip">${esc(ev.step_type)}</span>` +
+        `<span class="muted">${esc(ev.provider || '')}${ev.model ? ' · ' + esc(ev.model) : ''}` +
+        ` · ${esc(ev.chunks)} chunk(s)</span>` +
+        (ev.error ? `<p class="muted small step-note">${esc(ev.error)}</p>` : '') + `</div>` +
+        `<pre class="prompt step-output" tabindex="0" role="region" aria-label="Output of step ${esc(ev.step_name)}">${esc(fullOut.slice(0, outCap))}</pre>` +
+        (fullOut.length > outCap
+          ? `<p class="muted small step-note">Showing the first ${esc(outCap.toLocaleString('en-US'))} of ${esc(fullOut.length.toLocaleString('en-US'))} characters.` +
+            (ev.step_run_id ? ` <a href="/runs/${esc(ev.run_id)}/steps/${esc(ev.step_run_id)}/output.json?format=text" target="_blank" rel="noopener">Show full text (${esc(fullOut.length.toLocaleString('en-US'))} characters)</a>` : '') + `</p>`
+          : '');
+      // T5 (a11y, WCAG 3.1.2): only a translate-type step's output is target text.
+      const out = div.querySelector ? div.querySelector('pre.prompt') : null;
+      const textSteps = (log.dataset.textSteps || '').split(' ');
+      if (out && log.dataset.lang && textSteps.indexOf(String(ev.step_type)) !== -1) {
+        out.lang = log.dataset.lang;
+        if (log.dataset.dir === 'rtl') out.dir = 'rtl';
+      }
+      log.appendChild(div);
+      // A replayed burst (settle window) is counted, not read out; a live step is
+      // spoken. A failed step is polite, not an alert: a loop may recover it.
+      doneSteps.add(ev.step_index);
+      if (announcer.settling()) {
+        announcer.say(`Run in progress: ${doneSteps.size} of ${stepCount || doneSteps.size} steps done.`);
+      } else {
+        announcer.say(`Step ${stepNo(ev)} of ${stepCount || stepNo(ev)} ${ev.error ? 'failed' : 'finished'}: ${ev.step_name}.`);
+      }
+    } else if (ev.type === 'paused') {
+      refreshGraph();
+      status.textContent = 'Paused for human review.';
+      announcer.flush('Paused for human review.');
+      window.location.href = '/runs/' + ev.run_id;
+    } else if (ev.type === 'done') {
+      refreshGraph();
+      freezeProgress('run completed');
+      announcer.flush('Run completed.');
+      status.textContent = 'Completed.';
+      settleRunChrome('completed');
+      document.getElementById('finalCard').style.display = '';
+      document.getElementById('finalText').textContent = (ev.text || '').split('\n\n\u27e6\u2015\u2015\u2015\u27e7\n\n').join('\n\n');
+    } else if (ev.type === 'closed') {
+      // MED-1: is this an ENDING, or observe_run's 15-minute observer ceiling on a run
+      // that is still executing? Only an ending closes the connection and settles the
+      // line; the ceiling reopens the stream and leaves the ageing beat alone.
+      if (STILL_LIVE_STATUSES.indexOf(String(ev.status || '')) !== -1) {
+        reopenStream();
+        return;
+      }
+      conn.close();
+      settleRunChrome(ev.status);
+      freezeProgress(`run ${ev.status || 'closed'}`);
+      // T4: a failed run's error rides the close event; show it and say it (assertive).
+      if (ev.status === 'failed') {
+        const why = String(ev.error || (ev.reason && ev.reason.text) || 'no error was recorded').replace(/[.\s]+$/, '');
+        const message = `Run failed: ${why}.`;
+        status.textContent = message;
+        announcer.alert(message);
+      } else if (ev.status === 'cancelled') {
+        announcer.flush('Run cancelled.');
+      } else if (ev.status === 'paused') {
+        announcer.flush('Paused for human review.');
+      }
+      // GitHub #106: a run a reconciler ended carries its reason on the close event; show
+      // it rather than leaving the operator with a bare terminal status.
+      if (ev.status !== 'failed' && ev.reason && ev.reason.text) {
+        status.textContent = `${ev.status || 'closed'} - ${ev.reason.text}`;
+      }
+      if (runId) status.innerHTML += ` · <a href="/runs/${runId}">view run</a>`;
+    }
+  }
+
+  conn = connectSSE(url, { onMessage: onMessage, onGiveUp: onGiveUp, onConnect: onConnect });
+})();
+</script>
+{% endif %}
+
+</div>
+{% endblock %}

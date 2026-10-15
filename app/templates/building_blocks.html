@@ -1,0 +1,308 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Building blocks{% endblock %}
+{% block content %}
+<div class="ux-workflows">
+
+{# SPEC Workflow Studio Wave C: the former top-level "Templates" page, FOLDED into the
+   Workflows area as the "Building blocks" tab. Three sections that used to live on
+   /templates - clonable workflow templates, the prompt library (full CRUD), and the
+   built-in role presets - now under the Workflows tab strip, with honest cross-links
+   showing which VISIBLE workflows bind each prompt template. All new selectors are
+   scoped under .bblocks (the app-wide-leak lesson). English copy, matching this area's
+   existing convention (the old templates.html + workflows.html were hardcoded English). #}
+
+<section class="wf-intro">
+  {% set workflow_title %}Building blocks{% endset %}
+  {{ m.page_header(workflow_title) }}
+  <button type="button" class="ghost layout-edit-btn" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+  <p class="muted">Reusable pieces for your pipelines: clone a workflow to start a new
+  one, curate your prompt library, grab a built-in role preset, or read the built-in system
+  prompts.</p>
+</section>
+
+{% include "_workflows_tabs.html" %}
+
+<div class="bblocks">
+
+<nav class="wf-section-nav" aria-label="Building blocks sections"><a href="#wf-templates">Workflow templates</a>
+<a href="#wf-prompts">Prompt library</a>
+<a href="#wf-presets">Role presets</a>
+<a href="#system-prompts">System prompts</a></nav>
+<div id="page-layout" class="page-layout" data-layout-page="building_blocks">
+<section class="card" data-card="templates" id="wf-templates">
+  <h2>Workflow templates</h2>
+  <p class="muted">Clone a global workflow to seed a new pipeline you can then tailor.</p>
+  {% if workflows %}
+    {% call m.data_table('Workflow templates', [{'label': 'Name'}, {'label': 'Scope'}, {'label': 'Steps', 'numeric': true}, {'label': '', 'actions': true}]) %}
+        {% for w in workflows %}
+          <tr>
+            <td><a href="/workflows/{{ w.id }}">{{ w.name }}</a></td>
+            <td><span class="chip">{{ w.scope }}</span></td>
+            <td class="num data-mono">{{ wf_steps.get(w.id, 0) }}</td>
+            <td class="row-actions"><form method="post" action="/workflows/{{ w.id }}/clone">
+              {% include "_csrf.html" %}<button class="small ghost">Clone<span class="sr-only">: {{ w.name }}</span></button></form></td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+  {% else %}
+    {% set workflow_empty %}No global workflows yet. <a href="/workflows/new">Build one <span aria-hidden="true">→</span></a>{% endset %}{{ m.empty_state(workflow_empty) }}
+  {% endif %}
+</section>
+
+<div class="grid2">
+  <section class="card" data-card="prompts" id="wf-prompts">
+    <h2>Prompt library</h2>
+    <p class="muted">Save reusable prompt bodies and bind them to workflow steps.</p>
+    {# a11y T7: a ?err= error renders once, as a sentence, in the summary at the top of
+       main (base.html + _form_errors.html), never as a raw code here. #}
+    <form method="post" action="/templates/prompts" class="form">
+{% call m.form_section('building_blocks-prompts', 'Prompt library') %}
+      {% include "_csrf.html" %}
+      <label>Name <input type="text" name="name" placeholder="Strict legal translator" required /></label>
+      <label>Prompt body <textarea name="body" rows="4" placeholder="Translate {text} from {source_locale} to {target_locale}…"></textarea></label>
+      {# SPEC-pt-attach: attach to a customer (Global = shared everywhere). A customer-
+         bound caller is forced to its own customer at the service, so the picker only
+         offers that one. #}
+      {% if my_customer_id is none %}
+      <label>Customer
+        <select name="customer_id">
+          <option value="">Global (all customers)</option>
+          {% for c in pt_customers %}
+            <option value="{{ c.id }}">{{ customer_label(c) }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% elif pt_customers %}
+      <input type="hidden" name="customer_id" value="{{ my_customer_id }}" />
+      {% endif %}
+      <button type="submit">Save prompt</button>
+    {% endcall %}
+</form>
+    {% if prompts %}
+      <ul class="list mt bb-lib">
+        {% for pt in prompts %}
+          {% set b = bindings.get(pt.id, {'steps': 0, 'workflows': 0, 'names': [], 'hidden': 0}) %}
+          <li>
+            <strong>{{ pt.name }}</strong> <span class="chip">{{ pt.scope }}</span>
+            {# Cross-links (Wave C): where this template is bound. Honest counts; names
+               only for workflows the viewer can see (a foreign customer's workflow is
+               counted but never named). This same reference count is the delete guard. #}
+            <div class="bb-refs muted small">
+              {% if b.steps %}
+                Bound to {{ b.steps }} step{{ 's' if b.steps != 1 }} in
+                {{ b.workflows }} workflow{{ 's' if b.workflows != 1 }}{% if b.names %}:
+                {% for n in b.names %}<a href="/workflows" class="bb-ref-wf">{{ n }}</a>{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}{% if b.hidden %} <span title="Bound in workflows outside your view">(+{{ b.hidden }} not shown)</span>{% endif %}.
+                Delete is blocked while any step pins it.
+              {% else %}
+                Not bound to any workflow step - safe to delete.
+              {% endif %}
+            </div>
+            {% if (not app_meta().auth_on) or can_tune_ai(current_user(request)) %}
+              <form method="post" action="/templates/prompts/{{ pt.id }}/rename" class="form inline-form">
+                {% include "_csrf.html" %}
+                <input type="text" name="name" value="{{ pt.name }}" aria-label="Prompt name" required />
+                <button type="submit" class="small">Rename</button>
+              </form>
+              {% if (not app_meta().auth_on) or is_admin(current_user(request)) %}
+                <form method="post" action="/templates/prompts/{{ pt.id }}/delete" class="inline-del"
+                      data-action-confirm="Delete prompt template &quot;{{ pt.name }}&quot;? This fails while any workflow step pins it.">
+                  {% include "_csrf.html" %}
+                  <button type="submit" class="small danger-btn">Delete</button>
+                </form>
+              {% endif %}
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      {% set workflow_empty %}No prompt templates yet. Save one above, or from a step in the
+      workflow builder.{% endset %}{{ m.empty_state(workflow_empty) }}
+    {% endif %}
+  </section>
+
+  <section class="card" data-card="presets" id="wf-presets">
+    <h2>Role presets</h2>
+    <p class="muted">Built-in step prompts you can drop into the workflow builder. These
+    are read-only - copy one to adapt it in your library.</p>
+    {% for name, body in presets.items() %}
+      <div class="preset-card bb-preset">
+        <div class="bb-preset-head">
+          <strong>{{ name }}</strong>
+          <span class="chip bb-builtin" title="Built-in preset - not editable or deletable">built-in</span>
+        </div>
+        {# Zero-JS copy affordance: the exact preset body, rendered as selectable plain
+           text. A progressive-enhancement Copy button (below) writes it to the clipboard
+           when JS is available; without JS the text is right here to select and copy. #}
+        <pre class="prompt bb-preset-body" data-preset-body>{{ body }}</pre>
+        <button type="button" class="small ghost bb-copy" data-copy-preset hidden>Copy</button>
+      </div>
+    {% endfor %}
+  </section>
+</div>
+<section class="card" data-card="system_prompts" id="system-prompts">
+  <h2>System prompts</h2>
+  <p class="muted">The instructions the pipeline sends to the model alongside every step,
+  shown here exactly as the app sends them. Your own step instructions (the prompt library
+  and role presets above) are added to these, not in place of them. The curly-brace words
+  and the example language pair stand for values the app fills in on each call.
+  {% if sp_enabled %}An admin can change the editable text below; the locked lines are
+  always added by the app and cannot be changed.{% else %}These are read-only.{% endif %}</p>
+  {% if sp_notice %}
+    <p class="bb-sp-notice" role="status" id="sp-notice">{{ sp_notice.text }}
+    {% for w in sp_notice.warnings %}<strong>Warning:</strong> {{ w }} {% endfor %}</p>
+  {% endif %}
+  <h3 id="sp-edit-heading">Editable text</h3>
+  <ul class="list bb-sysprompts bb-sp-editable" aria-labelledby="sp-edit-heading">
+    {% for e in sp_editable %}
+      {% set k = e.key %}
+      <li id="sp-edit-{{ k }}">
+        <h4 id="sp-edit-h-{{ k }}">{{ e.name }}
+          {% if e.override and sp_enabled %}<span class="chip">custom, version {{ e.override.version }}</span>
+          {% else %}<span class="chip bb-builtin">built-in</span>{% endif %}</h4>
+        <p class="muted small">{{ e.used_in }}</p>
+        <p class="small bb-sp-label" id="sp-before-label-{{ k }}">Always added before your text (locked)</p>
+        <pre class="prompt bb-sysprompt-body bb-sp-locked" aria-labelledby="sp-before-label-{{ k }}">{{ e.floor_before }}</pre>
+        {% if sp_can_edit %}
+          <form method="post" action="/workflows/building-blocks/system-prompts/{{ k }}/save" class="form bb-sp-form" data-sp-form>
+            {% include "_csrf.html" %}
+            <label for="sp-body-{{ k }}">Editable text</label>
+            <textarea id="sp-body-{{ k }}" name="body" rows="10" maxlength="{{ e.max_chars }}" required
+                      aria-describedby="sp-hint-{{ k }} sp-count-{{ k }}" data-sp-body>{{ sp_draft.get(k, e.effective_body) }}</textarea>
+            <p class="muted small" id="sp-hint-{{ k }}">Plain text, up to {{ e.max_chars }} characters. Tell
+            the model to output only the result. Saving adds a new version; earlier versions are kept and can be restored.</p>
+            <p class="muted small" id="sp-count-{{ k }}"><span data-sp-count>{{ (sp_draft.get(k, e.effective_body))|length }}</span> of {{ e.max_chars }} characters</p>
+            <span class="sr-only" role="status" data-sp-limit></span>
+            <button type="submit">Save new version</button>
+          </form>
+          {% if e.override %}
+            <form method="post" action="/workflows/building-blocks/system-prompts/{{ k }}/reset" class="inline-del"
+                  data-action-confirm="Go back to the built-in text for &quot;{{ e.name }}&quot;? Your versions are kept in the history.">
+              {% include "_csrf.html" %}
+              <button type="submit" class="small danger-btn">Reset to built-in</button>
+            </form>
+          {% endif %}
+        {% else %}
+          <pre class="prompt bb-sysprompt-body" aria-label="{{ e.name }}, text in force" data-sysprompt-body>{{ e.effective_body }}</pre>
+          <p class="muted small">{% if not sp_enabled %}Editing is switched off. An admin can turn it on under Settings, Features, System prompt overrides.{% else %}Only admins can edit this text.{% endif %}</p>
+        {% endif %}
+        <p class="small bb-sp-label" id="sp-after-label-{{ k }}">Always added after your text (locked)</p>
+        <pre class="prompt bb-sysprompt-body bb-sp-locked" aria-labelledby="sp-after-label-{{ k }}">{{ e.floor_after }}</pre>
+        <p class="muted small">{{ e.floor_note }}</p>
+        {% if e.history %}
+          <details class="bb-sp-history">
+            <summary>Version history ({{ e.history|length }})</summary>
+            <ol class="list">
+              {% for h in e.history %}
+                <li>
+                  Version {{ h.version }}: {{ {'set': 'saved', 'restore': 'restored from version ' ~ (h.restored_from or '?'), 'reset': 'reset to built-in'}.get(h.action, h.action) }}
+                  by {{ h.created_by or 'unknown' }}, {{ h.created_at or '' }}
+                  {% if h.body %}<span class="muted small">({{ h.body|length }} characters)</span>{% endif %}
+                  {% if h.body and sp_can_edit %}
+                    <form method="post" action="/workflows/building-blocks/system-prompts/{{ k }}/restore" class="inline-del">
+                      {% include "_csrf.html" %}
+                      <input type="hidden" name="version" value="{{ h.version }}" />
+                      <button type="submit" class="small ghost" aria-label="Restore version {{ h.version }} of {{ e.name }}">Restore</button>
+                    </form>
+                  {% endif %}
+                  {% if h.body %}<pre class="prompt bb-sysprompt-body">{{ h.body }}</pre>{% endif %}
+                </li>
+              {% endfor %}
+            </ol>
+          </details>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+  <h3 id="sp-all-heading">Everything the app sends</h3>
+  <ul class="list bb-sysprompts" aria-labelledby="sp-all-heading">
+    {% for sp in system_prompts %}
+      <li id="sp-{{ sp.key }}">
+        <h4>{{ sp.name }}
+          {% if sp.override_version and sp_enabled %}<span class="chip">custom head, version {{ sp.override_version }}</span>
+          {% else %}<span class="chip bb-builtin" title="Built-in text">built-in</span>{% endif %}</h4>
+        <p class="muted small">{{ sp.used_in }}</p>
+        {% if sp.note %}<p class="muted small">{{ sp.note }}</p>{% endif %}
+        <pre class="prompt bb-sysprompt-body" data-sysprompt-body>{{ sp.text }}</pre>
+        {% if sp.override_version and sp_enabled %}
+          <p class="small bb-sp-label" id="sp-eff-label-{{ sp.key }}">What your org sends</p>
+          <pre class="prompt bb-sysprompt-body" aria-labelledby="sp-eff-label-{{ sp.key }}">{{ sp.effective_text }}</pre>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+</div>
+{% with layout_page = 'building_blocks' %}{% include "_page_layout.html" %}{% endwith %}
+
+</div>
+
+<style>
+/* Scoped to the Building blocks page (page-ancestor selectors only - the app-wide
+   leak lesson). Existing tokens only; no new colors. */
+.bblocks .bb-lib > li { margin: 0 0 var(--space-4); padding-bottom: var(--space-3); border-bottom: 1px solid var(--border); }
+.bblocks .bb-lib > li:last-child { border-bottom: 0; }
+.bblocks .bb-refs { margin: var(--space-1) 0 var(--space-2); }
+.bblocks .bb-ref-wf { color: var(--primary-2, var(--terracotta-text)); text-decoration: none; }
+.bblocks .bb-ref-wf:hover { text-decoration: underline; }
+.bblocks .bb-preset-head { display: flex; align-items: center; gap: var(--space-2); }
+.bblocks .bb-builtin { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; }
+.bblocks .bb-copy { margin-top: var(--space-1); }
+.bblocks .bb-sysprompts { list-style: none; padding: 0; margin: 0; }
+.bblocks .bb-sysprompts > li { margin: 0 0 var(--space-4); padding-bottom: var(--space-3); border-bottom: 1px solid var(--border); }
+.bblocks .bb-sysprompts > li:last-child { border-bottom: 0; }
+.bblocks .bb-sysprompts h3 { margin: 0 0 var(--space-1); font-size: 1rem; }
+.bblocks .bb-sysprompt-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.bblocks .bb-sysprompts h4 { margin: 0 0 var(--space-1); font-size: .95rem; }
+.bblocks .bb-sp-label { margin: var(--space-2) 0 var(--space-1); font-weight: 600; }
+.bblocks .bb-sp-form textarea { width: 100%; font-family: var(--font-mono, monospace); }
+.bblocks .bb-sp-history ol { padding-left: var(--space-4); }
+.bblocks .bb-sp-history li { margin: 0 0 var(--space-3); }
+</style>
+<script nonce="{{ csp_nonce() }}">
+/* Progressive enhancement: reveal a Copy button on each read-only role preset and copy
+   its exact body to the clipboard. No-JS users still have the selectable <pre>. Scoped
+   to this page's .bblocks subtree so it can never touch other pages. */
+(function () {
+  var root = document.querySelector('.bblocks');
+  if (!root || !navigator.clipboard) { return; }
+  root.querySelectorAll('[data-copy-preset]').forEach(function (btn) {
+    btn.hidden = false;
+    btn.addEventListener('click', function () {
+      var pre = btn.parentElement.querySelector('[data-preset-body]');
+      if (!pre) { return; }
+      navigator.clipboard.writeText(pre.textContent).then(function () {
+        var prev = btn.textContent;
+        btn.textContent = 'Copied';
+        setTimeout(function () { btn.textContent = prev; }, 1200);
+      }).catch(function () {});
+    });
+  });
+})();
+/* System prompt editor: a visible character count that follows the typing, and one
+   spoken message only when 100 or fewer characters remain (not one per keystroke).
+   Without JS the count is the server-rendered figure and the textarea's maxlength
+   and the server-side limit still apply. */
+(function () {
+  document.querySelectorAll('[data-sp-form]').forEach(function (form) {
+    var ta = form.querySelector('[data-sp-body]');
+    var out = form.querySelector('[data-sp-count]');
+    var say = form.querySelector('[data-sp-limit]');
+    if (!ta || !out) { return; }
+    var max = parseInt(ta.getAttribute('maxlength'), 10) || 0;
+    var last = null;
+    function update() {
+      out.textContent = String(ta.value.length);
+      if (!say || !max) { return; }
+      var left = max - ta.value.length;
+      var msg = left <= 0 ? 'Character limit reached.' : (left <= 100 ? left + ' characters left.' : '');
+      if (msg !== last) { say.textContent = msg; last = msg; }
+    }
+    ta.addEventListener('input', update);
+    update();
+  });
+})();
+</script>
+
+</div>
+{% endblock %}

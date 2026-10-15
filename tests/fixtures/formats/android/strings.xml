@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools" xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+    <!-- App name shown in the launcher -->
+    <string name="app_name" translatable="false">Northwind</string>
+    <string name="welcome">Welcome, %1$s! You have %2$d new messages.</string>
+    <string name="cant_open">Can\'t open the file \"%s\".</string>
+    <string name="at_literal">\@home is the default tag</string>
+    <string name="alias">@string/welcome</string>
+    <string name="theme_ref">?android:attr/textColorPrimary</string>
+    <string name="styled">Tap <b>Save</b> to keep <i>your</i> changes.</string>
+    <string name="placeholder">Signed in as <xliff:g id="user" example="Ana">%1$s</xliff:g>.</string>
+    <string name="html_cdata"><![CDATA[Read the <a href="https://example.com/terms">terms</a> first.]]></string>
+    <string name="quoted">"It's   spaced   out"</string>
+    <string name="newline">First line\nSecond line</string>
+    <string name="percent" formatted="false">100% sure</string>
+    <string name="lint_ok" tools:ignore="MissingTranslation">Only in English</string>
+    <string name="empty"></string>
+    <plurals name="songs">
+        <item quantity="one">%d song found.</item>
+        <item quantity="other">%d songs found.</item>
+    </plurals>
+    <plurals name="files">
+        <item quantity="one">%d file</item>
+        <item quantity="few">%d files (few)</item>
+        <item quantity="many">%d files (many)</item>
+        <item quantity="other">%d files</item>
+    </plurals>
+    <string-array name="planets">
+        <item>Mercury</item>
+        <item>Venus</item>
+    </string-array>
+    <string-array name="codes" translatable="false">
+        <item>MRC</item>
+    </string-array>
+    <color name="accent">#FF4081</color>
+    <dimen name="pad">16dp</dimen>
+</resources>

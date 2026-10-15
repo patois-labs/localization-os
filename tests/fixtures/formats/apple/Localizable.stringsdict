@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Hand-written fixture for the Localization OS stringsdict filter. -->
+	<key>files_count</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@files@</string>
+		<key>files</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>zero</key>
+			<string>No files</string>
+			<key>one</key>
+			<string>%lld file</string>
+			<key>other</key>
+			<string>%lld files</string>
+		</dict>
+	</dict>
+	<key>inbox_summary</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>You have %1$#@messages@ in %2$#@folders@ &amp; more</string>
+		<key>messages</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>one</key>
+			<string>%d message</string>
+			<key>other</key>
+			<string>%d messages</string>
+		</dict>
+		<key>folders</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>one</key>
+			<string>one folder</string>
+			<key>other</key>
+			<string>%d folders</string>
+		</dict>
+	</dict>
+	<key>tap_to_continue</key>
+	<dict>
+		<key>NSStringDeviceSpecificRuleType</key>
+		<dict>
+			<key>iphone</key>
+			<string>Tap to continue</string>
+			<key>mac</key>
+			<string>Click to continue</string>
+			<key>appletv</key>
+			<string>Press &lt;Select&gt; to continue</string>
+		</dict>
+	</dict>
+</dict>
+</plist>

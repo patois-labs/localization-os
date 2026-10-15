@@ -1,0 +1,12 @@
+{
+  "name": "loc-studio-airtable-extension",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "Send Airtable records to Localization OS for translation, and pull the results back.",
+  "dependencies": {
+    "@airtable/blocks": "1.19.0",
+    "react": "16.14.0",
+    "react-dom": "16.14.0"
+  }
+}

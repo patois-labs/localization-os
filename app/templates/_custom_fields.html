@@ -1,0 +1,52 @@
+{#- Custom project fields (SPEC-project-automation part C): shared input and display macros.
+    Every value is autoescaped by Jinja; a link is rendered ONLY when its URL passes
+    custom_fields.safe_url (https only), always with rel="noopener noreferrer". -#}
+
+{% macro cf_value(f, v) -%}
+  {%- if v is none or v == '' -%}<span class="muted">-</span>
+  {%- elif f.type == 'external_link' -%}
+    {%- set _label = v.label or v.key or v.url -%}
+    {%- if v.url -%}<a href="{{ v.url }}" rel="noopener noreferrer" target="_blank">{{ _label }}</a>{%- else -%}{{ _label }}{%- endif -%}
+  {%- elif f.type == 'url' -%}
+    {%- set _u = cf_safe_url(v) -%}
+    {%- if _u -%}<a href="{{ _u }}" rel="noopener noreferrer" target="_blank">{{ _u }}</a>{%- else -%}{{ v }}{%- endif -%}
+  {%- else -%}{{ v }}{%- endif -%}
+{%- endmacro %}
+
+{#- One input group for a field. named=true gives real form names (cf.<key>[.url|.label|.key]);
+    named=false (the new-project dialog) leaves them unnamed: its script serializes them. -#}
+{% macro cf_input(f, v, named=true) %}
+  {%- set base = 'cf.' ~ f.key -%}
+  {%- if f.type == 'external_link' -%}
+  <fieldset class="cf-field" data-cf-wrap data-customer="{{ f.customer_id if f.customer_id is not none else '' }}">
+    <legend>{{ f.label }}{% if f.required %} <span class="muted small">(required)</span>{% endif %}</legend>
+    <label class="small">Link (https://...)
+      <input type="url" {% if named %}name="{{ base }}.url"{% endif %} data-cf-key="{{ f.key }}" data-cf-part="url" maxlength="2048" value="{{ v.url if v else '' }}" /></label>
+    <label class="small">Key
+      <input type="text" {% if named %}name="{{ base }}.key"{% endif %} data-cf-key="{{ f.key }}" data-cf-part="key" maxlength="120" value="{{ v.key if v else '' }}" /></label>
+    <label class="small">Label (optional)
+      <input type="text" {% if named %}name="{{ base }}.label"{% endif %} data-cf-key="{{ f.key }}" data-cf-part="label" maxlength="500" value="{{ v.label if v else '' }}" /></label>
+    {% if f.help_text %}<span class="help">{{ f.help_text }}</span>{% endif %}
+  </fieldset>
+  {%- else -%}
+  <label class="cf-field" data-cf-wrap data-customer="{{ f.customer_id if f.customer_id is not none else '' }}">{{ f.label }}{% if f.required %} <span class="muted small">(required)</span>{% endif %}
+    {%- if f.type == 'select' %}
+    <select {% if named %}name="{{ base }}"{% endif %} data-cf-key="{{ f.key }}" data-cf-part="value" aria-label="{{ f.label }}"{% if f.required %} aria-required="true"{% endif %}>
+      <option value="">-</option>
+      {% for o in f.options %}<option value="{{ o }}"{% if v == o %} selected{% endif %}>{{ o }}</option>{% endfor %}
+    </select>
+    {%- elif f.type == 'long_text' %}
+    <textarea {% if named %}name="{{ base }}"{% endif %} data-cf-key="{{ f.key }}" data-cf-part="value" aria-label="{{ f.label }}"{% if f.required %} aria-required="true"{% endif %} rows="3" maxlength="10000">{{ v if v else '' }}</textarea>
+    {%- elif f.type == 'number' %}
+    <input type="number" step="any" {% if named %}name="{{ base }}"{% endif %} data-cf-key="{{ f.key }}" data-cf-part="value" aria-label="{{ f.label }}"{% if f.required %} aria-required="true"{% endif %} value="{{ v if v is not none else '' }}" />
+    {%- elif f.type == 'date' %}
+    <input type="date" {% if named %}name="{{ base }}"{% endif %} data-cf-key="{{ f.key }}" data-cf-part="value" aria-label="{{ f.label }}"{% if f.required %} aria-required="true"{% endif %} value="{{ v if v else '' }}" />
+    {%- elif f.type == 'url' %}
+    <input type="url" {% if named %}name="{{ base }}"{% endif %} data-cf-key="{{ f.key }}" data-cf-part="value" aria-label="{{ f.label }}"{% if f.required %} aria-required="true"{% endif %} maxlength="2048" value="{{ v if v else '' }}" />
+    {%- else %}
+    <input type="text" {% if named %}name="{{ base }}"{% endif %} data-cf-key="{{ f.key }}" data-cf-part="value" aria-label="{{ f.label }}"{% if f.required %} aria-required="true"{% endif %} maxlength="500" value="{{ v if v else '' }}" />
+    {%- endif %}
+    {% if f.help_text %}<span class="help">{{ f.help_text }}</span>{% endif %}
+  </label>
+  {%- endif -%}
+{% endmacro %}

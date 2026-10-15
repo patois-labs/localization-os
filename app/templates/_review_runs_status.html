@@ -1,0 +1,12 @@
+{# ux/review-runs: the shared status_badge with the existing localized label for `value`
+   (prefix ~ value, e.g. page.jobs.status_paused), falling back to status_label for a
+   value with no key (ADR 0052: statuses may show as human labels). The wrapper carries
+   the raw value in data-status and the label's language in lang. Kept out of
+   _macros.html so standalone pages that import _macros are not counted as localized. #}
+{% import "_macros.html" as m %}
+{% macro localized_status_badge(request, value, prefix='page.jobs.status_') -%}
+{%- set key = prefix ~ ((value or '')|string|lower) -%}
+{%- set label = t(request, key) -%}
+{%- if label == key %}{% set label = m.status_label(value) %}{% endif -%}
+<span class="status-text" data-status="{{ value }}"{{ lang_attr(request, key) }}>{{ m.status_badge(value, label) }}</span>
+{%- endmacro %}

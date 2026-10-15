@@ -1,0 +1,17 @@
+{# Recovery codes, shown ONCE (TOTP train). Context: codes (list of "xxxxx-xxxxx"). They are
+   rendered straight into the response that generated them and stored only as Argon2 hashes,
+   so this page is the only place they ever appear. #}
+<p class="notice notice-warn" role="status" id="mfa-codes-status">Two-step sign-in is on. Save these recovery codes now: they are shown only this once.</p>
+<p>If you lose the phone or app, each code below signs you in once instead of an app code.
+  Keep them somewhere safe and separate from your phone, for example in a password manager or
+  printed and locked away.</p>
+<div class="auth-recovery-panel">
+<ol class="mfa-codes data-mono" aria-label="Recovery codes">
+  {% for c in codes %}<li><code>{{ c }}</code></li>
+  {% endfor %}
+</ol>
+<label>All codes, to copy
+  <textarea readonly rows="{{ codes|length }}" cols="14" class="data-mono" id="mfa-codes-copy">{% for c in codes %}{{ c }}
+{% endfor %}</textarea></label>
+</div>
+<p class="help">You can make a new set later on your Account page (the old set then stops working).</p>

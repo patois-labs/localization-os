@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE translationbundle>
+<!-- hand-written XTB fixture -->
+<translationbundle lang='en'>
+  <translation id="introductionHeader">Hello i18n!</translation>
+  <translation id="2367646551098052009">Hello, <ph name="INTERPOLATION"/>! You have <ph name="INTERPOLATION_1" /> new messages.</translation>
+  <translation id="5811701742971715242">The <ph name="START_BOLD_TEXT"/>sky<ph name="CLOSE_BOLD_TEXT"/> is blue &amp; clear.</translation>
+  <translation id="3967965900462880190"><ph name="PH"/></translation>
+  <translation id="empty"/>
+  <translation id="custom.save">
+      Save changes
+  </translation>
+</translationbundle>

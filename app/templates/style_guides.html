@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Style guides{% endblock %}
+{% block content %}
+<div class="guidance-page">
+
+{% set guidance_title %}Style guides{% endset %}
+{% set guidance_meta %}<p>Register, tone and brand guidance for translation prompts, injected once <strong>approved</strong>.
+  {% if not can_edit %}<br><span class="badge warn">Read-only</span> Editing style guides is limited to admins and linguists.{% endif %}</p>{% endset %}
+{% set guidance_status %}{% endset %}
+{% set guidance_actions %}{% endset %}
+{{ m.page_header(guidance_title, meta=guidance_meta, status=guidance_status, secondary=guidance_actions) }}
+<nav class="guidance-sections" aria-label="{{ guidance_title | striptags }}">
+<a href="#guidance-1">All style guides</a>
+{% if can_edit %}<a href="#guidance-2">New style guide</a>{% endif %}
+</nav>
+
+{# a11y T7: a ?err= error renders once, as a sentence, in the summary at the top of
+   main (base.html + _form_errors.html), never as a raw code here. #}
+
+{% call m.card(flat=true) %}
+  <h2 id="guidance-1">All style guides</h2>
+  {% if rows %}
+  {% call m.data_table('All style guides', [{'label': 'Name'}, {'label': 'Status'}, {'label': 'Scope'}, {'label': 'Content type'}, {'label': 'Pair'}, {'label': 'Approved by'}]) %}
+      {% for row in rows %}
+      {% set g = row.g %}
+      <tr>
+        <td><span class="cell-primary"><a class="trunc" href="/style-guides/{{ g.id }}" style="max-width:28ch">{{ g.name }}</a></span></td>
+        <td>
+          {% if g.status == 'approved' %}{{ m.status_badge('approved', 'Approved') }}
+          {% else %}{{ m.status_badge('draft', 'Draft') }}{% endif %}
+        </td>
+        <td class="muted small">{% if g.customer_id %}customer #{{ g.customer_id }}{% else %}<span class="badge muted-badge">Org-global</span>{% endif %}</td>
+        <td class="muted small">{% if g.content_type_id %}#{{ g.content_type_id }}{% else %}any{% endif %}</td>
+        <td class="muted small data-mono">{% if g.source_locale or g.target_locale %}{{ g.source_locale or '*' }}→{{ g.target_locale or '*' }}{% else %}any{% endif %}</td>
+        <td class="muted small">{{ g.approved_by or '-' }}</td>
+      </tr>
+      {% endfor %}
+    {% endcall %}
+  {% else %}
+  {% set guidance_empty %}No style guides yet - create one below.{% endset %}{{ m.empty_state(guidance_empty) }}
+  {% endif %}
+{% endcall %}
+
+{% if can_edit %}
+{% call m.card() %}
+  <h2 id="guidance-2">New style guide</h2>
+  <form method="post" action="/style-guides" class="form">
+{% call m.form_section('guidance-fields-0', 'New style guide') %}
+    {% include "_csrf.html" %}
+    <label>Name <input type="text" name="name" placeholder="Acme brand voice / Formal support tone" required /></label>
+    {% if not customer_bound %}
+    <label>Customer
+      <select name="customer_id"><option value="">Org-global (all customers)</option>
+        {% for c in customers %}<option value="{{ c.id }}">{{ customer_label(c) }}</option>{% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    {% if content_types %}
+    <label>Content type
+      <select name="content_type_id"><option value="">(any content type)</option>
+        {% for ct in content_types %}<option value="{{ ct.id }}">{{ ct.name }}{% if ct.customer_id is none %} (global){% endif %}</option>{% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    <div class="inline-form">
+      <label>Source locale
+        <select name="source_locale"><option value="">any</option>
+          {% for loc in locales %}<option value="{{ loc }}">{{ label_for(loc) }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Target locale
+        <select name="target_locale"><option value="">any</option>
+          {% for loc in locales %}<option value="{{ loc }}">{{ label_for(loc) }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+    <p class="help">Leave both locales blank for a universal (pair-agnostic) guide. A per-pair guide needs both.</p>
+    <label>Guide body
+      <textarea name="body" rows="8" placeholder="Write the register, tone, punctuation and brand rules the model should follow…"></textarea>
+    </label>
+    <button type="submit">Create style guide</button>
+  {% endcall %}
+</form>
+{% endcall %}
+{% endif %}
+
+</div>
+{% endblock %}

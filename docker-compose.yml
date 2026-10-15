@@ -1,0 +1,184 @@
+# Localization OS TMS - Docker Compose (Phase 4-C).
+#
+# THREE usage modes, layered so the default stays dead-simple:
+#
+#   1. DEFAULT  (SQLite, single command):
+#         docker compose up -d
+#      -> just the `app` service + a named volume at /data. No Postgres, no
+#         proxy. Everything (DB, uploads, .enc_key, .session_secret) persists in
+#         the `loc_data` volume. App published on 127.0.0.1:8000 (localhost only).
+#
+#   2. POSTGRES  (opt-in via the `postgres` profile):
+#         docker compose --profile postgres up -d
+#      -> starts the `db` service and wires DATABASE_URL into `app`. The
+#         entrypoint runs `alembic upgrade head` on boot. Uncomment/keep the
+#         `db` env under the `app` service (see the note there).
+#
+#   3. PROXY  (opt-in via the `proxy` profile - TLS termination):
+#         docker compose -f docker-compose.yml -f deploy/compose-proxy.yml --profile proxy up -d
+#         (add --profile postgres to combine)
+#      -> Caddy fronts the app with auto-HTTPS on 80/443. See deploy/Caddyfile.
+#
+# The bare `up -d` forms above are for a local trial only. Anything that serves real
+# users first runs the "Compose image scan gate" in docs/DEPLOY.md (build, scan and pin
+# every image), then `docker compose up -d --no-build --pull never` (#385).
+#
+# Provide SESSION_SECRET + ENCRYPTION_KEY via a .env file next to this compose
+# file, or via your orchestrator's secret store. This is a normal (non-embedded)
+# install, so the app honors either spelling - the unprefixed names here or the
+# LOC_TMS_-prefixed ones (prefixed wins if both are set). If unset, the app
+# generates and persists them as keyfiles in the /data volume (fine for a single
+# instance; see docs/DEPLOY.md + docs/SECRETS.md for why you may want to pin them
+# explicitly, and for the exact env/keyfile precedence).
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        RELEASE: ${RELEASE:-}
+        RELEASE_COMMIT: ${RELEASE_COMMIT:-}
+        # Opt-in identity profiles (Dockerfile): 1 adds SAML / LDAP, default 0 = lean image.
+        WITH_SAML: ${WITH_SAML:-0}
+        WITH_LDAP: ${WITH_LDAP:-0}
+    image: localization-os:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    # Bind to localhost ONLY by default. The reverse proxy (proxy profile, or an
+    # external one) terminates public TLS and forwards here. Drop the 127.0.0.1
+    # prefix only if you deliberately want the app reachable on the host's LAN IP
+    # without a proxy (not recommended for the public internet).
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # Single durable volume: SQLite DB + uploads + keyfiles. BACK THIS UP.
+      - loc_data:/data
+    networks:
+      # `default` lets the proxy reach the app; `internal` (no egress) lets the
+      # app reach the `db` service under the postgres profile.
+      - default
+      - internal
+    environment:
+      # --- Install mode ---
+      # Declare this a REAL server install (login wall ON, scheduler ON, but NO
+      # seeded dev accounts - first visit hits /auth/setup to create the admin).
+      # The image sets this too (Dockerfile); it is repeated here so a compose
+      # deploy is correct even against an image that predates it. See app/config.py
+      # (IS_SERVER / IS_TEST). Do NOT set this for the verify test suites.
+      LOC_TMS_SERVER: "1"
+      LOC_TMS_IMAGE_DIGEST: ${LOC_TMS_IMAGE_DIGEST:-}
+
+      # --- Secrets (STRONGLY recommended to set these explicitly) ---
+      # This is a normal (non-embedded) install, so config.py accepts either the
+      # canonical unprefixed name (below) or the LOC_TMS_-prefixed one; the
+      # prefixed spelling wins if both are set, and an existing keyfile in the
+      # /data volume out-ranks a bare unprefixed var (so setting the var alone
+      # never silently switches a key an install already runs on - see
+      # docs/SECRETS.md sections 1 + 3). Losing ENCRYPTION_KEY makes encrypted
+      # uploads + stored connector tokens permanently unrecoverable. Keep it safe
+      # + backed up. (In embedded mode only the prefixed spelling is honored.)
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      # LOC_TMS_SESSION_SECRET / LOC_TMS_ENCRYPTION_KEY are also honored (and win
+      # on conflict); uncomment if you prefer the prefixed spelling:
+      # LOC_TMS_SESSION_SECRET: ${LOC_TMS_SESSION_SECRET:-}
+      # LOC_TMS_ENCRYPTION_KEY: ${LOC_TMS_ENCRYPTION_KEY:-}
+
+      # --- Translation engine (mock = free and offline, same default as .env.example) ---
+      DEFAULT_PROVIDER: ${DEFAULT_PROVIDER:-mock}
+
+      # --- Provider keys (optional; app runs offline on the mock engine) ---
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+
+      # --- Structured logging placeholder (JSON-logging increment, coming) ---
+      # Recognized once the JSON-logging work lands; harmless until then.
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+
+      # --- Postgres wiring (POSTGRES PROFILE ONLY) ---
+      # This variable is empty by default => SQLite. When you run with
+      # `--profile postgres`, set DATABASE_URL (here or in .env) to point at the
+      # `db` service below. The entrypoint runs `alembic upgrade head` when this
+      # is a postgres URL. Example:
+      # Set the URL using the same strong value supplied to POSTGRES_PASSWORD.
+      DATABASE_URL: ${DATABASE_URL:-}
+    # Only meaningful under the postgres profile; harmless otherwise because the
+    # `db` service simply won't exist in the default mode.
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+
+  # -------------------------------------------------------------------------
+  # OPTIONAL: Postgres. Enabled only with `--profile postgres`.
+  # The default `docker compose up` never starts this (stays SQLite).
+  # -------------------------------------------------------------------------
+  db:
+    image: postgres:16@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-locstudio}
+      # No default password. Not `:?`: Compose interpolates every service, even ones whose
+      # profile is off, so `:?` would block SQLite-only launches. An empty value still fails
+      # loud: the postgres image refuses to initialise without a password.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-} # pregate: allow-secret env reference
+      POSTGRES_DB: ${POSTGRES_DB:-locstudio}
+    volumes:
+      - loc_pgdata:/var/lib/postgresql/data
+    # Internal network only - never publish 5432 to the host/internet.
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-locstudio} -d ${POSTGRES_DB:-locstudio}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # OPTIONAL: Caddy reverse proxy w/ automatic HTTPS. Enabled with `--profile proxy`.
+  # Edit deploy/Caddyfile (set your domain + email) before enabling.
+  # Only THIS service should be exposed to the public internet.
+  # -------------------------------------------------------------------------
+  proxy:
+    image: caddy:2@sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52
+    profiles: ["proxy"]
+    # The companion file configures the app as well. Refuse an incomplete TLS launch.
+    environment:
+      LOC_TMS_PROXY_CONFIGURED: "0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        test "$$LOC_TMS_PROXY_CONFIGURED" = 1 ||
+        { echo 'Include -f deploy/compose-proxy.yml for secure proxy settings'; exit 1; };
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    networks:
+      default:
+        ipv4_address: 172.30.218.2
+
+networks:
+  # `default` is created automatically; declared here so `internal` can coexist.
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.218.0/24
+          ip_range: 172.30.218.128/25
+  internal:
+    internal: true
+
+volumes:
+  loc_data:      # app data: SQLite DB + uploads + keyfiles (BACK THIS UP)
+  loc_pgdata:    # postgres data (postgres profile only)
+  caddy_data:    # caddy certs/state (proxy profile only)
+  caddy_config:  # caddy config cache (proxy profile only)

@@ -1,0 +1,43 @@
+# Generic YAML fixture (hand-written for verify_yaml_filter.py).
+app:
+  title: Welcome to the store   # trailing comment stays
+  subtitle: 'It''s open: come in'
+  quoted: "Line one\nLine two \"quoted\" é"
+  defaults: &defaults
+    greeting: &hello Hello there
+    farewell: Goodbye
+  copy:
+    <<: *defaults
+    extra: *hello
+  enabled: yes
+  disabled: off
+  count: 42
+  ratio: 0.5
+  released: 2026-10-10
+  nothing: ~
+  hex: '#ff0000'
+  version_str: "1.0"
+  forced: !!str 12
+  explicit_int: !!int "7"
+  ruby: !ruby/object:Foo
+    name: Not translated either
+  items:
+    - First item
+    - Second item
+    - 3
+  inline: [Red, Green, {label: Blue sky}]
+  literal: |
+    Keep this line.
+    And this one.
+
+  folded: >-
+    A folded paragraph
+    that spans lines.
+  ? [complex, key]
+  : Complex value
+  placeholders: "Hello %{name}, you have {count} items and %1$s"
+  html: "<b>Bold</b> text"
+  url: https://example.com/path
+  empty: ""
+  symbols: "--- *** ---"
+# trailing comment at end of file

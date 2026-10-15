@@ -1,0 +1,867 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ conn.name }} - Connection{% endblock %}
+{% block content %}
+<div class="connections-page">
+
+<p><a href="/connectors/{{ conn.kind }}" class="back"><span aria-hidden="true">←</span> {{ spec.name }} connections</a></p>
+
+{% set header_actions %}
+<button type="button" class="ghost layout-edit-btn layout-edit-inline" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+{% endset %}
+{% set header_status %}{% if conn.status == 'connected' %}{{ m.status_badge('connected', 'connected') }}
+    {% elif conn.status == 'reauth' %}<span class="badge reauth" title="reconnect needed">⟳ reconnect needed</span>
+    {% elif conn.status == 'error' %}{{ m.status_badge('failed', 'error') }}
+    {% else %}{{ m.status_badge('new', 'new') }}{% endif %}{% endset %}
+{% set header_meta %}
+    {% if is_oauth %}
+      OAuth{% if oauth_scope %} · scopes <code>{{ oauth_scope }}</code>{% endif %}
+      · expires {{ oauth_expires_display }}
+    {% else %}
+      API token
+    {% endif %}
+  {% endset %}
+{% set header_title %}<span class="tile-icon" aria-hidden="true">{{ spec.icon }}</span> {{ conn.name }}{% endset %}
+{{ m.page_header(header_title, meta=header_meta, status=header_status, secondary=header_actions) }}
+<section class="card connection-operations">
+  {% if can_manage and is_oauth and (conn.status == 'reauth' or conn.status == 'connected') %}
+  <form method="post" action="/connectors/{{ conn.kind }}/oauth/start" class="mt">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="name" value="{{ conn.name }}" />
+    <input type="hidden" name="cid" value="{{ conn.id }}" />
+    <input type="hidden" name="base_url" value="{{ conn.config.get('base_url', '') }}" />
+    {% if conn.status == 'reauth' %}
+      <button type="submit">⟳ Reconnect with OAuth</button>
+    {% else %}
+      <button type="submit" class="small ghost">Re-authorize with {{ spec.name }}</button>
+    {% endif %}
+  </form>
+  {% endif %}
+  {% if can_manage and conn.kind == 'mcp_cms' and not is_oauth %}
+  <form method="post" action="/connectors/mcp_cms/oauth/start" class="mt">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="name" value="{{ conn.name }}" />
+    <input type="hidden" name="cid" value="{{ conn.id }}" />
+    <button type="submit" class="small ghost">Connect with OAuth</button>
+    <span class="muted small">For MCP servers that need a sign-in instead of a token. Replaces any stored token.</span>
+  </form>
+  {% endif %}
+  {% if msg %}<p class="{{ 'ok' if ok == '1' else 'error' }}">{{ msg }}</p>{% endif %}
+  {% if request.query_params.get('job') %}
+    <div class="job-watch" id="jobWatch" data-conn="{{ conn.id }}" data-job="{{ request.query_params.get('job')|int }}">
+      <div class="prog"><div class="prog-bar" style="width:0%"></div></div>
+      <p class="muted small job-label">Queued…</p>
+      <form class="job-retry" method="post" action="/connectors/connection/{{ conn.id }}/retry" hidden>
+        {% include "_csrf.html" %}
+        <input type="hidden" name="job_id" value="{{ request.query_params.get('job')|int }}" />
+        <button class="small ghost" type="submit"></button>
+      </form>
+    </div>
+    <script src="/static/jobs.js?v=3"></script>
+    <script nonce="{{ csp_nonce() }}">watchJob({{ request.query_params.get('job')|int }}, document.getElementById('jobWatch'));</script>
+  {% endif %}
+  {% if conn.last_message %}<p class="muted small">Last result: {{ conn.last_message }}</p>{% endif %}
+  {% if project %}
+    <p class="muted">Syncs into project <a href="/projects/{{ project.id }}">{{ project.name }}</a>
+      · {{ project.source_locale }} → {{ effective_locales|join(', ') }}</p>
+  {% endif %}
+
+  {% if can_manage %}
+  <div class="mt sync-cta">
+    {% set sync_action %}
+    <form method="post" action="/connectors/connection/{{ conn.id }}/sync">
+      {% include "_csrf.html" %}
+      <button type="submit" data-busy-label="{{ t(request, 'busy.syncing') }}"><span aria-hidden="true">⚡</span> Translate now - automated</button>
+    </form>
+    {% endset %}
+    {% set sync_consequence %}
+    {# factory:anchor connection.item_units (scripts/factory inserts item_units captions before the closing '} %}' below) #}
+    {% set item_units = {
+      'jira': ('matching issues (your JQL)', 'a labelled comment'),
+      'confluence': ("the space's pages", 'a localized child page'),
+      'document360': ('your Document360 articles', "the article's per-language version (a draft by default; a translation already published is never edited in place, a held title or body keeps its stored value)"),
+      'freshdesk': ('your Solutions articles', "the article's per-language version (drafts by default)"),
+      'zoho': ('your Zoho Desk articles', "the article's per-locale translation (Draft by default; a held title or body keeps its stored value)"),
+      'intercom': ('your Intercom Help Center articles', "the article's per-locale translated_content map entry (draft by default)"),
+      'salesforce': ('your Salesforce Knowledge articles', "the article's own translation version (Draft by default; run Rediscover fields below first so per-record-type fields are mapped)"),
+      'notion': ('your Notion pages', 'a per-locale child page of the source (titled "[locale] Title"), tracked in an internal id map and resuming partial builds without duplicating'),
+      'helpscout': ('your Help Scout Docs articles', 'a separate article in the target-language collection you map (collection-per-language, cross-links remapped, a notpublished draft by default; a held title or body keeps its stored text), tracked in an internal id map'),
+      'strapi': ('your Strapi collection-type entries', "the entry's per-locale variant (documentId on v5 / a localization on v4; written to the DRAFT on v5, never auto-published)"),
+      'contentful': ('your Contentful entries', "a new per-locale field key on the same entry (fields.{id}.{locale}, version-locked read-merge-write; the entry is updated, never auto-published)"),
+      'shopify': ('your Shopify products, collections, articles, blogs and pages', "a registered translation on the source resource (Translations API, keyed by resource+key+locale with a freshly-read content digest; publish the language in Shopify to show it on the storefront)"),
+      'hubspot': ('your HubSpot site pages, landing pages and blog posts', "a real HubSpot language variation linked into the object's own multi-language group (HubSpot owns the correlation, so no id map is persisted; written to the variation's DRAFT by default, never auto-published; marketing emails and forms are not supported)"),
+      'wordpress': ('your WordPress posts and pages', 'a separate post/page in the target language (Polylang doc-per-locale), tracked in an internal id map; raw block content is preserved (Gutenberg/shortcodes survive), drafts by default'),
+      'akeneo': ('your Akeneo products and product models', "the same record's per-locale attribute values (a partial PATCH merge, so other locales, scopes, and untouched attributes are never overwritten)"),
+      'mcp_cms': ('the items your mapped MCP list tool returns', "the item's per-locale variant, written only through the MCP write tool you mapped (draft unless you turn on publish)"),
+      'servicenow': ('the published articles of your ServiceNow knowledge base', 'a separate Draft article per language, linked to the source by Parent (the source and other languages are never overwritten)'),
+      'msgraph': ('the supported files (Word, Excel, HTML, Markdown, text, JSON, PO, SRT) in your source folder', "a translated copy of the file in the locale's folder under the target root (the source file is never changed, and a copy you edited by hand is never overwritten)"),
+      'drupal': ('your Drupal entities of the configured resource types (for example node--article)', "the same entity's own translation in the target language (EXPERIMENTAL, needs the alpha JSON:API Multilingual module; created unpublished, and a write that lands on the source halts the run)"),
+      'github': ('the resource files in your repository that match the source path patterns (JSON, gettext PO, or a resource file with a key view such as .properties, .strings or YAML)', 'one target-language file per locale, committed together on a working branch and opened as a single pull request against the base branch (the base branch is never written directly)'),
+      'sanity': ('your Sanity documents of the configured types', "a language item inside the same document's internationalized array fields (field-level) or a linked per-language document (document-level); always written to the draft, never published"),
+      'sitecore': ('your Sitecore content items under the configured root path', 'a language version of the same item (addItemVersion then updateItem on the master database; never published, shared fields never touched)'),
+      'zendesk': ('your Zendesk Guide articles', "the article's per-locale translation object (written as a draft by default; a held title or body keeps its stored value)"),
+      'gdocs': ('the Google Docs in your source Drive folder', "a new Google Doc in the locale's folder under the target folder (the source document is never changed, and a translated doc you edited by hand is never overwritten; Google Docs has no draft state, so every write is live for anyone reading the translated doc)"),
+      'bitbucket': ('the resource files in your repository that match the source path patterns (JSON, gettext PO, or a resource file with a key view such as .properties, .strings or YAML)', 'one target-language file per locale, committed together on a working branch and opened as a single pull request against the base branch (the base branch is never written directly)'),
+      'gitlab': ('the resource files in your project that match the source path patterns (JSON, gettext PO, or a resource file with a key view such as .properties, .strings or YAML)', 'one target-language file per locale, committed together on a working branch and opened as a single merge request against the base branch (the base branch is never written directly)'),
+      'plytix': ('your Plytix products', 'the per-language target attributes you mapped (a partial PATCH of those attributes only; the source attribute is never written)'),
+    } %}
+    {% set iu = item_units.get(conn.kind) %}
+    <span class="muted small">
+      {% if iu %}Translate {{ iu[0] }} into your target languages and write each back as {{ iu[1] }}; sources stay untouched.
+      {% else %}Pull → translate (your engine, TM &amp; glossary) → push back, in one click.{% endif %}
+      {% if conn.kind == 'jira' and (conn.config.get('target_mode') or 'comment').lower() == 'field' %}
+        <br><strong>Field mode is on:</strong> the translation is written into the target custom field
+        ({{ conn.config.get('target_field') or 'not set - set one or the run is refused' }});
+        the source summary and description are never overwritten.
+      {% elif conn.kind == 'notion' or conn.kind == 'helpscout' %}
+        <br>A pre-existing translation is never overwritten.
+      {% endif %}
+    </span>
+    {% endset %}
+    {{ m.action_bar('Translate now', primary=sync_action, consequence=sync_consequence) }}
+  </div>
+  <details class="mt">
+    <summary class="muted small expand">Manual steps &amp; tools</summary>
+    <div class="quick mt">
+      <form method="post" action="/connectors/connection/{{ conn.id }}/test">
+        {% include "_csrf.html" %}<button class="small ghost" type="submit" data-busy-label="{{ t(request, 'busy.testing') }}">Test connection</button></form>
+      {% if conn.kind == 'airtable' %}
+        <form method="post" action="/connectors/connection/{{ conn.id }}/pull">
+          {% include "_csrf.html" %}<button class="small ghost" type="submit" data-busy-label="{{ t(request, 'busy.pulling') }}"><span aria-hidden="true">⬇</span> Pull only</button></form>
+        <form method="post" action="/connectors/connection/{{ conn.id }}/push">
+          {% include "_csrf.html" %}<button class="small ghost" type="submit" data-busy-label="{{ t(request, 'busy.pushing') }}"><span aria-hidden="true">⬆</span> Push only</button></form>
+      {% endif %}
+      <form method="post" action="/connectors/connection/{{ conn.id }}/delete"
+            data-action-confirm="Delete this connection? (Its synced project/documents stay.)">
+        {% include "_csrf.html" %}
+        <button class="small ghost danger-btn" type="submit">Delete</button></form>
+    </div>
+  </details>
+  {% endif %}
+</section>
+
+<div class="connections-layout">
+<nav class="connections-section-nav" aria-label="{{ conn.name }} sections">
+  {% if can_manage %}
+  <a href="#connection-languages">Target languages</a>
+  {% if conn.kind == 'airtable' %}<a href="#connection-webhook">Official Airtable webhook (push)</a>{% endif %}
+  <a href="#connection-schedule">Scheduled sync</a>
+  <a href="#connection-settings">Settings &amp; credentials</a>
+  <a href="#connection-rotate">Rotate credentials</a>
+  {% endif %}
+  <a href="#connection-history">Sync history</a>
+</nav>
+<div id="page-layout" class="page-layout" data-layout-page="connection">
+{% if can_manage %}
+<section class="card" data-card="langs">
+  <h2 id="connection-languages">Target languages</h2>
+  <p class="muted">One "Translate now" fans out to all of these. Pick a saved
+    <a href="/languages">language set</a> or enter a custom list.</p>
+  {% if languages_project %}
+  <p class="help" id="connection-languages-owner">The languages of this connection are managed by
+    project <a href="/projects/{{ languages_project.id }}">{{ languages_project.name }}</a>.
+    A change here changes that project's languages: a new one is added (this needs a manager or
+    above) and a removed one is stopped, never deleted.</p>
+  {% elif languages_feeds %}
+  <p class="help" id="connection-languages-owner">Connected projects copy this connection and
+    keep their own languages:
+    {% for p in languages_feeds %}<a href="/projects/{{ p.id }}">{{ p.name }}</a>{{ ", " if not loop.last }}{% endfor %}.
+    Change the languages on the project; a language change here is refused.</p>
+  {% endif %}
+  <p>Currently translating into:
+    {% for loc in effective_locales %}<span class="chip">{{ loc }}</span> {% endfor %}
+    {% if not effective_locales %}<span class="muted">none set</span>{% endif %}</p>
+  <form method="post" action="/connectors/connection/{{ conn.id }}/languages" class="form">
+    {% include "_csrf.html" %}
+    <label>Language set
+      <select name="language_set_id">
+        <option value="">- Custom list below -</option>
+        {% for ls in language_sets %}
+          <option value="{{ ls.id }}" {{ 'selected' if language_set_id == (ls.id|string) }}>
+            {{ ls.name }} ({{ (ls.target_locales or [])|join(', ') }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Custom target locales <span class="muted small">comma-separated; used when no set is selected</span>
+      <input type="text" name="target_locales"
+             value="{{ conn.config.get('target_locales', '') }}" placeholder="es-MX, de-DE, fr-FR" />
+    </label>
+    <button type="submit">Save languages</button>
+  </form>
+  {% if conn.kind == 'airtable' %}
+    <p class="help mt">For Airtable, the target <em>columns</em> determine the languages
+      (named like <code>{{ conn.config.get('source_field') or 'Notes' }} (es-MX)</code>) - add one column
+      per language and "Translate now" fills them all.</p>
+  {% endif %}
+</section>
+
+{% if conn.kind == 'airtable' %}
+<section class="card" data-card="airtable_webhook">
+  <h2 id="connection-webhook">Official Airtable webhook (push)</h2>
+  <p class="muted">Register Airtable's official Webhooks API so an edit to your source column
+    triggers translation automatically (ping-then-pull, source-field-scoped, feedback-loop guarded).
+    <strong>Requires a public HTTPS URL</strong> - Airtable's servers cannot reach localhost. Set
+    <code>app_base_url</code> (<a href="/security">Security</a>) to your tunnel or public URL first.</p>
+  {% if not airtable_webhook.app_base_url_ok %}
+    <p class="error">app_base_url is not a public https URL yet - set it before registering.</p>
+  {% endif %}
+  {% if airtable_webhook.registered %}
+    <p class="muted small">
+      Webhook <code>{{ airtable_webhook.id }}</code>
+      · notifies <code>{{ airtable_webhook.notification_url }}</code><br>
+      Expires: {{ airtable_webhook.expiration_time or '-' }}
+      · Last ping: {{ airtable_webhook.last_ping_at or 'never' }}
+      · Cursor: {{ airtable_webhook.cursor }}<br>
+      Auto-translate on change:
+      <strong>{{ 'ON' if airtable_webhook.auto_translate_on_change else 'OFF (records marked pending)' }}</strong>
+      {% if airtable_webhook.pending_record_ids %}
+        · <strong>{{ airtable_webhook.pending_record_ids|length }} record(s) pending</strong>
+      {% endif %}
+    </p>
+    {% if airtable_webhook.disabled %}
+      <p class="error"><strong>Webhook STOPPED:</strong> {{ airtable_webhook.error_state
+        or 'Airtable disabled this webhook (a watched field may have been deleted). It is no longer generating payloads.' }}
+        Re-register it below to resume push.</p>
+    {% elif airtable_webhook.last_error %}
+      <p class="error small">Webhook warning: {{ airtable_webhook.last_error }}</p>
+    {% endif %}
+    {% if can_manage %}
+    <div class="row" style="display:flex; gap:.5rem; flex-wrap:wrap;">
+      {% if airtable_webhook.pending_record_ids or not airtable_webhook.auto_translate_on_change %}
+      <form method="post" action="/connectors/connection/{{ conn.id }}/airtable-webhook/translate-pending">
+        {% include "_csrf.html" %}
+        <button type="submit" data-busy-label="{{ t(request, 'busy.translating') }}">Translate pending now ({{ airtable_webhook.pending_record_ids|length }})</button>
+      </form>
+      {% endif %}
+      <form method="post" action="/connectors/connection/{{ conn.id }}/airtable-webhook/health">
+        {% include "_csrf.html" %}
+        <button type="submit" data-busy-label="{{ t(request, 'busy.checking') }}">Check webhook health</button>
+      </form>
+      <form method="post" action="/connectors/connection/{{ conn.id }}/airtable-webhook/unregister"
+            data-action-confirm="Delete this Airtable webhook?">
+        {% include "_csrf.html" %}
+        <button type="submit" class="danger-btn">Unregister webhook</button>
+      </form>
+    </div>
+    {% endif %}
+  {% else %}
+    <p class="help">No official webhook registered. Set the source field + base/table on this
+      connection, ensure <code>app_base_url</code> is public, then register.</p>
+    {% if can_manage %}
+    <form method="post" action="/connectors/connection/{{ conn.id }}/airtable-webhook/register">
+      {% include "_csrf.html" %}
+      <button type="submit" {{ 'disabled' if not airtable_webhook.app_base_url_ok }}>Register webhook</button>
+    </form>
+    {% endif %}
+  {% endif %}
+  <p class="help mt">Set <code>auto_translate_on_change=1</code> in the connection settings above
+    to translate immediately on each change; leave it blank/<code>0</code> (default) to only mark records
+    pending and translate on demand.</p>
+</section>
+{% endif %}
+
+<section class="card" data-card="schedule">
+  <h2 id="connection-schedule">Scheduled sync</h2>
+  <p class="muted">Run "Translate now" automatically on a schedule - same engine, TM, glossary
+    and write-back as the button above. <strong>Off by default:</strong> scheduled runs use your
+    live MT engine and write to {{ spec.name }} unattended.</p>
+  {% if not scheduler_on %}
+    <p class="error">The scheduler is globally paused (setting <code>sync_scheduler_enabled=0</code>) -
+      saved schedules will not fire until it is re-enabled.</p>
+  {% endif %}
+  <form method="post" action="/connectors/connection/{{ conn.id }}/schedule" class="form">
+    {% include "_csrf.html" %}
+    <label>Frequency <span class="muted small">minimum 15 minutes</span>
+      <select name="every_minutes">
+        <option value="0">Off - manual only</option>
+        {% for m, lbl in schedule_options %}
+          <option value="{{ m }}" {{ 'selected' if schedule_minutes == m }}>{{ lbl }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">Save schedule</button>
+  </form>
+  {% if schedule_minutes %}
+    <p class="muted small mt">
+      Next run: {{ conn.config.get('sync_next_at', '-') }} UTC
+      {% if conn.config.get('sync_last_at') %}
+        · Last scheduled run: {{ conn.config.get('sync_last_at') }} UTC
+        {% if conn.config.get('sync_last_job_id') %}
+          (<a href="/jobs">job #{{ conn.config.get('sync_last_job_id') }}</a>)
+        {% endif %}
+      {% endif %}
+    </p>
+    <p class="help">Runs are skipped (and rescheduled) while a previous sync is still
+      running. Results appear in the sync history below and on the <a href="/jobs">Jobs</a> page.</p>
+  {% endif %}
+</section>
+
+<section class="card" data-card="settings">
+  <h2 id="connection-settings">Settings &amp; credentials</h2>
+  <form method="post" action="/connectors/connection/{{ conn.id }}" class="form"
+        data-browse="settings" data-kind="{{ conn.kind }}" cid="{{ conn.id }}">
+    {% include "_csrf.html" %}
+    <label>Connection name <input type="text" name="name" value="{{ conn.name }}" required /></label>
+
+    <label>Customer <span class="muted small">(scopes this connection to one customer; global = all)</span>
+      <select name="customer_id">
+        <option value="" {% if not conn.customer_id %}selected{% endif %}>Global (all customers)</option>
+        {% for c in customers %}
+          <option value="{{ c.id }}" {% if conn.customer_id == c.id %}selected{% endif %}>{{ customer_label(c) }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label>Default content type <span class="muted small">(applied to the auto-created sync project; General = untyped)</span>
+      <select name="content_type_id">
+        <option value="" {% if not conn.content_type_id %}selected{% endif %}>General (untyped)</option>
+        {% for t in content_types %}
+          <option value="{{ t.id }}" {% if conn.content_type_id == t.id %}selected{% endif %}>{{ t.name }}{% if t.customer_id %} (this customer){% else %} (global){% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <div class="mt">
+      <button type="button" class="small ghost" data-connector-browse>Load from {{ spec.name }}</button>
+      <span class="muted small browse-out">Pick bases/tables/projects/spaces live instead of typing IDs.</span>
+    </div>
+
+    {% if spec.config_fields %}
+    {% set field_label_1 %}Settings{% endset %}
+{% call m.form_section("connection-fields-1", field_label_1) %}
+
+      {% for f in spec.config_fields %}
+      <label>{{ f.label }}{% if not f.required %} <span class="muted small">(optional)</span>{% endif %}
+        <input type="text" name="{{ f.name }}" value="{{ conn.config.get(f.name, '') }}" placeholder="{{ f.placeholder }}" />
+        {% if f.help %}<span class="muted small">{{ f.help }}</span>{% endif %}
+      </label>
+      {% endfor %}
+    {% endcall %}
+    {% endif %}
+
+    {% set field_label_2 %}Credentials <span class="muted small">· leave blank to keep the stored value</span>{% endset %}
+{% call m.form_section("connection-fields-2", field_label_2) %}
+
+      {% for f in spec.secret_fields %}
+      <label>{{ f.label }}
+        {% if f.secret %}
+          <input type="password" name="{{ f.name }}" placeholder="{{ '•••••• (stored)' if secret.get(f.name) else f.placeholder }}" autocomplete="new-password" />
+        {% else %}
+          <input aria-label="{{ f.label }}" type="text" name="{{ f.name }}" value="{{ secret.get(f.name, '') }}" placeholder="{{ f.placeholder }}" autocomplete="off" />
+        {% endif %}
+        {% if f.help %}<span class="muted small">{{ f.help }}</span>{% endif %}
+      </label>
+      {% endfor %}
+    {% endcall %}
+
+    <button type="submit">Save</button>
+  </form>
+</section>
+
+{% if is_oauth %}
+<section class="card" data-card="rotate">
+  <h2 id="connection-rotate">Rotate credentials</h2>
+  <p class="help">OAuth connections use <strong>Reconnect</strong> (above) instead of manual
+    credential rotation - tokens refresh automatically, and a full reconnect replaces them if
+    something goes wrong.</p>
+</section>
+{% else %}
+<section class="card" data-card="rotate">
+  <h2 id="connection-rotate">Rotate credentials</h2>
+  <p class="help">New credentials are tested before replacing the old ones - a failed
+    test changes nothing.</p>
+  <form method="post" action="/connectors/connection/{{ conn.id }}/rotate" class="form">
+    {% include "_csrf.html" %}
+    {% for f in spec.secret_fields %}
+      <label>{{ f.label }}
+        {% if f.secret %}
+          <input type="password" name="{{ f.name }}" placeholder="{{ f.placeholder }}" autocomplete="new-password" />
+        {% else %}
+          <input aria-label="{{ f.label }}" type="text" name="{{ f.name }}" value="{{ secret.get(f.name, '') }}" placeholder="{{ f.placeholder }}" autocomplete="off" />
+        {% endif %}
+        {% if f.help %}<span class="muted small">{{ f.help }}</span>{% endif %}
+      </label>
+    {% endfor %}
+    <button type="submit">Rotate credentials</button>
+  </form>
+</section>
+{% endif %}
+{% endif %}
+
+{% if conn.kind == 'zendesk' %}
+<section class="card" data-card="push">
+  <h2>Webhook intake (push change detection)</h2>
+  <p class="muted">Create a Zendesk <code>article.published</code> webhook pointing at this URL, with the
+    same <em>Webhook signing secret</em> you set in the credentials below. When an article changes,
+    Zendesk calls this endpoint; {{ brand }} verifies the signature, re-fetches the article (the event
+    payload is thin - id only), and translates just that article into your target locales. Deliveries
+    are deduplicated by event id, so a Zendesk retry never double-translates.</p>
+  <div class="form narrow">
+    <label>Intake URL <span class="muted small">· POST · HMAC-SHA256 signed (no API token needed)</span>
+      <input class="linkbox" type="text" readonly data-select-on-click
+             value="{{ base_url }}/webhooks/connectors/{{ conn.id }}" />
+    </label>
+    <p class="help">Change detection also runs a nightly incremental-export sweep (on
+      <code>edited_at</code>, never <code>updated_at</code>) as a backstop, plus honours the
+      <code>outdated_locales</code> stale flags. Current watermark:
+      <code>{{ conn.config.get('zendesk_watermark') or '0' }}</code>.</p>
+  </div>
+</section>
+{% endif %}
+
+{% if conn.kind == 'jira' %}
+{% set auto_on = (conn.config.get('auto_translate_on_change', '0')|string|lower) in ['1','true','yes','on'] %}
+<section class="card" data-card="push">
+  <h2>Push intake - Jira Automation &amp; webhooks</h2>
+  <p class="muted">Let Jira notify {{ brand }} when an issue changes, instead of polling. Default posture
+    is <strong>button-trigger</strong>: a verified push marks issues <em>pending</em> to release below
+    (no surprise spend); turn on <em>Auto-translate on push</em> in the credentials above to translate
+    immediately. <a href="/help#connectors-jira-push">Setup guide <span aria-hidden="true">→</span></a></p>
+
+  {% if public_base_url %}
+    {% set intake_url = public_base_url ~ '/webhooks/connectors/' ~ conn.id %}
+    <div class="form" style="max-width:720px">
+      <label>Intake URL <span class="muted small">· POST · verified by the X-Loc-Webhook-Secret header (Automation) or X-Hub-Signature (raw webhook)</span>
+        <input class="linkbox" type="text" readonly data-select-on-click value="{{ intake_url }}" />
+      </label>
+      <p class="help">
+        {% if secret.get('webhook_secret') %}The secret is set (stored encrypted). Use the SAME value in the Automation rule / webhook.
+        {% else %}<strong>Set a “Webhook / Automation secret” in the credentials above first</strong> - intake stays disabled until one exists.{% endif %}
+      </p>
+    </div>
+    <p class="help">POST here from a Jira Automation rule (header <code>X-Loc-Webhook-Secret</code>) or a
+      site-admin REST webhook (<code>X-Hub-Signature</code>), scoped to your JQL. Step-by-step recipe:
+      <a href="/help#connectors-jira-push">Setup guide <span aria-hidden="true">→</span></a></p>
+  {% else %}
+    <p class="muted"><strong>A public HTTPS URL is required for push intake</strong> - Atlassian's cloud
+      can't reach <code>localhost</code>. Set <em>App base URL</em> in <a href="/security">Security</a> to
+      your tunnel or public URL to reveal the Intake URL; until then use a poll schedule or the on-demand
+      Translate endpoint below. <a href="/help#connectors-jira-push">Setup guide <span aria-hidden="true">→</span></a></p>
+  {% endif %}
+
+  <h3 style="margin-top:1rem">Pending issues
+    <span class="muted small">· {{ jira_pending|length }} queued{% if auto_on %} · auto-translate is ON (pushes translate immediately){% endif %}</span></h3>
+  {% if jira_pending %}
+    <p class="help">Recorded by verified pushes while auto-translate is off. Release them (translates
+      exactly these issues, then clears the list):</p>
+    <p class="small data-mono" style="word-break:break-word">{{ jira_pending|join(', ') }}</p>
+    <form method="post" action="/connectors/connection/{{ conn.id }}/translate-pending">
+      {% include "_csrf.html" %}
+      <button type="submit" data-busy-label="{{ t(request, 'busy.translating') }}">Translate pending now ({{ jira_pending|length }})</button>
+    </form>
+  {% else %}
+    <p class="help">No pending issues.{% if not auto_on %} Verified pushes will queue changed issues here.{% endif %}</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if conn.kind == 'salesforce' %}
+{% set sf_map = conn.config.get('sf_field_map') or {} %}
+{% set sf_default_fields = sf_map.get('') or [] %}
+<section class="card" data-card="sf_fields">
+  <h2>Field mapping (per record type)</h2>
+  <p class="muted">Salesforce Knowledge fields vary per record type, so translatable fields are
+    <strong>discovered via Describe</strong> rather than hardcoded. Run this after adding or renaming
+    fields; it re-reads the schema and stores the map (it does <strong>not</strong> run on every translate).</p>
+  {% if sf_map %}
+    <p class="muted small">Mapped: <strong>{{ sf_default_fields|length }}</strong> translatable field(s)
+      across <strong>{{ (sf_map.keys()|reject('equalto', '')|list)|length or 1 }}</strong> record type(s).</p>
+    {% if sf_default_fields %}
+      <p class="small data-mono" style="word-break:break-word">{{ sf_default_fields|map(attribute='name')|join(', ') }}</p>
+    {% endif %}
+  {% else %}
+    <p class="help">No fields discovered yet - run Rediscover fields before translating (a
+      never-discovered connection falls back to translating <code>Title</code> only).</p>
+  {% endif %}
+  <form method="post" action="/connectors/connection/{{ conn.id }}/salesforce/rediscover-fields">
+    {% include "_csrf.html" %}
+    <button type="submit" data-busy-label="{{ t(request, 'busy.checking') }}">Rediscover fields</button>
+  </form>
+</section>
+{% endif %}
+
+{% if conn.kind == 'notion' %}
+<section class="card" data-card="idmap">
+  <h2>Localized pages (id map)</h2>
+  <p class="muted">Notion has no native localization, so {{ brand }} creates a child page per locale and tracks the
+    source&rarr;target page mapping here. A partial build shows as <em>building</em> and resumes on the next run;
+    a page a human deleted shows as <em>orphaned</em> and is recreated.</p>
+  {% set c = notion_idmap.counts %}
+  <p class="muted small">Status:
+    <span class="chip">{{ c.get('done', 0) }} done</span>
+    <span class="chip">{{ c.get('building', 0) }} building</span>
+    <span class="chip">{{ c.get('orphaned', 0) }} orphaned</span>
+    <span class="chip">{{ c.get('needs_link', 0) }} needs link</span></p>
+  {% if notion_idmap.needs_link %}
+  <h3 style="margin-top:1rem">Needs a link decision <span class="muted small">· a pre-existing page was found for these - {{ brand }} will NOT overwrite it</span></h3>
+  <p class="help">For each, either <strong>adopt</strong> the existing page ({{ brand }} updates it from now on) or
+    <strong>ignore</strong> it (leave it alone; it re-flags next run). Nothing is overwritten until you adopt.</p>
+  {% call m.data_table('Notion pages needing a link decision', [{'label': 'Source page'}, {'label': 'Locale'}, {'label': 'Existing target'}, {'label': 'Decision'}]) %}
+
+    {% for row in notion_idmap.needs_link %}
+      <tr>
+        <td class="small data-mono">{{ row.source_id }}</td>
+        <td><span class="chip">{{ row.target_locale }}</span></td>
+        <td class="small data-mono">{{ row.target_id }}</td>
+        <td>
+          <form method="post" action="/connectors/connection/{{ conn.id }}/notion/resolve-link" class="rowform">
+            {% include "_csrf.html" %}
+            <input type="hidden" name="source_id" value="{{ row.source_id }}" />
+            <input type="hidden" name="target_locale" value="{{ row.target_locale }}" />
+            <button type="submit" name="action" value="adopt" class="small">Adopt</button>
+            <button type="submit" name="action" value="ignore" class="small ghost">Ignore</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+
+{% endcall %}
+  {% else %}
+  <p class="help">No pages need a link decision.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if conn.kind == 'helpscout' %}
+<section class="card" data-card="idmap">
+  <h2>Localized articles (id map)</h2>
+  <p class="muted">Help Scout has no native localization, so {{ brand }} creates one article per locale in the target-language
+    collection you map and tracks the source&rarr;target article mapping here. A partial build shows as <em>building</em> and
+    resumes on the next run; an article a human deleted shows as <em>orphaned</em> and is recreated.</p>
+  {% set c = helpscout_idmap.counts %}
+  <p class="muted small">Status:
+    <span class="chip">{{ c.get('done', 0) }} done</span>
+    <span class="chip">{{ c.get('building', 0) }} building</span>
+    <span class="chip">{{ c.get('orphaned', 0) }} orphaned</span>
+    <span class="chip">{{ c.get('needs_link', 0) }} needs link</span></p>
+  {% if helpscout_idmap.needs_link %}
+  <h3 style="margin-top:1rem">Needs a link decision <span class="muted small">· a pre-existing article was found for these - {{ brand }} will NOT overwrite it</span></h3>
+  <p class="help">For each, either <strong>adopt</strong> the existing article ({{ brand }} updates it from now on) or
+    <strong>ignore</strong> it (leave it alone; it re-flags next run). Nothing is overwritten until you adopt.</p>
+  {% call m.data_table('Articles needing a link decision', [{'label': 'Source article'}, {'label': 'Locale'}, {'label': 'Existing target'}, {'label': 'Decision'}]) %}
+
+    {% for row in helpscout_idmap.needs_link %}
+      <tr>
+        <td class="small data-mono">{{ row.source_id }}</td>
+        <td><span class="chip">{{ row.target_locale }}</span></td>
+        <td class="small data-mono">{{ row.target_id }}</td>
+        <td>
+          <form method="post" action="/connectors/connection/{{ conn.id }}/helpscout/resolve-link" class="rowform">
+            {% include "_csrf.html" %}
+            <input type="hidden" name="source_id" value="{{ row.source_id }}" />
+            <input type="hidden" name="target_locale" value="{{ row.target_locale }}" />
+            <button type="submit" name="action" value="adopt" class="small">Adopt</button>
+            <button type="submit" name="action" value="ignore" class="small ghost">Ignore</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+
+{% endcall %}
+  {% else %}
+  <p class="help">No articles need a link decision.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if conn.kind == 'wordpress' %}
+<section class="card" data-card="idmap">
+  <h2>Localized posts (id map) <span class="chip">Live QA pending</span></h2>
+  <p class="muted small">This connector ships flagged <strong>live QA pending</strong> (full fidelity needs Polylang Pro) - verified offline; a live sandbox run is deferred.</p>
+  <p class="muted">WordPress has no field-level localization, so {{ brand }} creates one post/page per locale in the target
+    language (Polylang doc-per-locale) and tracks the source&rarr;target mapping here. A partial build shows as
+    <em>building</em> and resumes on the next run; a post a human deleted shows as <em>orphaned</em> and is recreated.
+    Raw block content is read and written, so Gutenberg blocks and shortcodes survive the round trip.</p>
+  {% if wordpress_idmap.mode_label %}
+  <p class="muted small"><strong>Polylang:</strong> {{ wordpress_idmap.mode_label }}</p>
+  {% else %}
+  <p class="muted small"><strong>Polylang:</strong> not yet detected - run <em>Test</em> or a translation to detect the tier.</p>
+  {% endif %}
+  {% set c = wordpress_idmap.counts %}
+  <p class="muted small">Status:
+    <span class="chip">{{ c.get('done', 0) }} done</span>
+    <span class="chip">{{ c.get('building', 0) }} building</span>
+    <span class="chip">{{ c.get('orphaned', 0) }} orphaned</span>
+    <span class="chip">{{ c.get('needs_link', 0) }} needs link</span></p>
+  {% if wordpress_idmap.needs_link %}
+  <h3 style="margin-top:1rem">Needs a link decision <span class="muted small">· a POSSIBLE existing translation was found - review it before adopting; {{ brand }} will NOT overwrite anything until you adopt</span></h3>
+  <p class="help">{{ brand }} found a post that <em>might</em> be this translation (by matching slug/title) - it is <strong>not certain</strong> it is the right one. <strong>Open the possible match</strong> and confirm, then either <strong>adopt</strong> it ({{ brand }} starts updating it) or <strong>ignore</strong> it (leave it alone; it re-flags next run). Do not adopt without checking - adopt will begin writing translations over that post.</p>
+  {% call m.data_table('Posts needing a link decision', [{'label': 'Source post'}, {'label': 'Locale'}, {'label': 'Possible match (review)'}, {'label': 'Decision'}]) %}
+
+    {% for row in wordpress_idmap.needs_link %}
+      {% set _num = row.target_id.split(':')[-1] %}
+      <tr>
+        <td class="small data-mono">{{ row.source_id }}</td>
+        <td><span class="chip">{{ row.target_locale }}</span></td>
+        {% set _site_url = conn.config.get('base_url')|safe_http_url %}
+        <td class="small data-mono">{{ row.target_id }}{% if _site_url %} ·
+          <a href="{{ _site_url.rstrip('/') }}/?p={{ _num }}"
+             target="_blank" rel="noopener">open</a>{% endif %}</td>
+        <td>
+          <form method="post" action="/connectors/connection/{{ conn.id }}/wordpress/resolve-link" class="rowform">
+            {% include "_csrf.html" %}
+            <input type="hidden" name="source_id" value="{{ row.source_id }}" />
+            <input type="hidden" name="target_locale" value="{{ row.target_locale }}" />
+            <button type="submit" name="action" value="adopt" class="small">Adopt</button>
+            <button type="submit" name="action" value="ignore" class="small ghost">Ignore</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+
+{% endcall %}
+  {% else %}
+  <p class="help">No posts need a link decision.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if conn.kind == 'servicenow' %}
+<section class="card" data-card="idmap">
+  <h2>Translated articles (id map) <span class="chip">Live QA pending</span></h2>
+  <p class="muted small">This connector ships flagged <strong>live QA pending</strong> - verified offline against a modelled instance; a run against a real ServiceNow instance is still pending (live-tenant QA).</p>
+  <p class="muted">ServiceNow keeps each language of a knowledge article as its own record, so {{ brand }} creates one
+    <strong>Draft</strong> article per language, linked to the source by its <em>Parent</em> field, and tracks the
+    source&rarr;translation mapping here. Nothing is published for you: publish through your normal ServiceNow workflow.
+    A translation that is no longer Draft (submitted for review, published, retired) is <strong>not edited in place</strong>.</p>
+  {% set c = servicenow_idmap.counts %}
+  <p class="muted small">Status:
+    <span class="chip">{{ c.get('done', 0) }} done</span>
+    <span class="chip">{{ c.get('building', 0) }} building</span>
+    <span class="chip">{{ c.get('orphaned', 0) }} orphaned</span>
+    <span class="chip">{{ c.get('needs_link', 0) }} needs link</span>
+    <span class="chip">{{ servicenow_idmap.held|length }} held by workflow</span></p>
+  {% if servicenow_idmap.held %}
+  <h3 style="margin-top:1rem">Held by workflow <span class="muted small">· the translation is no longer Draft</span></h3>
+  <p class="help">These translations were not touched. They are not re-translated on every run: change the source article, or fix the translation in ServiceNow and retry, to re-attempt them.</p>
+  {% call m.data_table('Pairs held by workflow', [{'label': 'Source article'}, {'label': 'Language'}, {'label': 'Reason'}]) %}
+
+    {% for row in servicenow_idmap.held %}
+      <tr>
+        <td class="small data-mono">{{ row.aid }}</td>
+        <td><span class="chip">{{ row.loc }}</span></td>
+        <td class="small">{{ row.reason }}</td>
+      </tr>
+    {% endfor %}
+
+{% endcall %}
+  {% endif %}
+  {% if servicenow_idmap.needs_link %}
+  <h3 style="margin-top:1rem">Needs a link decision <span class="muted small">· a translation already exists in ServiceNow; {{ brand }} will NOT overwrite it until you adopt</span></h3>
+  <p class="help">ServiceNow already has an article in this language under the same source (its <em>Parent</em> points at the source) that {{ brand }} did not create. <strong>Open it</strong> and check, then either <strong>adopt</strong> it ({{ brand }} starts updating it while it is Draft) or <strong>ignore</strong> it (leave it alone; it re-flags next run).</p>
+  {% call m.data_table('Articles needing a link decision', [{'label': 'Source article'}, {'label': 'Language'}, {'label': 'Existing translation (review)'}, {'label': 'Decision'}]) %}
+
+    {% for row in servicenow_idmap.needs_link %}
+      <tr>
+        <td class="small data-mono">{{ row.source_id }}</td>
+        <td><span class="chip">{{ row.target_locale }}</span></td>
+        {% set _inst = conn.config.get('base_url')|safe_http_url %}
+        <td class="small data-mono">{{ row.target_id }}{% if _inst %} ·
+          <a href="{{ _inst.rstrip('/') }}/kb_knowledge.do?sys_id={{ row.target_id }}"
+             target="_blank" rel="noopener">open</a>{% endif %}</td>
+        <td>
+          <form method="post" action="/connectors/connection/{{ conn.id }}/servicenow/resolve-link" class="rowform">
+            {% include "_csrf.html" %}
+            <input type="hidden" name="source_id" value="{{ row.source_id }}" />
+            <input type="hidden" name="target_locale" value="{{ row.target_locale }}" />
+            <button type="submit" name="action" value="adopt" class="small">Adopt</button>
+            <button type="submit" name="action" value="ignore" class="small ghost">Ignore</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+
+{% endcall %}
+  {% else %}
+  <p class="help">No articles need a link decision.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if conn.kind == 'contentful' and contentful_blocked %}
+<section class="card" data-card="blocked">
+  <h2>Validation-blocked translations <span class="chip">{{ contentful_blocked|length }}</span></h2>
+  <p class="muted">These (entry, locale) pairs could not be written because a value fails a Contentful
+    field validation (e.g. a translation longer than a Short-text field's limit, or a value the field's
+    pattern rejects). Nothing was written for them. Because the outcome is deterministic, scheduled runs
+    <strong>skip</strong> them (no wasted machine translation) - a plain re-run does nothing.</p>
+  <p class="help"><strong>To unblock:</strong> fix the field or the source content in Contentful (shorten the
+    field's source, relax the validation, or edit the translation directly), then click <em>Retry blocked</em>
+    below. Retry is the only thing that re-attempts them; editing the source content also clears the block
+    automatically on the next run.</p>
+  {% call m.data_table('Blocked entries', [{'label': 'Entry'}, {'label': 'Locale'}, {'label': 'Reason'}]) %}
+
+    {% for row in contentful_blocked %}
+      <tr>
+        <td class="small data-mono">{{ row.aid }}</td>
+        <td><span class="chip">{{ row.loc }}</span></td>
+        <td class="small">{{ row.reason }}</td>
+      </tr>
+    {% endfor %}
+
+{% endcall %}
+  {% if can_manage %}
+  <form method="post" action="/connectors/connection/{{ conn.id }}/retry-blocked" class="mt">
+    {% include "_csrf.html" %}
+    <button type="submit" class="small" data-busy-label="{{ t(request, 'busy.starting_translation') }}">Retry {{ contentful_blocked|length }} blocked pair(s)</button>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
+
+{% set endpoint = {'airtable': '/airtable/webhook', 'jira': '/jira/translate', 'confluence': '/confluence/translate', 'document360': '/document360/translate', 'freshdesk': '/freshdesk/translate', 'zoho': '/zoho/translate', 'intercom': '/intercom/translate', 'salesforce': '/salesforce/translate', 'notion': '/notion/translate', 'helpscout': '/helpscout/translate', 'strapi': '/strapi/translate', 'contentful': '/contentful/translate', 'shopify': '/shopify/translate', 'hubspot': '/hubspot/translate', 'akeneo': '/akeneo/translate', 'wordpress': '/wordpress/translate', 'servicenow': '/servicenow/translate', 'sitecore': '/sitecore/translate'}.get(conn.kind) %}
+{% if endpoint %}
+<section class="card" data-card="inbound">
+  <h2>Trigger from {{ spec.name }} (inbound API)</h2>
+  {% if conn.kind == 'airtable' %}
+    <p class="muted">Let Airtable users trigger translation themselves - they add target-language
+      columns named like <code>{{ conn.config.get('source_field') or 'Notes' }} (es-MX)</code> and
+      hit a button/status. {{ brand }} auto-detects the columns (pattern
+      <code>{{ conn.config.get('naming_pattern') or '{src} ({loc})' }}</code>) and fills them in.
+      Set it up with the Airtable Automation in <code>integrations/airtable-automation</code>.
+      A hand-edit of a target cell is preserved only while its source cell stays
+      unchanged and its written-hash record isn't cleared - editing the source
+      (even slightly) or renaming the target column will overwrite it on the next run.</p>
+  {% elif conn.kind == 'jira' %}
+    <p class="muted">Translate a single issue on demand (the backend for an in-Jira "Translate" button).
+      POST <code>{ "issue_key": "LOC-123", "target_locales": ["es-MX","de-DE"] }</code> - each language
+      is posted as a labelled comment (or written into the mapped field, per <em>Write back as</em>).
+      The Forge app in <code>integrations/jira-forge-app</code> calls this.</p>
+  {% elif conn.kind == 'document360' %}
+    <p class="muted">Translate specific articles on demand. POST
+      <code>{ "article_ids": ["a1b2"], "target_locales": ["es-MX"] }</code> - each is written back as the
+      article's per-language version. Document360 has no webhooks, so run on a schedule for change detection.</p>
+  {% elif conn.kind == 'freshdesk' %}
+    <p class="muted">Translate specific Solutions articles on demand. POST
+      <code>{ "article_ids": ["80001234"], "target_locales": ["fr"] }</code> - each is written back as the
+      article's per-language version (drafts by default). Freshdesk Solutions have no webhooks, so run on a
+      schedule for change detection.</p>
+  {% elif conn.kind == 'zoho' %}
+    <p class="muted">Translate specific articles on demand. POST
+      <code>{ "article_ids": ["12345"], "target_locales": ["es-MX"] }</code> - each is written back as the
+      article's per-locale translation. This connector polls first, so run on a schedule for change detection.</p>
+  {% elif conn.kind == 'salesforce' %}
+    <p class="muted">Translate specific articles on demand. POST
+      <code>{ "article_ids": ["kA0xx0000000BOx"], "target_locales": ["de-DE"] }</code> - <code>article_ids</code>
+      are KnowledgeArticleIds; each is written as the article's own translation version
+      (submit-for-translation &rarr; fill Draft &rarr; set-complete &rarr; publish). No confirmed Knowledge__kav
+      webhook, so run on a schedule for change detection.</p>
+  {% elif conn.kind == 'notion' %}
+    <p class="muted">Translate specific Notion pages on demand. POST
+      <code>{ "article_ids": ["1a2b3c..."], "target_locales": ["de-DE"] }</code> - <code>article_ids</code> are source
+      page ids; each is written as a per-locale child page. Notion has no confirmed webhook, so run on a schedule for
+      change detection.</p>
+  {% elif conn.kind == 'helpscout' %}
+    <p class="muted">Translate specific Help Scout Docs articles on demand. POST
+      <code>{ "article_ids": ["5f0a..."], "target_locales": ["de-DE"] }</code> - <code>article_ids</code> are source
+      article ids; each is written as a per-locale article in the mapped target collection. Help Scout Docs has no
+      webhooks, so run on a schedule for change detection.</p>
+  {% elif conn.kind == 'strapi' %}
+    <p class="muted">Translate specific Strapi entries on demand. POST
+      <code>{ "article_ids": ["articles:abc123"], "target_locales": ["fr"] }</code> - <code>article_ids</code> are
+      <code>&lt;contentType&gt;:&lt;id&gt;</code> (documentId on v5, master id on v4) - a bare id
+      works for a single-content-type connection. Each is written as the entry's per-locale variant. Strapi webhooks are unsigned,
+      so run on a schedule for change detection.</p>
+  {% elif conn.kind == 'contentful' %}
+    <p class="muted">Translate specific Contentful entries on demand. POST
+      <code>{ "article_ids": ["5KsD..."], "target_locales": ["de-DE"] }</code> - <code>article_ids</code> are source
+      entry ids (each entry's content type must be one this connection is configured for). Each translation is written
+      as a new locale key on the same entry (fields.{id}.{locale}) via a version-locked read-merge-write. This connector
+      polls first (webhook intake is a follow-up), so run on a schedule for change detection.</p>
+  {% elif conn.kind == 'shopify' %}
+    <p class="muted">Translate specific Shopify resources on demand. POST
+      <code>{ "article_ids": ["gid://shopify/Product/123"], "target_locales": ["fr"] }</code> - <code>article_ids</code>
+      are resource GIDs whose type must be one this connection is configured for. Each translation is registered against
+      the source resource (Translations API, keyed by resource + key + locale, with a freshly-read content digest), never
+      overwriting the source. Webhooks are out of scope for v1, so run on a schedule for change detection. Locales must
+      already exist in Shopify (Settings → Languages); publish a language for its translations to show on the storefront.</p>
+  {% elif conn.kind == 'hubspot' %}
+    <p class="muted">Translate specific HubSpot objects on demand. POST
+      <code>{ "article_ids": ["site-pages:12345"], "target_locales": ["fr"] }</code> - <code>article_ids</code> are
+      <code>&lt;content-type&gt;:&lt;id&gt;</code> (or a bare id for a single-content-type connection) and the content type
+      must be one this connection is configured for. Each translation is a real HubSpot <strong>language variation</strong>
+      linked into the object's own multi-language group, so the source page is never overwritten. Translations are written
+      to each variation's <strong>draft</strong> by default and are <strong>not published</strong> - review and push live in
+      HubSpot. HubSpot publishes no CMS webhooks, so run on a schedule for change detection.
+      <strong>Marketing emails and marketing forms are not supported in this version</strong> (no native language link;
+      HubSpot-beta APIs).</p>
+  {% elif conn.kind == 'wordpress' %}
+    <p class="muted">Translate specific WordPress posts/pages on demand. POST
+      <code>{ "article_ids": ["posts:12"], "target_locales": ["fr"] }</code> - <code>article_ids</code>
+      are source refs <code>&lt;type&gt;:&lt;id&gt;</code> (a bare id for a single-type connection). Each translation is a
+      separate post in the target language (Polylang doc-per-locale), tracked in the connector's id map, never overwriting
+      the source. Raw block content is read and written (context=edit), so Gutenberg blocks and shortcodes survive.
+      WordPress has no content webhook, so run on a schedule for change detection.</p>
+  {% elif conn.kind == 'servicenow' %}
+    <p class="muted">Translate specific ServiceNow Knowledge articles on demand. POST
+      <code>{ "article_ids": ["&lt;article sys_id&gt;"], "target_locales": ["fr"] }</code> - <code>article_ids</code>
+      are 32-character article sys_ids that belong to this connection's knowledge base. Each translation is a separate
+      <strong>Draft</strong> article in the target language, linked to the source by its Parent field and tracked in the
+      connector's id map; nothing is published and a translation that has left Draft is not edited in place.
+      ServiceNow has no content webhook, so run on a schedule for change detection.</p>
+  {% elif conn.kind == 'akeneo' %}
+    <p class="muted">Translate specific Akeneo records on demand. POST
+      <code>{ "article_ids": ["product:sku-123"], "target_locales": ["fr_FR"] }</code> - <code>article_ids</code>
+      must be <code>&lt;product|product_model&gt;:&lt;id&gt;</code> (a product's UUID or a product-model's code) -
+      a bare id is refused (fail-closed). Each translation is a surgical <strong>partial PATCH
+      merge</strong> of the one locale's values on the SAME record, so other locales, scopes and attributes are
+      never touched; writes land live (no draft/publish in Community Edition). Akeneo has no webhook receiver in
+      scope, so run on a schedule for change detection.</p>
+  {% elif conn.kind == 'sitecore' %}
+    <p class="muted">Translate specific Sitecore items on demand. POST
+      <code>{ "article_ids": ["110D559FDEA542EA9C1C8A5DF7E70EF9"], "target_locales": ["fr-FR"] }</code> -
+      <code>article_ids</code> are item GUIDs that must sit under the connection's content root path; anything else is
+      refused (fail-closed). Each translation is a <strong>language version</strong> of the same item
+      (<code>addItemVersion</code> then <code>updateItem</code>); the source language is never overwritten, fields shared
+      across languages are never written, and nothing is published. Sitecore has no webhook receiver in scope, so run on
+      a schedule for change detection.</p>
+  {% else %}
+    <p class="muted">Translate specific pages on demand. POST
+      <code>{ "page_ids": ["12345"], "target_locales": ["es-MX"] }</code> (or a <code>space_key</code>/<code>cql</code>) -
+      each becomes a localized child page.</p>
+  {% endif %}
+  <div class="form narrow">
+    <label>Endpoint <span class="muted small">· POST with header <code>X-Loc-Token</code></span>
+      <input class="linkbox" type="text" readonly data-select-on-click
+             value="{{ base_url }}/api/connectors/{{ conn.id }}{{ endpoint }}" />
+    </label>
+    {% if can_see_token %}
+    <p>Use your per-user API key from <a href="/account">Account</a> for companion calls.
+      Legacy shared tokens cannot run connectors or read connection data.</p>
+    <label>Legacy shared token (retired)
+      <input class="linkbox" type="text" readonly data-select-on-click value="{{ api_token }}" />
+    </label>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
+<section class="card" data-card="history">
+  <h2 id="connection-history">Sync history</h2>
+  {% if history %}
+    {% call m.data_table('Sync history', [{'label': 'When'}, {'label': 'Action'}, {'label': 'Result'}, {'label': 'Items'}, {'label': 'By'}]) %}
+
+        {% for h in history %}
+          <tr>
+            <td class="muted small data-mono">{{ h.ts.strftime('%Y-%m-%d %H:%M') }} UTC</td>
+            <td><span class="chip">{{ h.direction }}</span></td>
+            <td>{% if h.ok %}{{ m.status_badge('active', 'ok') }}{% else %}{{ m.status_badge('failed', 'failed') }}{% endif %}
+              <span class="muted small">{{ h.message }}</span></td>
+            <td class="data-mono">{{ h.count }}</td>
+            <td class="muted small">{{ h.actor or '-' }}</td>
+          </tr>
+        {% endfor %}
+
+{% endcall %}
+  {% else %}
+    {{ m.empty_state('No syncs yet.') }}
+  {% endif %}
+</section>
+</div>
+</div>
+{% with layout_page = 'connection' %}{% include "_page_layout.html" %}{% endwith %}
+
+{% if can_manage %}<script src="/static/connectors.js?v={{ static_v('connectors.js') }}"></script>{% endif %}
+
+</div>
+{% endblock %}

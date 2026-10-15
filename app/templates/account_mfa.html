@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_form_errors.html" as fe %}
+{# TOTP train (HECVAT AAAI-17): the self-service set-up of two-step sign-in, and the one-time
+   display of recovery codes, for a signed-in person (app/web/auth_mfa.py). #}
+{% block title %}{% if mode == 'codes' %}Save your recovery codes{% else %}Set up two-step sign-in{% endif %}{% endblock %}
+{% block error_summary %}{{ fe.error_summary(request, error|default(none), field=(error_field|default('') or none)) }}{% endblock %}
+{% block content %}
+{% set mfa_title %}{% if mode == 'codes' %}Save your recovery codes{% else %}Set up two-step sign-in{% endif %}{% endset %}
+{% set mfa_meta %}Account: <strong>{{ me.email }}</strong>{% endset %}
+{{ m.page_header(mfa_title, meta=mfa_meta) }}
+<section class="card auth-mfa-card" id="mfa">
+  {% if mode == 'codes' %}
+    {% include "_mfa_codes_body.html" %}
+    <p class="mt"><a class="btn-primary" href="/account#mfa">I saved my codes, back to Account</a></p>
+  {% elif mode == 'reauth' %}
+    <form method="post" action="/account/mfa/setup" class="form">
+      {% include "_csrf.html" %}
+      <label>Current password
+        <input type="password" name="current" id="mfa-current"
+               autocomplete="current-password" required
+               {{ fe.invalid_attrs(request, 'mfa-current',
+                    when=(error_field|default('') == 'mfa-current')) }} /></label>
+      <p>Re-enter your password before showing the authenticator setup.</p>
+      <button type="submit">Continue</button>
+    </form>
+  {% else %}
+    <p>With two-step sign-in on, signing in needs your password and a code from an app on
+      your phone, so a stolen password alone is not enough.</p>
+    {% include "_mfa_setup_body.html" %}
+    <p class="help mt"><a href="/account#mfa">Cancel and go back to Account</a></p>
+  {% endif %}
+</section>
+{% endblock %}

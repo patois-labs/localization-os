@@ -1,0 +1,122 @@
+{% import "_macros.html" as m with context %}
+{% import "_prompt_lock.html" as pl with context %}
+{# #356 phase 2b: the System prompt section of the workflow builder. For each editable head
+   (AI step, machine translation) this workflow either INHERITS (the org's text, else the
+   built-in text) or carries its OWN override. Context: wsp_enabled, wsp_can_edit,
+   wsp_editable (workflow_editable_detail rows with history), wsp_draft, wsp_notice. #}
+<section class="card wf-sysprompt" id="system-prompt" aria-labelledby="wsp-heading">
+  <h2 id="wsp-heading">System prompt</h2>
+  <p class="muted">The instructions the app sends to the model alongside this workflow's steps.
+  Each text below is either <strong>inherited</strong> (for a language-pair variant, its base
+  workflow's text if the base has one; then your organization's text if it has one; otherwise
+  the built-in text) or <strong>this workflow's own</strong>, which wins over both.
+  The locked lines are always added by the app and cannot be changed.
+  {% if not wsp_enabled %}Editing is switched off. An admin can turn it on under Settings, Features, System prompt overrides.{% endif %}</p>
+  {% if wsp_notice %}
+    <p class="wsp-notice" role="status" id="wsp-notice">{{ wsp_notice.text }}
+    {% for w in wsp_notice.warnings %}<strong>Warning:</strong> {{ w }} {% endfor %}</p>
+  {% endif %}
+  <ul class="list wsp-list">
+    {% for e in wsp_editable %}
+      {% set k = e.key %}
+      <li id="wsp-{{ k }}">
+        <h3 id="wsp-h-{{ k }}">{{ e.name }}
+          {% if e.effective_source == 'workflow' %}<span class="chip">this workflow's own, version {{ e.override.version }}</span>
+          {% elif e.effective_source == 'base_workflow' %}<span class="chip">inherited from the base workflow{% if e.base_workflow_name %} "{{ e.base_workflow_name }}"{% endif %}</span>
+          {% elif e.effective_source == 'org' %}<span class="chip">inherited from your organization</span>
+          {% else %}<span class="chip">inherited, built-in</span>{% endif %}</h3>
+        <p class="muted small">{{ e.used_in }}</p>
+        <p class="small wsp-label" id="wsp-before-label-{{ k }}">Always added before the text (locked)</p>
+        <pre class="prompt wsp-locked" aria-labelledby="wsp-before-label-{{ k }}">{{ e.floor_before }}</pre>
+        {% if wsp_can_edit %}
+          {% set _open = wsp_draft.get(k) is not none %}
+          <div class="wfl" data-prompt-lock id="wsp-lock-{{ k }}"{% if _open %} data-lock-open{% endif %}>
+          <form method="post" action="/workflows/{{ wf.id }}/system-prompts/{{ k }}/save" class="form wsp-form" data-wsp-form>
+{% call m.form_section('wsp-fields-' ~ k, e.name) %}
+            {% include "_csrf.html" %}
+            <label for="wsp-body-{{ k }}">{% if e.override %}This workflow's text{% else %}Text for this workflow (starts from the inherited text){% endif %}</label>
+            {{ pl.lock_status('wsp-' ~ k, true) }}
+            <textarea id="wsp-body-{{ k }}" name="body" rows="8" maxlength="{{ e.max_chars }}" required{% if not _open %} readonly{% endif %}
+                      aria-describedby="plk-wsp-{{ k }} wsp-hint-{{ k }} wsp-count-{{ k }}" data-wsp-body data-lock-field>{{ wsp_draft.get(k, e.override.body if e.override else e.inherited_body) }}</textarea>
+            <p class="muted small" id="wsp-hint-{{ k }}">Plain text, up to {{ e.max_chars }} characters. Tell
+            the model to output only the result. Applying adds a new version of this workflow's text; earlier versions are kept and can be restored.</p>
+            <p class="muted small" id="wsp-count-{{ k }}"><span data-wsp-count>{{ (wsp_draft.get(k, e.override.body if e.override else e.inherited_body))|length }}</span> of {{ e.max_chars }} characters</p>
+            <span class="sr-only" role="status" data-wsp-limit></span>
+            {{ pl.lock_actions('wsp-' ~ k, true) }}
+          {% endcall %}
+</form>
+          <form method="post" action="/workflows/{{ wf.id }}/system-prompts/{{ k }}/reset" class="inline-del wfl-restore"
+                data-action-confirm="{{ t(request, 'page.workflow_builder.restore_head_confirm', name=e.name) }}">
+            {% include "_csrf.html" %}
+            <button type="submit" class="small danger-btn">{{ tl(request, 'page.workflow_builder.restore_default') }}</button>
+          </form>
+          </div>
+        {% else %}
+          {{ pl.lock_status('wsp-' ~ k, false, (tl(request, 'page.workflow_builder.status_switched_off') if not wsp_enabled else '')) }}
+          <pre class="prompt wsp-body" aria-label="{{ e.name }}, text in force for this workflow">{{ e.effective_body }}</pre>
+          {% if wsp_enabled %}<p class="muted small">Only an admin or a manager can edit this text.</p>{% endif %}
+        {% endif %}
+        <p class="small wsp-label" id="wsp-after-label-{{ k }}">Always added after the text (locked)</p>
+        <pre class="prompt wsp-locked" aria-labelledby="wsp-after-label-{{ k }}">{{ e.floor_after }}</pre>
+        <p class="muted small">{{ e.floor_note }}</p>
+        {% if e.history %}
+          <details class="wsp-history">
+            <summary>Version history of this workflow's text ({{ e.history|length }})</summary>
+            <ol class="list">
+              {% for h in e.history %}
+                <li>
+                  Version {{ h.version }}: {{ {'set': 'saved', 'restore': 'restored from version ' ~ (h.restored_from or '?'), 'reset': 'inherit again'}.get(h.action, h.action) }}
+                  by {{ h.created_by or 'unknown' }}, {{ h.created_at or '' }}
+                  {% if h.body %}<span class="muted small">({{ h.body|length }} characters)</span>{% endif %}
+                  {% if h.body and wsp_can_edit %}
+                    <form method="post" action="/workflows/{{ wf.id }}/system-prompts/{{ k }}/restore" class="inline-del">
+                      {% include "_csrf.html" %}
+                      <input type="hidden" name="version" value="{{ h.version }}" />
+                      <button type="submit" class="small ghost" aria-label="Restore version {{ h.version }} of {{ e.name }} for this workflow">Restore</button>
+                    </form>
+                  {% endif %}
+                  {% if h.body %}<pre class="prompt wsp-body">{{ h.body }}</pre>{% endif %}
+                </li>
+              {% endfor %}
+            </ol>
+          </details>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+<style>
+.wf-sysprompt .wsp-list { list-style: none; padding: 0; margin: 0; }
+.wf-sysprompt .wsp-list > li { margin: 0 0 var(--space-4); padding-bottom: var(--space-3); border-bottom: 1px solid var(--border); }
+.wf-sysprompt .wsp-list > li:last-child { border-bottom: 0; }
+.wf-sysprompt .wsp-list h3 { margin: 0 0 var(--space-1); font-size: 1rem; }
+.wf-sysprompt .wsp-label { margin: var(--space-2) 0 var(--space-1); font-weight: 600; }
+.wf-sysprompt pre.prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
+.wf-sysprompt .wsp-form textarea { width: 100%; font-family: var(--font-mono, monospace); }
+.wf-sysprompt .wsp-history ol { padding-left: var(--space-4); }
+.wf-sysprompt .wsp-history li { margin: 0 0 var(--space-3); }
+</style>
+<script nonce="{{ csp_nonce() }}">
+/* A visible character count that follows the typing, and one spoken message only when 100 or
+   fewer characters remain (not one per keystroke). The count is also rendered by the server,
+   and the textarea's maxlength and the server-side limit apply either way. */
+(function () {
+  document.querySelectorAll('[data-wsp-form]').forEach(function (form) {
+    var ta = form.querySelector('[data-wsp-body]');
+    var out = form.querySelector('[data-wsp-count]');
+    var say = form.querySelector('[data-wsp-limit]');
+    if (!ta || !out) { return; }
+    var max = parseInt(ta.getAttribute('maxlength'), 10) || 0;
+    var last = null;
+    function update() {
+      out.textContent = String(ta.value.length);
+      if (!say || !max) { return; }
+      var left = max - ta.value.length;
+      var msg = left <= 0 ? 'Character limit reached.' : (left <= 100 ? left + ' characters left.' : '');
+      if (msg !== last) { say.textContent = msg; last = msg; }
+    }
+    ta.addEventListener('input', update);
+    update();
+  });
+})();
+</script>

@@ -1,0 +1,113 @@
+# Factory spec - Drupal connector (connector parity, NEW kind, 2026-10-10).
+#
+# Source of truth for the parametric touchpoints. The SEMANTIC build (strategy, extract,
+# existence probe, held-back accounting, formatted-text handling, fake tenant) is hand-written
+# per the generated BUILD-TODO-drupal.md.
+#
+# DECISIONS (recorded in the module docstring and the live-QA runbook):
+#   - Integration path = core JSON:API + the contrib `jsonapi_multilingual` module
+#     (per-translation GET/POST/PATCH ?langCode=xx). Core JSON:API alone cannot ADD a
+#     translation to an existing entity, and its PATCH has no way to name the language
+#     except path-prefix negotiation. The TMGMT-translator route (what bb-io/Drupal drives)
+#     needs a custom site module and is a different product shape; it is out of scope.
+#   - TOPOLOGY = T2. One entity holds many per-langcode translations; the source system owns
+#     the correlation. The stock SubResourceStrategy fits (probe -> POST create / PATCH
+#     update); the connector adds hard guards for the two ways a Drupal write can land on the
+#     SOURCE translation (module missing; target == default language).
+#   - AUTH = Simple OAuth client credentials (client id + secret, token minted in-process) OR
+#     HTTP Basic (core basic_auth) OR a pasted Bearer token. Chosen by which secrets are set.
+#   - article_id_shape "<jsonapi-type>:<uuid>" is a taxonomy-A scope surface: the type half
+#     is validated against the configured resource_types list (fail closed), the id half must
+#     be a canonical UUID, so neither can escape /jsonapi.
+#   - NO alembic migration (coordination law).
+
+connector:
+  kind: drupal
+  name: Drupal
+  class_name: DrupalConnector
+  icon: "💧"
+  cat: "CMS"
+  blurb: >-
+    EXPERIMENTAL: depends on the alpha-stage JSON:API Multilingual contrib module
+    (1.0.0-alpha5). Translate Drupal content (nodes, taxonomy terms, blocks) into any language
+    using core Content Translation and that module. Each translation is written back as the
+    entity's own translation in that language and saved unpublished; the connector refuses to
+    write unless the module is proven active.
+  docs_url: "https://www.drupal.org/docs/core-modules-and-themes/core-modules/jsonapi-module/translations"
+  supports_oauth: false
+  archived: false
+
+  # -> capability = Capability(...) block
+  topology: T2
+  auth: [api_key, basic]
+  api_version: "jsonapi"
+  rich_text: html
+  regions: base_url
+  change_signals:
+    webhook_sig: null
+    poll_field: changed
+    stale_flag: null
+    thin_payload: false
+  anti_loop_label: false
+
+  # -> store.py thin delegator + _TRANSLATE_KINDS + _RETRY_ARTICLE_KINDS
+  retry_noun: entity
+  delegator_extra_guard: ""
+
+  # -> harvest.py one-line mapper
+  harvest_title_field: title
+
+  # -> app/web/api.py route + docstring
+  article_id_shape: "<jsonapi-type>:<uuid>"
+  api_docstring: >-
+    EXPERIMENTAL (depends on the alpha JSON:API Multilingual module). Translate Drupal entity(ies) on the fly into one or more languages, writing each back as the
+    entity's own translation through the JSON:API Multilingual module (T2; the translation is
+    created unpublished, the source language is never written). The type half of each id
+    (for example node--article) is validated against the connection's configured resource types.
+
+  # -> app/cli/cmd_connector.py leaf
+  article_noun_phrase: "a Drupal"
+  cli_parser_help: >-
+    EXPERIMENTAL (alpha JSON:API Multilingual module). Translate Drupal entities (nodes, terms, blocks) into the connection's languages as the
+    entity's own translations.
+
+  # -> app/templates/connection.html item_units caption
+  item_units:
+    scan: "your Drupal entities of the configured resource types (for example node--article)"
+    becomes: "the same entity's own translation in the target language (EXPERIMENTAL, needs the alpha JSON:API Multilingual module; created unpublished, and a write that lands on the source halts the run)"
+
+  # -> app/templates/help.html Part-2 table row body
+  help_row_body: "EXPERIMENTAL (needs the alpha JSON:API Multilingual module, 1.0.0-alpha5). Translate Drupal entity(ies) as the entity's own translations (T2). A write that lands in the wrong language halts the run; restore from the entity's Revisions tab. Body: <code>article_ids</code>/<code>article_id</code> (<code>&lt;jsonapiType&gt;:&lt;uuid&gt;</code>, e.g. <code>node--article:UUID</code>), <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  # -> docs/CLI.md capability table row body
+  docs_row_body: "EXPERIMENTAL (needs the alpha JSON:API Multilingual module, 1.0.0-alpha5). Translate Drupal entities (nodes, terms, blocks) into the connection's languages as the entity's own translations (T2; created unpublished; a write that lands in the wrong language halts the run, restore from the Revisions tab). `--article-ids` are `<jsonapiType>:<uuid>`, for example `node--article:<uuid>`."
+
+  # -> tests/verify_cli_parity.py EXPECTED_COMMANDS value
+  cli_expected_desc: "translate Drupal entities into per-language entity translations (T2 SubResourceStrategy over JSON:API Multilingual; POST /api/connectors/{cid}/drupal/translate parity)"
+
+  # -> THIRD_PARTY_NOTICES.md entry (bb-io reference studied)
+  bb_io:
+    repo: "bb-io/Drupal"
+    url: "https://github.com/bb-io/Drupal"
+    license_verified_date: "2026-10-10"
+    copyright_holder: "Blackbird"
+
+  config_fields:
+    - {name: base_url, label: "Site URL", help: "Your Drupal site root, e.g. https://www.example.edu. The connector appends /jsonapi.", placeholder: "https://www.example.edu"}
+    - {name: resource_types, label: "Resource types", help: "Comma-separated JSON:API resource types to translate, as entity--bundle.", placeholder: "node--article, node--page"}
+    - {name: username, label: "Username (Basic auth)", help: "Only for HTTP Basic auth.", required: false, placeholder: "locos-bot"}
+    - {name: source_locale, label: "Source language", help: "Language code to translate FROM.", required: false, placeholder: "en"}
+    - {name: target_locales, label: "Target languages", help: "Comma-separated Drupal language codes to create.", required: false, placeholder: "fr, de, es"}
+  secret_fields:
+    - {name: client_id, label: "OAuth client id", help: "Simple OAuth consumer (client credentials grant).", required: false, secret: true, placeholder: "uuid"}
+    - {name: client_secret, label: "OAuth client secret", help: "The consumer's secret.", required: false, secret: true, placeholder: "a long secret"}
+    - {name: password, label: "Password (Basic auth)", help: "Only for HTTP Basic auth.", required: false, secret: true, placeholder: "password"}
+    - {name: access_token, label: "Bearer token", help: "A pre-issued Bearer token.", required: false, secret: true, placeholder: "a long token"}
+  setup_steps:
+    - "Enable the Language, Content Translation and JSON:API modules, add every target language, and enable translation for each content type."
+    - "Install the JSON:API Multilingual module (drupal/jsonapi_multilingual) and set JSON:API to read-write mode."
+    - "Create an API user or Simple OAuth consumer that may view and edit that content."
+  other_side: >-
+    Change detection is poll-based: run on a schedule. Drupal's changed timestamp is the
+    content-changed signal, and unchanged entities are suppressed by content hash.

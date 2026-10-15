@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Glossary suggestions{% endblock %}
+{% block content %}
+
+<p><a href="/documents/{{ doc.id }}" class="back"><span aria-hidden="true">←</span> {{ doc.filename }}</a></p>
+
+{{ m.page_header('Suggested glossary terms') }}
+{% call m.card() %}
+  <p class="muted">Candidate terminology extracted from this document. Offline (no key): a
+  deterministic mock runs instead.</p>
+
+  {% if suggestions %}
+    {% call m.data_table('Suggested glossary terms', [{'label': 'Term'}, {'label': 'Suggested target'}, {'label': 'Note'}, {'label': 'Target locale'}, {'label': '<span class="sr-only">Actions</span>'|safe}]) %}
+        {% for s in suggestions %}
+          <tr>
+            {#- T5 (a11y, WCAG 3.1.2): the term is source text. The suggested target is NOT
+                tagged: the extraction prompt names no target language, so its language
+                is unknown and a guessed lang would be worse than none. -#}
+            <td{{ project.source_locale|langattrs }}>{{ s.source_term }}</td>
+            <td class="muted">{{ s.target_term or '-' }}</td>
+            <td class="muted">{{ s.note or '' }}</td>
+            <td colspan="2">
+              <form method="post" action="/projects/{{ project.id }}/glossary/add" class="form inline-form">
+                {% include "_csrf.html" %}
+                <input type="hidden" name="source_term" value="{{ s.source_term }}" />
+                <input type="hidden" name="target_term" value="{{ s.target_term or '' }}" />
+                {% if locales %}
+                  <select name="target_locale" aria-label="Target locale">
+                    {% for l in locales %}<option value="{{ l.locale }}">{{ l.locale }}</option>{% endfor %}
+                  </select>
+                {% endif %}
+                <button type="submit" class="small" aria-label="+ Add to glossary: {{ s.source_term }}">+ Add to glossary</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+    <p class="muted">One-click adds a term to this project's glossary; or add them in bulk
+      via CSV import on the <a href="/projects/{{ project.id }}">project page</a>.</p>
+  {% else %}
+    {{ m.empty_state('No candidate terms found.') }}
+  {% endif %}
+{% endcall %}
+
+{% endblock %}

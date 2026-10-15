@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% import "_viz_macros.html" as vm %}
+{% block title %}Content routing{% endblock %}
+{% block content %}
+<div class="ux-workflows">
+
+<section class="wf-intro">
+  {% set workflow_title %}Content routing{% endset %}
+  {{ m.page_header(workflow_title) }}
+  <button type="button" class="ghost layout-edit-btn" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+  <p class="muted">Deterministic rules route inbound documents (by file extension and department) to a
+  project and engine, by <strong>priority</strong> ascending then id - first active match wins; blank
+  matches anything. Explicit caller choices always win; unmatched files land in the department inbox.</p>
+  {% if saved %}<p class="ok">Routing rule saved.</p>{% endif %}
+  {# a11y T7: ?error= renders once, as a sentence, in the page error summary at the top
+     of main (base.html + _form_errors.html). #}
+</section>
+
+<nav class="wf-section-nav" aria-label="Content routing"><a href="#wf-add_rule">Add rule</a>
+<a href="#wf-rules">Rules</a>
+<a href="#wf-dept_budgets">Department budgets</a>
+<a href="#wf-project_budgets">Project budgets</a></nav>
+<div id="page-layout" class="page-layout" data-layout-page="routing">
+<section class="card" data-card="add_rule" id="wf-add_rule">
+  <h2>Add rule</h2>
+  <form method="post" action="/routing" class="form inline-form">
+{% call m.form_section('routing-routing', 'Add rule') %}
+    {% include "_csrf.html" %}
+    <label>Priority <input type="number" name="priority" value="100" size="5" /></label>
+    <label>Extension(s) <input type="text" name="match_ext" placeholder="srt,vtt (blank = any)" /></label>
+    <label>Department <input type="text" name="department" placeholder="blank = any" /></label>
+    <label>Project
+      <select name="project_id">
+        <option value="">(department inbox)</option>
+        {% for p in projects %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Provider
+      <input type="text" name="provider" placeholder="(project default)" size="10" />
+    </label>
+    <button type="submit">Add rule</button>
+  {% endcall %}
+</form>
+  <p class="help">A rule matches on <strong>extension</strong> and <strong>department</strong> and sets a
+  <strong>project</strong> and/or <strong>provider</strong>. Subject matching and workflow / language-set
+  targeting are <strong>reserved for v2</strong> and are not consulted at run time yet, so they cannot be
+  set here.</p>
+  <p class="help muted">Rules take effect on two API paths only: a rule's <strong>project</strong> places an
+  upload on <code>POST /api/documents</code> (only when the caller names no project), and a rule's
+  <strong>provider</strong> override applies on <code>POST /api/documents/{id}/translate</code> (via API, MCP
+  or <code>--remote</code> CLI) - the only place a provider target has effect. Web-UI uploads and in-process
+  CLI uploads consult no rules.</p>
+</section>
+
+<section class="card" data-card="rules" id="wf-rules">
+  <h2>Rules</h2>
+  {% if rules %}
+    {% call m.data_table('Rules', [{'label': 'Priority', 'numeric': true}, {'label': 'Extension'}, {'label': 'Department'}, {'label': 'Project'}, {'label': 'Provider'}, {'label': 'Status'}, {'label': '', 'actions': true}]) %}
+        {% for r in rules %}
+          <tr class="{{ '' if r.active else 'muted' }}">
+            <td class="data-mono">{{ r.priority }}{% if r.id in inert_rule_ids %}
+              <span class="badge warn" title="This rule carries reserved-for-v2 fields (subject/workflow/language set) that are not consulted at run time. They can no longer be authored; delete and re-create the rule to clear them.">inert fields</span>{% endif %}</td>
+            <td class="data-mono">{{ r.match_ext or '(any)' }}</td>
+            <td>{{ r.department or '(any)' }}</td>
+            <td>{{ proj_by_id.get(r.project_id) if r.project_id else '(dept inbox)' }}</td>
+            <td>{{ r.provider or '(default)' }}</td>
+            <td>
+              <form method="post" action="/routing/{{ r.id }}/toggle" class="rowform">
+                {% include "_csrf.html" %}
+                <button class="mini {% if r.active %}ok-btn{% endif %}" data-busy-keep-label>{{ 'active' if r.active else 'inactive' }}</button>
+              </form>
+            </td>
+            <td class="row-actions">
+              <form method="post" action="/routing/{{ r.id }}/delete" class="rowform"
+                    data-action-confirm="Delete this routing rule?">
+                {% include "_csrf.html" %}
+                <button class="mini danger-btn" type="submit" data-busy-keep-label>Delete<span class="sr-only">: {{ r.id }}</span></button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+  {% else %}
+    {% set workflow_empty %}No routing rules yet - every document falls through to the submitter's department inbox.{% endset %}{{ m.empty_state(workflow_empty) }}
+  {% endif %}
+</section>
+
+<section class="card" data-card="dept_budgets" id="wf-dept_budgets">
+  <h2>Department budgets</h2>
+  <p class="muted">Cap the translation tokens a department may spend per month (tokens in + out across
+  its <strong>translate</strong> submissions; <strong>failed jobs still count</strong>). No budget or a
+  limit of 0 = <strong>unlimited</strong>. Over the cap, translation requests are refused until next
+  month.</p>
+
+  {# CV-5: the install-wide AI-spend meter (same figures as Setup AI's spend-cap
+     card), so the money ceiling sits beside the per-department token budgets. #}
+  {% if spend %}
+  <p class="spend-meter-title">AI translation spend · {{ spend.period_label }}</p>
+  {% if spend.cap > 0 %}
+    {{ vm.budget_meter(
+         '$%.2f / $%.2f cap'|format(spend.spent, spend.cap),
+         spend.fill_pct,
+         'AI translation spend this period: $%.2f of the $%.2f cap (%d%% used)%s'|format(
+             spend.spent, spend.cap, spend.pct_used, ' - cap reached' if spend.tripped else ''),
+         over=spend.tripped, tick_pct=spend.tick_pct,
+         badge=('<span class="badge warn">cap reached</span>' if spend.tripped
+                else '<span class="badge exact">under cap</span>')) }}
+  {% else %}
+    <p class="spend-meter-figure data-mono">${{ '%.2f'|format(spend.spent) }}
+      <span class="badge muted-badge">cap off</span></p>
+  {% endif %}
+  {% endif %}
+
+  <form method="post" action="/routing/budgets" class="form inline-form">
+{% call m.form_section('routing-budgets', 'Department budgets') %}
+    {% include "_csrf.html" %}
+    <label>Department <input type="text" name="department" placeholder="e.g. Marketing" required /></label>
+    <label>Monthly token limit
+      <input type="number" name="monthly_token_limit" value="0" min="0" size="10" />
+    </label>
+    <button type="submit">Save budget</button>
+  {% endcall %}
+</form>
+
+  {% if budgets %}
+    {% call m.data_table('Department budgets', [{'label': 'Department'}, {'label': 'Monthly limit', 'numeric': true}, {'label': 'Spent this month', 'numeric': true}, {'label': 'Remaining', 'numeric': true}, {'label': 'Usage'}, {'label': '', 'actions': true}]) %}
+        {% for b in budgets %}
+          <tr>
+            <td>{{ b.row.department }}</td>
+            <td class="data-mono">{{ '(unlimited)' if b.row.monthly_token_limit <= 0 else b.row.monthly_token_limit }}</td>
+            <td class="data-mono">{{ b.spent }}</td>
+            <td class="data-mono">{{ '-' if b.row.monthly_token_limit <= 0 else (b.row.monthly_token_limit - b.spent if b.row.monthly_token_limit - b.spent > 0 else 0) }}</td>
+            <td>{{ vm.usage_bar(b.row.department, b.spent, b.row.monthly_token_limit) }}</td>
+            <td class="row-actions">
+              <form method="post" action="/routing/budgets/{{ b.row.id }}/delete" class="rowform"
+                    data-action-confirm="Delete this department budget?">
+                {% include "_csrf.html" %}
+                <button class="mini danger-btn" type="submit" data-busy-keep-label>Delete<span class="sr-only">: {{ b.row.department }}</span></button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+  {% else %}
+    {% set workflow_empty %}No department budgets set - every department is unlimited.{% endset %}{{ m.empty_state(workflow_empty) }}
+  {% endif %}
+</section>
+
+<section class="card" data-card="project_budgets" id="wf-project_budgets">
+  <h2>Project budgets</h2>
+  <p class="muted">Cap the <strong>money</strong> a project may spend per month - both
+  <strong>AI</strong> model spend (machine translation + workflow runs) and
+  <strong>settled vendor human</strong> spend, attributed to the project. No budget or a
+  limit of $0 = <strong>unlimited</strong>. At 100% of the cap, new machine-translate
+  submissions and new vendor dispatches for that project are refused until next month;
+  human review and editing are never blocked. Committed-but-unpaid vendor work is shown as
+  a marker on the meter but is not enforced against.</p>
+
+  <form method="post" action="/routing/project-budgets" class="form inline-form">
+{% call m.form_section('routing-project-budgets', 'Project budgets') %}
+    {% include "_csrf.html" %}
+    <label>Project
+      <select name="project_id" required>
+        <option value="">- choose a project -</option>
+        {% for p in projects %}
+        <option value="{{ p.id }}">{{ p.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Monthly USD limit
+      <input type="number" name="monthly_usd_limit" value="0" min="0" step="0.01" size="10" />
+    </label>
+    <button type="submit">Save budget</button>
+  {% endcall %}
+</form>
+
+  {% if project_budgets %}
+    {% call m.data_table('Project budgets', [{'label': 'Project'}, {'label': 'Monthly limit', 'numeric': true}, {'label': 'Spent this month', 'numeric': true}, {'label': 'Committed', 'numeric': true}, {'label': 'Remaining', 'numeric': true}, {'label': 'Usage'}, {'label': '', 'actions': true}]) %}
+        {% for b in project_budgets %}
+          {% set st = b.state %}
+          <tr>
+            <td>{{ b.project_name }}</td>
+            <td class="data-mono">{{ '(unlimited)' if st.unlimited else '$%.2f'|format(st.monthly_usd_limit) }}</td>
+            <td class="data-mono">${{ '%.2f'|format(st.enforced_usd) }}</td>
+            <td class="data-mono">{{ '-' if st.committed_usd <= 0 else '$%.2f'|format(st.committed_usd) }}</td>
+            <td class="data-mono">{{ '-' if st.unlimited else '$%.2f'|format(st.remaining_usd) }}</td>
+            <td>
+              {% if st.unlimited %}
+                <span class="muted small">unlimited</span>
+              {% else %}
+                {{ vm.budget_meter(
+                     st.pct_label,
+                     st.fill_pct, st.aria, over=st.over,
+                     tick_pct=st.committed_tick_pct,
+                     tick_title="Committed (unpaid) vendor spend",
+                     badge=('<span class="badge warn">over budget</span>' if st.over
+                            else '<span class="badge exact">under budget</span>')) }}
+              {% endif %}
+            </td>
+            <td class="row-actions">
+              <form method="post" action="/routing/project-budgets/{{ st.budget_id }}/delete" class="rowform"
+                    data-action-confirm="Delete this project budget?">
+                {% include "_csrf.html" %}
+                <button class="mini danger-btn" type="submit" data-busy-keep-label>Delete<span class="sr-only">: {{ b.project_name }}</span></button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+  {% else %}
+    {% set workflow_empty %}No project budgets set - every project is unlimited.{% endset %}{{ m.empty_state(workflow_empty) }}
+  {% endif %}
+</section>
+</div>
+{% with layout_page = 'routing' %}{% include "_page_layout.html" %}{% endwith %}
+
+</div>
+{% endblock %}

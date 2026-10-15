@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Workflow spend preview{% endblock %}
+{% block content %}
+<div class="ux-workflows">
+<p><a href="/workflows/{{ wf.id }}">Back to workflow</a></p>
+{{ m.page_header('Spend preview: ' ~ wf.name) }}
+<section class="card">
+  <form method="get" class="form">
+{% call m.form_section('workflow_plan-preview', 'Preview without running') %}
+    <label>Document ID <input name="doc_id" type="number" min="1" required value="{{ doc_id or '' }}"></label>
+    <label>Target locale <input name="locale" required value="{{ locale }}"></label>
+    <button type="submit" data-busy-label="{{ t(request, 'busy.previewing') }}">Preview without running</button>
+  {% endcall %}
+</form>
+  {% if preview %}
+  <h2>{{ preview.workflow_name }} (#{{ preview.workflow_id }})</h2>
+  <p>{{ preview.note }}</p>
+  {% for warning in preview.warnings %}<p>{{ warning }}</p>{% endfor %}
+  {% for step in preview.steps %}
+  <h3>{{ step.step }}</h3>
+  <p>Step engine: {% if step.provider %}{{ step.provider }} ({{ step.pricing }}){% else %}no engine call{% endif %}</p>
+  {% if step.fallback %}<p>Fallback: {{ step.fallback.provider }} ({{ step.fallback.pricing }}). {{ step.fallback.note }}</p>{% endif %}
+  {% if step.qe_judge %}<p>QE judge: {{ step.qe_judge.provider }} ({{ step.qe_judge.pricing }})</p>{% endif %}
+  {% if step.auto_fix %}
+  <p>Auto-fix post-editor: {{ step.auto_fix.provider }} ({{ step.auto_fix.pricing }}), up to {{ step.auto_fix.max_rounds }} rounds.
+  Cross-check adds calls: {{ 'yes' if step.auto_fix.cross_check_adds_calls else 'no' }}.</p>
+  <p>{{ step.auto_fix.note }}</p>
+  {% for warning in step.auto_fix.warnings %}<p>{{ warning }}</p>{% endfor %}
+  {% endif %}
+  {% endfor %}
+  {% endif %}
+</section>
+</div>
+{% endblock %}

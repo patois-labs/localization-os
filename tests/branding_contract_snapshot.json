@@ -1,0 +1,2757 @@
+{
+  "mcp_tools": [
+    "apply_tm",
+    "approve_segment",
+    "assign_query",
+    "attach_tm_source",
+    "cancel_workflow_run",
+    "clone_workflow",
+    "configure_project",
+    "connector_pull",
+    "connector_push",
+    "connector_retry",
+    "connector_status",
+    "connector_sync",
+    "connector_translate",
+    "create_project",
+    "create_workflow",
+    "edit_glossary",
+    "edit_lqa_finding",
+    "edit_workflow",
+    "export_keys",
+    "extract_terms",
+    "get_query",
+    "get_result",
+    "import_keys",
+    "job_status",
+    "key_changes",
+    "ledger_runs",
+    "ledger_summary",
+    "list_assets",
+    "list_capabilities",
+    "list_connectors",
+    "list_images",
+    "list_key_images",
+    "list_keys",
+    "list_languages",
+    "list_lqa_findings",
+    "list_projects",
+    "list_queries",
+    "list_workflows",
+    "log_lqa_finding",
+    "manage_admin_ops",
+    "manage_custom_fields",
+    "manage_formality",
+    "manage_install",
+    "manage_key_image",
+    "manage_style_guide",
+    "manage_tm",
+    "manage_users",
+    "manage_workflow_group",
+    "my_work",
+    "open_query",
+    "pin_glossary",
+    "project_automation",
+    "project_notifications",
+    "project_run",
+    "release_manifest",
+    "reply_to_query",
+    "run_report",
+    "run_workflow",
+    "search_tm",
+    "search_workspace",
+    "set_project_fields",
+    "set_query_status",
+    "submit_translation",
+    "translate_image",
+    "translate_keys",
+    "translate_text",
+    "upsert_keys",
+    "vendor_approve_quote",
+    "vendor_reject_rework",
+    "whoami",
+    "withdraw_lqa_finding",
+    "work_status"
+  ],
+  "routes": {
+    "/": [
+      "GET"
+    ],
+    "/.well-known/oauth-authorization-server": [
+      "GET"
+    ],
+    "/account": [
+      "GET"
+    ],
+    "/account/apikeys": [
+      "POST"
+    ],
+    "/account/apikeys/{kid}/revoke": [
+      "POST"
+    ],
+    "/account/connected-apps": [
+      "GET"
+    ],
+    "/account/connected-apps/{gid}/revoke": [
+      "POST"
+    ],
+    "/account/export": [
+      "GET"
+    ],
+    "/account/get-started": [
+      "POST"
+    ],
+    "/account/layouts/{page_key}": [
+      "DELETE",
+      "GET",
+      "PUT"
+    ],
+    "/account/locale": [
+      "POST"
+    ],
+    "/account/mfa/disable": [
+      "POST"
+    ],
+    "/account/mfa/recovery-codes": [
+      "POST"
+    ],
+    "/account/mfa/setup": [
+      "GET",
+      "POST"
+    ],
+    "/account/name": [
+      "POST"
+    ],
+    "/account/password": [
+      "POST"
+    ],
+    "/account/theme": [
+      "POST"
+    ],
+    "/admin/health": [
+      "GET"
+    ],
+    "/api/account": [
+      "GET"
+    ],
+    "/api/account/layouts": [
+      "GET"
+    ],
+    "/api/account/layouts/{page_key}": [
+      "DELETE",
+      "GET",
+      "PUT"
+    ],
+    "/api/account/onboarding-reset": [
+      "POST"
+    ],
+    "/api/account/theme": [
+      "POST"
+    ],
+    "/api/admin/config": [
+      "GET",
+      "POST"
+    ],
+    "/api/admin/engines": [
+      "POST"
+    ],
+    "/api/admin/engines/import-jev-env": [
+      "POST"
+    ],
+    "/api/admin/engines/{eid}/delete": [
+      "POST"
+    ],
+    "/api/admin/engines/{eid}/inspect": [
+      "GET"
+    ],
+    "/api/admin/engines/{eid}/jev-try": [
+      "POST"
+    ],
+    "/api/admin/engines/{eid}/models": [
+      "POST"
+    ],
+    "/api/admin/engines/{eid}/test": [
+      "POST"
+    ],
+    "/api/admin/engines/{eid}/update": [
+      "POST"
+    ],
+    "/api/admin/features": [
+      "GET"
+    ],
+    "/api/admin/features/{slug}": [
+      "POST"
+    ],
+    "/api/admin/ldap": [
+      "GET",
+      "POST"
+    ],
+    "/api/admin/ledger/envelopes/{state}": [
+      "POST"
+    ],
+    "/api/admin/ledger/purge": [
+      "POST"
+    ],
+    "/api/admin/oidc": [
+      "GET",
+      "POST"
+    ],
+    "/api/admin/providers/{name}/key": [
+      "GET",
+      "POST"
+    ],
+    "/api/admin/providers/{name}/key/clear": [
+      "POST"
+    ],
+    "/api/admin/retention/config": [
+      "POST"
+    ],
+    "/api/admin/retention/purge": [
+      "POST"
+    ],
+    "/api/admin/retention/status": [
+      "GET"
+    ],
+    "/api/admin/smtp": [
+      "GET",
+      "POST"
+    ],
+    "/api/admin/srx/disable": [
+      "POST"
+    ],
+    "/api/admin/srx/enable": [
+      "POST"
+    ],
+    "/api/admin/srx/upload": [
+      "POST"
+    ],
+    "/api/admin/srx/validate": [
+      "POST"
+    ],
+    "/api/admin/tick": [
+      "POST"
+    ],
+    "/api/apikeys": [
+      "GET"
+    ],
+    "/api/apikeys/issue": [
+      "POST"
+    ],
+    "/api/apikeys/revoke-all": [
+      "POST"
+    ],
+    "/api/apikeys/{kid}/revoke": [
+      "POST"
+    ],
+    "/api/audit/export": [
+      "GET"
+    ],
+    "/api/audit/verify": [
+      "GET"
+    ],
+    "/api/batches/{batch_id}": [
+      "GET"
+    ],
+    "/api/batches/{batch_id}/rerun": [
+      "POST"
+    ],
+    "/api/batches/{batch_id}/retry-failed": [
+      "POST"
+    ],
+    "/api/budgets": [
+      "GET",
+      "POST"
+    ],
+    "/api/budgets/{budget_id}/delete": [
+      "POST"
+    ],
+    "/api/capabilities/{slug}": [
+      "GET"
+    ],
+    "/api/connectors": [
+      "GET",
+      "POST"
+    ],
+    "/api/connectors/health": [
+      "GET"
+    ],
+    "/api/connectors/token-regen": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/airtable/records": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/airtable/records/delete": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/airtable/webhook": [
+      "GET",
+      "POST"
+    ],
+    "/api/connectors/{cid}/airtable/webhook/health": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/airtable/webhook/register": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/airtable/webhook/translate-pending": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/airtable/webhook/unregister": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/akeneo/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/bitbucket/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/browse": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/confluence/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/contentful/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/delete": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/document360/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/drupal/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/freshdesk/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/gdocs/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/github/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/gitlab/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/helpscout/resolve-link": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/helpscout/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/hubspot/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/intercom/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/jira/count": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/jira/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/jira/translate-pending": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/mcp_cms/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/msgraph/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/notion/resolve-link": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/notion/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/oauth-secret": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/plytix/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/prune-config": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/pull": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/push": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/retry": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/salesforce/rediscover-fields": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/salesforce/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/sanity/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/schedule": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/secret": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/servicenow/resolve-link": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/servicenow/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/shopify/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/sitecore/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/strapi/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/sync": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/test": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/update": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/wordpress/resolve-link": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/wordpress/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/zendesk/translate": [
+      "POST"
+    ],
+    "/api/connectors/{cid}/zoho/translate": [
+      "POST"
+    ],
+    "/api/content-types": [
+      "GET",
+      "POST"
+    ],
+    "/api/content-types/{cid}/delete": [
+      "POST"
+    ],
+    "/api/content-types/{cid}/rename": [
+      "POST"
+    ],
+    "/api/context/ab": [
+      "POST"
+    ],
+    "/api/context/documents/{doc_id}": [
+      "POST"
+    ],
+    "/api/context/profiles": [
+      "POST"
+    ],
+    "/api/context/resolve": [
+      "GET"
+    ],
+    "/api/custom-fields": [
+      "GET",
+      "POST"
+    ],
+    "/api/custom-fields/{fid}": [
+      "PATCH"
+    ],
+    "/api/customers": [
+      "GET",
+      "POST"
+    ],
+    "/api/customers/{cid}/ai-opt-out": [
+      "POST"
+    ],
+    "/api/customers/{cid}/archive": [
+      "POST"
+    ],
+    "/api/customers/{cid}/defaults": [
+      "POST"
+    ],
+    "/api/customers/{cid}/delete": [
+      "POST"
+    ],
+    "/api/customers/{cid}/detail": [
+      "GET"
+    ],
+    "/api/customers/{cid}/pairs/add": [
+      "POST"
+    ],
+    "/api/customers/{cid}/pairs/import": [
+      "POST"
+    ],
+    "/api/customers/{cid}/pairs/remove": [
+      "POST"
+    ],
+    "/api/customers/{cid}/rename": [
+      "POST"
+    ],
+    "/api/customers/{cid}/settings": [
+      "POST"
+    ],
+    "/api/customers/{cid}/unarchive": [
+      "POST"
+    ],
+    "/api/documents": [
+      "POST"
+    ],
+    "/api/documents/{doc_id}/apply-tm": [
+      "POST"
+    ],
+    "/api/documents/{doc_id}/delete": [
+      "POST"
+    ],
+    "/api/documents/{doc_id}/deliver-approve": [
+      "POST"
+    ],
+    "/api/documents/{doc_id}/deliver-revoke": [
+      "POST"
+    ],
+    "/api/documents/{doc_id}/download": [
+      "GET"
+    ],
+    "/api/documents/{doc_id}/empties": [
+      "GET"
+    ],
+    "/api/documents/{doc_id}/lqa/findings": [
+      "GET",
+      "POST"
+    ],
+    "/api/documents/{doc_id}/paragraphs": [
+      "GET"
+    ],
+    "/api/documents/{doc_id}/paragraphs/revert-all-damaged": [
+      "POST"
+    ],
+    "/api/documents/{doc_id}/paragraphs/{index}/revert": [
+      "POST"
+    ],
+    "/api/documents/{doc_id}/paragraphs/{index}/save": [
+      "POST"
+    ],
+    "/api/documents/{doc_id}/rename": [
+      "POST"
+    ],
+    "/api/documents/{doc_id}/segments": [
+      "GET"
+    ],
+    "/api/documents/{doc_id}/translate": [
+      "POST"
+    ],
+    "/api/exports": [
+      "GET",
+      "POST"
+    ],
+    "/api/exports/{run_uuid}": [
+      "GET"
+    ],
+    "/api/exports/{run_uuid}/artifact": [
+      "GET"
+    ],
+    "/api/formality": [
+      "GET",
+      "POST"
+    ],
+    "/api/formality/registers": [
+      "GET"
+    ],
+    "/api/formats": [
+      "GET"
+    ],
+    "/api/glossaries": [
+      "GET",
+      "POST"
+    ],
+    "/api/glossaries/{gid}": [
+      "GET"
+    ],
+    "/api/glossaries/{gid}/approve": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/candidates": [
+      "GET"
+    ],
+    "/api/glossaries/{gid}/candidates/{cid}/accept": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/candidates/{cid}/drop": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/concepts": [
+      "GET",
+      "POST"
+    ],
+    "/api/glossaries/{gid}/concepts/terms/audience": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/concepts/{cid}/delete": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/concepts/{cid}/edit": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/concepts/{cid}/terms": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/concepts/{cid}/terms/{tid}/delete": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/concepts/{cid}/terms/{tid}/edit": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/content-type": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/delete": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/export": [
+      "GET"
+    ],
+    "/api/glossaries/{gid}/extract": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/import": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/pairs": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/rename": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/set-customer": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/terms": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/terms/{eid}/edit": [
+      "POST"
+    ],
+    "/api/glossaries/{gid}/unapprove": [
+      "POST"
+    ],
+    "/api/images": [
+      "GET",
+      "POST"
+    ],
+    "/api/images/{doc_id}": [
+      "GET"
+    ],
+    "/api/images/{doc_id}/export": [
+      "GET"
+    ],
+    "/api/images/{doc_id}/translate": [
+      "POST"
+    ],
+    "/api/jobs": [
+      "GET"
+    ],
+    "/api/jobs/run": [
+      "POST"
+    ],
+    "/api/jobs/{jid}": [
+      "GET"
+    ],
+    "/api/keys/{key_id}": [
+      "DELETE",
+      "PATCH"
+    ],
+    "/api/keys/{key_id}/images": [
+      "GET",
+      "POST"
+    ],
+    "/api/keys/{key_id}/images/{image_id}": [
+      "DELETE"
+    ],
+    "/api/keys/{key_id}/images/{image_id}/primary": [
+      "POST"
+    ],
+    "/api/keys/{key_id}/images/{image_id}/raw": [
+      "GET"
+    ],
+    "/api/keys/{key_id}/restore": [
+      "POST"
+    ],
+    "/api/keys/{key_id}/values": [
+      "GET"
+    ],
+    "/api/keys/{key_id}/values/{locale}": [
+      "PUT"
+    ],
+    "/api/langsets": [
+      "GET",
+      "POST"
+    ],
+    "/api/langsets/{sid}": [
+      "POST"
+    ],
+    "/api/langsets/{sid}/delete": [
+      "POST"
+    ],
+    "/api/languages": [
+      "GET"
+    ],
+    "/api/languages/{code}/disable": [
+      "POST"
+    ],
+    "/api/languages/{code}/enable": [
+      "POST"
+    ],
+    "/api/lqa/findings/{fid}": [
+      "POST"
+    ],
+    "/api/lqa/findings/{fid}/withdraw": [
+      "POST"
+    ],
+    "/api/lqa/rulebook": [
+      "GET",
+      "POST"
+    ],
+    "/api/mcp-oauth/grants": [
+      "GET"
+    ],
+    "/api/mcp-oauth/grants/{gid}/revoke": [
+      "POST"
+    ],
+    "/api/notify/channels": [
+      "GET",
+      "POST"
+    ],
+    "/api/notify/channels/{cid}": [
+      "DELETE",
+      "GET",
+      "POST"
+    ],
+    "/api/notify/channels/{cid}/deliveries": [
+      "GET"
+    ],
+    "/api/notify/channels/{cid}/retry": [
+      "POST"
+    ],
+    "/api/notify/channels/{cid}/test": [
+      "POST"
+    ],
+    "/api/notify/projects/{pid}": [
+      "GET"
+    ],
+    "/api/notify/projects/{pid}/mute": [
+      "POST"
+    ],
+    "/api/notify/routes": [
+      "GET",
+      "POST"
+    ],
+    "/api/notify/routes/{rid}": [
+      "DELETE"
+    ],
+    "/api/projects": [
+      "GET",
+      "POST"
+    ],
+    "/api/projects/{pid}": [
+      "GET"
+    ],
+    "/api/projects/{pid}/add-locale": [
+      "POST"
+    ],
+    "/api/projects/{pid}/ai-opt-out": [
+      "POST"
+    ],
+    "/api/projects/{pid}/apply-langset": [
+      "POST"
+    ],
+    "/api/projects/{pid}/archive": [
+      "POST"
+    ],
+    "/api/projects/{pid}/automation": [
+      "GET",
+      "PUT"
+    ],
+    "/api/projects/{pid}/automation/handover": [
+      "POST"
+    ],
+    "/api/projects/{pid}/automation/pause": [
+      "POST"
+    ],
+    "/api/projects/{pid}/automation/resume": [
+      "POST"
+    ],
+    "/api/projects/{pid}/budget": [
+      "GET",
+      "POST"
+    ],
+    "/api/projects/{pid}/budget/delete": [
+      "POST"
+    ],
+    "/api/projects/{pid}/changes": [
+      "GET"
+    ],
+    "/api/projects/{pid}/content-type": [
+      "POST"
+    ],
+    "/api/projects/{pid}/delete": [
+      "POST"
+    ],
+    "/api/projects/{pid}/documents": [
+      "GET"
+    ],
+    "/api/projects/{pid}/due": [
+      "POST"
+    ],
+    "/api/projects/{pid}/export": [
+      "GET"
+    ],
+    "/api/projects/{pid}/fields": [
+      "GET",
+      "PATCH"
+    ],
+    "/api/projects/{pid}/glossaries": [
+      "GET",
+      "POST"
+    ],
+    "/api/projects/{pid}/glossaries/remove": [
+      "POST"
+    ],
+    "/api/projects/{pid}/glossary": [
+      "GET",
+      "POST"
+    ],
+    "/api/projects/{pid}/glossary/export": [
+      "GET"
+    ],
+    "/api/projects/{pid}/glossary/import": [
+      "POST"
+    ],
+    "/api/projects/{pid}/intake": [
+      "POST"
+    ],
+    "/api/projects/{pid}/keys": [
+      "GET",
+      "POST"
+    ],
+    "/api/projects/{pid}/keys/deliver-approve": [
+      "POST"
+    ],
+    "/api/projects/{pid}/keys/deliver-revoke": [
+      "POST"
+    ],
+    "/api/projects/{pid}/keys/empties": [
+      "GET"
+    ],
+    "/api/projects/{pid}/keys/export": [
+      "GET"
+    ],
+    "/api/projects/{pid}/keys/import": [
+      "POST"
+    ],
+    "/api/projects/{pid}/keys/translate": [
+      "POST"
+    ],
+    "/api/projects/{pid}/leverage": [
+      "GET"
+    ],
+    "/api/projects/{pid}/make-connected": [
+      "POST"
+    ],
+    "/api/projects/{pid}/members": [
+      "GET"
+    ],
+    "/api/projects/{pid}/members/add": [
+      "POST"
+    ],
+    "/api/projects/{pid}/members/remove": [
+      "POST"
+    ],
+    "/api/projects/{pid}/pair-providers": [
+      "POST"
+    ],
+    "/api/projects/{pid}/remove-locale": [
+      "POST"
+    ],
+    "/api/projects/{pid}/rename": [
+      "POST"
+    ],
+    "/api/projects/{pid}/runs": [
+      "GET",
+      "POST"
+    ],
+    "/api/projects/{pid}/set-customer": [
+      "POST"
+    ],
+    "/api/projects/{pid}/source": [
+      "POST"
+    ],
+    "/api/projects/{pid}/source/unbind": [
+      "POST"
+    ],
+    "/api/projects/{pid}/status": [
+      "POST"
+    ],
+    "/api/projects/{pid}/tm-sources": [
+      "GET",
+      "POST"
+    ],
+    "/api/projects/{pid}/tm-sources/remove": [
+      "POST"
+    ],
+    "/api/projects/{pid}/tm/export": [
+      "GET"
+    ],
+    "/api/projects/{pid}/tm/import": [
+      "POST"
+    ],
+    "/api/projects/{pid}/translate-comments": [
+      "POST"
+    ],
+    "/api/projects/{pid}/unarchive": [
+      "POST"
+    ],
+    "/api/prompt-tap/actions": [
+      "GET"
+    ],
+    "/api/prompt-tap/actions/{action_id}/summary": [
+      "GET"
+    ],
+    "/api/prompt-tap/runs": [
+      "GET"
+    ],
+    "/api/prompt-tap/runs/{run_id}": [
+      "GET"
+    ],
+    "/api/prompt-templates": [
+      "GET",
+      "POST"
+    ],
+    "/api/prompt-templates/{tid}/delete": [
+      "POST"
+    ],
+    "/api/prompt-templates/{tid}/rename": [
+      "POST"
+    ],
+    "/api/queries": [
+      "GET",
+      "POST"
+    ],
+    "/api/queries/{qid}": [
+      "GET"
+    ],
+    "/api/queries/{qid}/assign": [
+      "POST"
+    ],
+    "/api/queries/{qid}/posts": [
+      "POST"
+    ],
+    "/api/queries/{qid}/status": [
+      "POST"
+    ],
+    "/api/release": [
+      "GET"
+    ],
+    "/api/reports/run": [
+      "GET"
+    ],
+    "/api/routing/rules": [
+      "GET",
+      "POST"
+    ],
+    "/api/routing/rules/{rule_id}": [
+      "GET"
+    ],
+    "/api/routing/rules/{rule_id}/delete": [
+      "POST"
+    ],
+    "/api/routing/rules/{rule_id}/toggle": [
+      "POST"
+    ],
+    "/api/runs/{run_id}": [
+      "GET"
+    ],
+    "/api/runs/{run_id}/cancel": [
+      "POST"
+    ],
+    "/api/runs/{run_id}/resume": [
+      "POST"
+    ],
+    "/api/runs/{run_id}/step-diff": [
+      "GET"
+    ],
+    "/api/search": [
+      "GET"
+    ],
+    "/api/segments/{sid}/approve": [
+      "POST"
+    ],
+    "/api/segments/{sid}/propagation": [
+      "POST"
+    ],
+    "/api/segments/{sid}/unlock": [
+      "POST"
+    ],
+    "/api/segprofiles": [
+      "GET",
+      "POST"
+    ],
+    "/api/segprofiles/assign": [
+      "POST"
+    ],
+    "/api/segprofiles/{pid}": [
+      "GET"
+    ],
+    "/api/segprofiles/{pid}/clone": [
+      "POST"
+    ],
+    "/api/segprofiles/{pid}/delete": [
+      "POST"
+    ],
+    "/api/segprofiles/{pid}/rename": [
+      "POST"
+    ],
+    "/api/segprofiles/{pid}/set-default": [
+      "POST"
+    ],
+    "/api/style-guides": [
+      "GET",
+      "POST"
+    ],
+    "/api/style-guides/{gid}": [
+      "GET"
+    ],
+    "/api/style-guides/{gid}/ab": [
+      "POST"
+    ],
+    "/api/style-guides/{gid}/delete": [
+      "POST"
+    ],
+    "/api/style-guides/{gid}/set-status": [
+      "POST"
+    ],
+    "/api/style-guides/{gid}/update": [
+      "POST"
+    ],
+    "/api/system-prompts": [
+      "GET"
+    ],
+    "/api/system-prompts/{key}": [
+      "DELETE",
+      "GET",
+      "PUT"
+    ],
+    "/api/system-prompts/{key}/restore": [
+      "POST"
+    ],
+    "/api/templates": [
+      "GET",
+      "POST"
+    ],
+    "/api/templates/{tid}": [
+      "GET"
+    ],
+    "/api/templates/{tid}/apply": [
+      "POST"
+    ],
+    "/api/templates/{tid}/delete": [
+      "POST"
+    ],
+    "/api/templates/{tid}/rename": [
+      "POST"
+    ],
+    "/api/tm": [
+      "GET"
+    ],
+    "/api/tm/bulk-delete": [
+      "POST"
+    ],
+    "/api/tm/scrub-hedges": [
+      "POST"
+    ],
+    "/api/tm/stats": [
+      "GET"
+    ],
+    "/api/tm/{entry_id}": [
+      "GET"
+    ],
+    "/api/tm/{entry_id}/delete": [
+      "POST"
+    ],
+    "/api/tm/{entry_id}/edit": [
+      "POST"
+    ],
+    "/api/translate/text": [
+      "POST"
+    ],
+    "/api/users": [
+      "GET",
+      "POST"
+    ],
+    "/api/users/invite": [
+      "POST"
+    ],
+    "/api/users/invites": [
+      "GET"
+    ],
+    "/api/users/invites/{invite_id}": [
+      "DELETE"
+    ],
+    "/api/users/{uid}": [
+      "GET"
+    ],
+    "/api/users/{uid}/customer": [
+      "POST"
+    ],
+    "/api/users/{uid}/department": [
+      "POST"
+    ],
+    "/api/users/{uid}/disable": [
+      "POST"
+    ],
+    "/api/users/{uid}/enable": [
+      "POST"
+    ],
+    "/api/users/{uid}/erase": [
+      "POST"
+    ],
+    "/api/users/{uid}/export": [
+      "GET"
+    ],
+    "/api/users/{uid}/mfa": [
+      "DELETE",
+      "GET"
+    ],
+    "/api/users/{uid}/reset-password": [
+      "POST"
+    ],
+    "/api/users/{uid}/role": [
+      "POST"
+    ],
+    "/api/users/{uid}/unlock": [
+      "POST"
+    ],
+    "/api/vendors": [
+      "GET",
+      "POST"
+    ],
+    "/api/vendors/dispatches": [
+      "GET"
+    ],
+    "/api/vendors/dispatches/{did}": [
+      "GET"
+    ],
+    "/api/vendors/dispatches/{did}/approve-quote": [
+      "POST"
+    ],
+    "/api/vendors/dispatches/{did}/decline-quote": [
+      "POST"
+    ],
+    "/api/vendors/dispatches/{did}/quote": [
+      "POST"
+    ],
+    "/api/vendors/dispatches/{did}/reject-rework": [
+      "POST"
+    ],
+    "/api/vendors/dispatches/{did}/xliff": [
+      "GET"
+    ],
+    "/api/vendors/poll": [
+      "POST"
+    ],
+    "/api/vendors/returns": [
+      "POST"
+    ],
+    "/api/vendors/{vid}": [
+      "GET",
+      "POST"
+    ],
+    "/api/vendors/{vid}/delete": [
+      "POST"
+    ],
+    "/api/vendors/{vid}/link-customer": [
+      "POST"
+    ],
+    "/api/vendors/{vid}/rate-card": [
+      "POST"
+    ],
+    "/api/vendors/{vid}/secret": [
+      "POST"
+    ],
+    "/api/vendors/{vid}/unlink-customer": [
+      "POST"
+    ],
+    "/api/workflow-groups": [
+      "GET",
+      "POST"
+    ],
+    "/api/workflow-groups/{gid}": [
+      "GET"
+    ],
+    "/api/workflow-groups/{gid}/add": [
+      "POST"
+    ],
+    "/api/workflow-groups/{gid}/default": [
+      "POST"
+    ],
+    "/api/workflow-groups/{gid}/delete": [
+      "POST"
+    ],
+    "/api/workflow-groups/{gid}/rename": [
+      "POST"
+    ],
+    "/api/workflows": [
+      "GET",
+      "POST"
+    ],
+    "/api/workflows/author": [
+      "POST"
+    ],
+    "/api/workflows/{wid}": [
+      "GET"
+    ],
+    "/api/workflows/{wid}/archive": [
+      "POST"
+    ],
+    "/api/workflows/{wid}/clone": [
+      "POST"
+    ],
+    "/api/workflows/{wid}/copy": [
+      "POST"
+    ],
+    "/api/workflows/{wid}/delete": [
+      "POST"
+    ],
+    "/api/workflows/{wid}/plan": [
+      "GET"
+    ],
+    "/api/workflows/{wid}/rename": [
+      "POST"
+    ],
+    "/api/workflows/{wid}/run": [
+      "POST"
+    ],
+    "/api/workflows/{wid}/run-batch": [
+      "POST"
+    ],
+    "/api/workflows/{wid}/steps": [
+      "POST"
+    ],
+    "/api/workflows/{wid}/steps/{sid}/delete": [
+      "POST"
+    ],
+    "/api/workflows/{wid}/steps/{sid}/edit": [
+      "POST"
+    ],
+    "/api/workflows/{wid}/steps/{sid}/move": [
+      "POST"
+    ],
+    "/api/workflows/{wid}/system-prompts": [
+      "GET"
+    ],
+    "/api/workflows/{wid}/system-prompts/{key}": [
+      "DELETE",
+      "GET",
+      "PUT"
+    ],
+    "/api/workflows/{wid}/system-prompts/{key}/history": [
+      "GET"
+    ],
+    "/api/workflows/{wid}/system-prompts/{key}/restore": [
+      "POST"
+    ],
+    "/api/workflows/{wid}/system-prompts/{key}/restore-default": [
+      "POST"
+    ],
+    "/api/workflows/{wid}/unarchive": [
+      "POST"
+    ],
+    "/api/worklist": [
+      "GET"
+    ],
+    "/assist/ask": [
+      "POST"
+    ],
+    "/audit": [
+      "GET"
+    ],
+    "/audit/export": [
+      "GET"
+    ],
+    "/auth/accept/{token}": [
+      "GET",
+      "POST"
+    ],
+    "/auth/keepalive": [
+      "POST"
+    ],
+    "/auth/login": [
+      "GET",
+      "POST"
+    ],
+    "/auth/logout": [
+      "GET",
+      "POST"
+    ],
+    "/auth/mfa": [
+      "GET",
+      "POST"
+    ],
+    "/auth/mfa/cancel": [
+      "POST"
+    ],
+    "/auth/mfa/enroll": [
+      "GET",
+      "POST"
+    ],
+    "/auth/oidc/callback": [
+      "GET"
+    ],
+    "/auth/oidc/login": [
+      "GET"
+    ],
+    "/auth/password-change": [
+      "GET",
+      "POST"
+    ],
+    "/auth/saml/acs": [
+      "POST"
+    ],
+    "/auth/saml/login": [
+      "GET"
+    ],
+    "/auth/saml/metadata": [
+      "GET"
+    ],
+    "/auth/session": [
+      "GET"
+    ],
+    "/auth/setup": [
+      "GET",
+      "POST"
+    ],
+    "/auth/sso": [
+      "POST"
+    ],
+    "/batches/{batch_id}": [
+      "GET"
+    ],
+    "/batches/{batch_id}/rerun": [
+      "POST"
+    ],
+    "/batches/{batch_id}/retry-failed": [
+      "POST"
+    ],
+    "/batches/{batch_id}/status.json": [
+      "GET"
+    ],
+    "/concordance": [
+      "GET"
+    ],
+    "/connectors": [
+      "GET"
+    ],
+    "/connectors/catalog": [
+      "GET"
+    ],
+    "/connectors/connection/{cid}": [
+      "GET",
+      "POST"
+    ],
+    "/connectors/connection/{cid}/airtable-webhook/health": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/airtable-webhook/register": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/airtable-webhook/translate-pending": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/airtable-webhook/unregister": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/browse/containers": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/browse/fields": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/delete": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/helpscout/resolve-link": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/languages": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/notion/resolve-link": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/pull": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/push": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/retry": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/retry-blocked": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/rotate": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/salesforce/rediscover-fields": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/schedule": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/servicenow/resolve-link": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/sync": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/test": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/translate-pending": [
+      "POST"
+    ],
+    "/connectors/connection/{cid}/wordpress/resolve-link": [
+      "POST"
+    ],
+    "/connectors/manage": [
+      "GET"
+    ],
+    "/connectors/manage/{kind}": [
+      "POST"
+    ],
+    "/connectors/oauth/callback": [
+      "GET"
+    ],
+    "/connectors/oauth/client-metadata.json": [
+      "GET"
+    ],
+    "/connectors/token/regenerate": [
+      "POST"
+    ],
+    "/connectors/{kind}": [
+      "GET",
+      "POST"
+    ],
+    "/connectors/{kind}/browse": [
+      "POST"
+    ],
+    "/connectors/{kind}/oauth/start": [
+      "POST"
+    ],
+    "/content-types": [
+      "GET",
+      "POST"
+    ],
+    "/content-types/{ct_id}/delete": [
+      "POST"
+    ],
+    "/content-types/{ct_id}/describe": [
+      "POST"
+    ],
+    "/content-types/{ct_id}/rename": [
+      "POST"
+    ],
+    "/context-cards/{card_id}/delete": [
+      "POST"
+    ],
+    "/customers": [
+      "GET",
+      "POST"
+    ],
+    "/customers/{customer_id}": [
+      "GET"
+    ],
+    "/customers/{customer_id}/ai-opt-out": [
+      "POST"
+    ],
+    "/customers/{customer_id}/archive": [
+      "POST"
+    ],
+    "/customers/{customer_id}/context-cards": [
+      "POST"
+    ],
+    "/customers/{customer_id}/delete": [
+      "POST"
+    ],
+    "/customers/{customer_id}/link-vendor": [
+      "POST"
+    ],
+    "/customers/{customer_id}/pairs": [
+      "POST"
+    ],
+    "/customers/{customer_id}/pairs/import": [
+      "POST"
+    ],
+    "/customers/{customer_id}/pairs/remove": [
+      "POST"
+    ],
+    "/customers/{customer_id}/rename": [
+      "POST"
+    ],
+    "/customers/{customer_id}/settings": [
+      "POST"
+    ],
+    "/customers/{customer_id}/unarchive": [
+      "POST"
+    ],
+    "/customers/{customer_id}/unlink-vendor": [
+      "POST"
+    ],
+    "/documents/{doc_id}": [
+      "GET"
+    ],
+    "/documents/{doc_id}/apply-tm": [
+      "POST"
+    ],
+    "/documents/{doc_id}/context": [
+      "POST"
+    ],
+    "/documents/{doc_id}/context-ab": [
+      "POST"
+    ],
+    "/documents/{doc_id}/delete": [
+      "POST"
+    ],
+    "/documents/{doc_id}/deliver-approve": [
+      "POST"
+    ],
+    "/documents/{doc_id}/deliver-revoke": [
+      "POST"
+    ],
+    "/documents/{doc_id}/editor": [
+      "GET"
+    ],
+    "/documents/{doc_id}/empties": [
+      "GET"
+    ],
+    "/documents/{doc_id}/estimate": [
+      "GET"
+    ],
+    "/documents/{doc_id}/export": [
+      "GET"
+    ],
+    "/documents/{doc_id}/glossary-suggest": [
+      "POST"
+    ],
+    "/documents/{doc_id}/lqa": [
+      "GET"
+    ],
+    "/documents/{doc_id}/lqa/findings": [
+      "POST"
+    ],
+    "/documents/{doc_id}/lqa/run": [
+      "POST"
+    ],
+    "/documents/{doc_id}/paragraphs": [
+      "GET"
+    ],
+    "/documents/{doc_id}/paragraphs/revert-all-damaged": [
+      "POST"
+    ],
+    "/documents/{doc_id}/paragraphs/{index}/revert": [
+      "POST"
+    ],
+    "/documents/{doc_id}/paragraphs/{index}/save": [
+      "POST"
+    ],
+    "/documents/{doc_id}/rename": [
+      "POST"
+    ],
+    "/documents/{doc_id}/rulebook": [
+      "POST"
+    ],
+    "/documents/{doc_id}/run": [
+      "POST"
+    ],
+    "/documents/{doc_id}/run-batch": [
+      "POST"
+    ],
+    "/documents/{doc_id}/style-ab": [
+      "POST"
+    ],
+    "/documents/{doc_id}/translate": [
+      "POST"
+    ],
+    "/documents/{doc_id}/translate-stream": [
+      "POST"
+    ],
+    "/exports": [
+      "GET",
+      "POST"
+    ],
+    "/exports/{run_uuid}": [
+      "GET"
+    ],
+    "/exports/{run_uuid}/download": [
+      "GET"
+    ],
+    "/exports/{run_uuid}/status": [
+      "GET"
+    ],
+    "/favicon.ico": [
+      "GET"
+    ],
+    "/formality": [
+      "POST"
+    ],
+    "/glossaries": [
+      "GET",
+      "POST"
+    ],
+    "/glossaries/{glossary_id}": [
+      "GET"
+    ],
+    "/glossaries/{glossary_id}/approve": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/assign-customer": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/build": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/candidates/batch": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/candidates/{candidate_id}/accept": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/candidates/{candidate_id}/drop": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/concepts": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/concepts/terms/audience": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/concepts/{concept_id}/delete": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/concepts/{concept_id}/edit": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/concepts/{concept_id}/terms/add": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/concepts/{concept_id}/terms/{term_id}/delete": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/concepts/{concept_id}/terms/{term_id}/edit": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/content-type": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/delete": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/export": [
+      "GET"
+    ],
+    "/glossaries/{glossary_id}/extract": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/import": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/pairs": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/rename": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/terms/add": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/terms/{entry_id}/delete": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/terms/{entry_id}/edit": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/terms/{entry_id}/sense": [
+      "POST"
+    ],
+    "/glossaries/{glossary_id}/unapprove": [
+      "POST"
+    ],
+    "/health": [
+      "GET"
+    ],
+    "/help": [
+      "GET"
+    ],
+    "/help/{module}": [
+      "GET"
+    ],
+    "/images": [
+      "GET"
+    ],
+    "/images/upload": [
+      "POST"
+    ],
+    "/images/{doc_id}": [
+      "GET"
+    ],
+    "/images/{doc_id}/export": [
+      "GET"
+    ],
+    "/images/{doc_id}/localized": [
+      "GET"
+    ],
+    "/images/{doc_id}/original": [
+      "GET"
+    ],
+    "/images/{doc_id}/regions/{seg_id}": [
+      "POST"
+    ],
+    "/images/{doc_id}/translate": [
+      "POST"
+    ],
+    "/jobs": [
+      "GET"
+    ],
+    "/jobs/{jid}/status": [
+      "GET"
+    ],
+    "/languages": [
+      "GET",
+      "POST"
+    ],
+    "/languages/{sid}": [
+      "POST"
+    ],
+    "/languages/{sid}/delete": [
+      "POST"
+    ],
+    "/lqa/findings/{fid}": [
+      "POST"
+    ],
+    "/lqa/findings/{fid}/withdraw": [
+      "POST"
+    ],
+    "/my-work": [
+      "GET"
+    ],
+    "/oauth/authorize": [
+      "GET"
+    ],
+    "/oauth/consent": [
+      "GET",
+      "POST"
+    ],
+    "/oauth/register": [
+      "POST"
+    ],
+    "/oauth/token": [
+      "POST"
+    ],
+    "/onboarding/dismiss": [
+      "POST"
+    ],
+    "/openapi.json": [
+      "GET",
+      "HEAD"
+    ],
+    "/projects": [
+      "GET",
+      "POST"
+    ],
+    "/projects/author.json": [
+      "POST"
+    ],
+    "/projects/columns": [
+      "POST"
+    ],
+    "/projects/from-template": [
+      "POST"
+    ],
+    "/projects/templates/from-draft": [
+      "POST"
+    ],
+    "/projects/templates/{template_id}/prefill.json": [
+      "GET"
+    ],
+    "/projects/{pid}/keys": [
+      "GET"
+    ],
+    "/projects/{pid}/keys/add": [
+      "POST"
+    ],
+    "/projects/{pid}/keys/autounverify": [
+      "POST"
+    ],
+    "/projects/{pid}/keys/deliver-approve": [
+      "POST"
+    ],
+    "/projects/{pid}/keys/deliver-revoke": [
+      "POST"
+    ],
+    "/projects/{pid}/keys/empties": [
+      "GET"
+    ],
+    "/projects/{pid}/keys/export": [
+      "GET"
+    ],
+    "/projects/{pid}/keys/import": [
+      "POST"
+    ],
+    "/projects/{pid}/keys/translate": [
+      "POST"
+    ],
+    "/projects/{pid}/keys/{key_id}/base": [
+      "POST"
+    ],
+    "/projects/{pid}/keys/{key_id}/delete": [
+      "GET",
+      "POST"
+    ],
+    "/projects/{pid}/keys/{key_id}/images": [
+      "POST"
+    ],
+    "/projects/{pid}/keys/{key_id}/images/{image_id}/delete": [
+      "POST"
+    ],
+    "/projects/{pid}/keys/{key_id}/images/{image_id}/primary": [
+      "POST"
+    ],
+    "/projects/{pid}/keys/{key_id}/images/{image_id}/raw": [
+      "GET"
+    ],
+    "/projects/{pid}/keys/{key_id}/meta": [
+      "POST"
+    ],
+    "/projects/{pid}/keys/{key_id}/plural": [
+      "POST"
+    ],
+    "/projects/{pid}/keys/{key_id}/restore": [
+      "POST"
+    ],
+    "/projects/{pid}/keys/{key_id}/value": [
+      "POST"
+    ],
+    "/projects/{project_id}": [
+      "GET"
+    ],
+    "/projects/{project_id}/add-locale": [
+      "POST"
+    ],
+    "/projects/{project_id}/ai-opt-out": [
+      "POST"
+    ],
+    "/projects/{project_id}/archive": [
+      "POST"
+    ],
+    "/projects/{project_id}/automation": [
+      "GET"
+    ],
+    "/projects/{project_id}/automation/bind": [
+      "POST"
+    ],
+    "/projects/{project_id}/automation/handover": [
+      "POST"
+    ],
+    "/projects/{project_id}/automation/pause": [
+      "POST"
+    ],
+    "/projects/{project_id}/automation/resume": [
+      "POST"
+    ],
+    "/projects/{project_id}/automation/run": [
+      "POST"
+    ],
+    "/projects/{project_id}/automation/schedule": [
+      "POST"
+    ],
+    "/projects/{project_id}/automation/unbind": [
+      "POST"
+    ],
+    "/projects/{project_id}/content-type": [
+      "POST"
+    ],
+    "/projects/{project_id}/delete": [
+      "GET",
+      "POST"
+    ],
+    "/projects/{project_id}/documents": [
+      "POST"
+    ],
+    "/projects/{project_id}/due": [
+      "POST"
+    ],
+    "/projects/{project_id}/export": [
+      "GET"
+    ],
+    "/projects/{project_id}/fields": [
+      "POST"
+    ],
+    "/projects/{project_id}/glossaries/add": [
+      "POST"
+    ],
+    "/projects/{project_id}/glossaries/remove": [
+      "POST"
+    ],
+    "/projects/{project_id}/glossary/add": [
+      "POST"
+    ],
+    "/projects/{project_id}/glossary/export": [
+      "GET"
+    ],
+    "/projects/{project_id}/glossary/import": [
+      "POST"
+    ],
+    "/projects/{project_id}/intake": [
+      "POST"
+    ],
+    "/projects/{project_id}/languages": [
+      "POST"
+    ],
+    "/projects/{project_id}/make-connected": [
+      "POST"
+    ],
+    "/projects/{project_id}/members": [
+      "POST"
+    ],
+    "/projects/{project_id}/members/{uid}/remove": [
+      "POST"
+    ],
+    "/projects/{project_id}/pair-providers": [
+      "POST"
+    ],
+    "/projects/{project_id}/remove-locale": [
+      "POST"
+    ],
+    "/projects/{project_id}/remove-locale/{locale}": [
+      "GET"
+    ],
+    "/projects/{project_id}/rename": [
+      "POST"
+    ],
+    "/projects/{project_id}/save-template": [
+      "POST"
+    ],
+    "/projects/{project_id}/segmentation": [
+      "POST"
+    ],
+    "/projects/{project_id}/set-customer": [
+      "POST"
+    ],
+    "/projects/{project_id}/status": [
+      "POST"
+    ],
+    "/projects/{project_id}/tm-sources/add": [
+      "POST"
+    ],
+    "/projects/{project_id}/tm-sources/remove": [
+      "POST"
+    ],
+    "/projects/{project_id}/tm/export": [
+      "GET"
+    ],
+    "/projects/{project_id}/tm/import": [
+      "POST"
+    ],
+    "/projects/{project_id}/translate-comments": [
+      "POST"
+    ],
+    "/projects/{project_id}/unarchive": [
+      "POST"
+    ],
+    "/prompt-tap": [
+      "GET"
+    ],
+    "/prompt-tap/clear": [
+      "POST"
+    ],
+    "/prompt-tap/download": [
+      "GET"
+    ],
+    "/prompt-tap/envelopes/{state}": [
+      "POST"
+    ],
+    "/prompt-tap/purge": [
+      "POST"
+    ],
+    "/prompt-tap/runs": [
+      "GET"
+    ],
+    "/prompt-tap/runs/{run_id}": [
+      "GET"
+    ],
+    "/prompt-tap/toggle": [
+      "POST"
+    ],
+    "/queries": [
+      "GET",
+      "POST"
+    ],
+    "/queries/{qid}": [
+      "GET"
+    ],
+    "/queries/{qid}/assign": [
+      "POST"
+    ],
+    "/queries/{qid}/posts": [
+      "POST"
+    ],
+    "/queries/{qid}/status": [
+      "POST"
+    ],
+    "/ready": [
+      "GET"
+    ],
+    "/reports": [
+      "GET"
+    ],
+    "/reports/run": [
+      "GET"
+    ],
+    "/routing": [
+      "GET",
+      "POST"
+    ],
+    "/routing/budgets": [
+      "POST"
+    ],
+    "/routing/budgets/{bid}/delete": [
+      "POST"
+    ],
+    "/routing/project-budgets": [
+      "POST"
+    ],
+    "/routing/project-budgets/{bid}/delete": [
+      "POST"
+    ],
+    "/routing/{rid}/delete": [
+      "POST"
+    ],
+    "/routing/{rid}/toggle": [
+      "POST"
+    ],
+    "/runs/stream": [
+      "GET"
+    ],
+    "/runs/{run_id}": [
+      "GET"
+    ],
+    "/runs/{run_id}/cancel": [
+      "POST"
+    ],
+    "/runs/{run_id}/graph-fragment": [
+      "GET"
+    ],
+    "/runs/{run_id}/resume": [
+      "POST"
+    ],
+    "/runs/{run_id}/status.json": [
+      "GET"
+    ],
+    "/runs/{run_id}/step-diff": [
+      "GET"
+    ],
+    "/runs/{run_id}/steps/{step_run_id}/output.json": [
+      "GET"
+    ],
+    "/scim/v2/Groups": [
+      "GET",
+      "POST"
+    ],
+    "/scim/v2/Groups/{gid}": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "/scim/v2/ResourceTypes": [
+      "GET"
+    ],
+    "/scim/v2/Schemas": [
+      "GET"
+    ],
+    "/scim/v2/ServiceProviderConfig": [
+      "GET"
+    ],
+    "/scim/v2/Users": [
+      "GET",
+      "POST"
+    ],
+    "/scim/v2/Users/{uid}": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "/search": [
+      "GET"
+    ],
+    "/search/suggest": [
+      "GET"
+    ],
+    "/security": [
+      "GET",
+      "POST"
+    ],
+    "/security/mcp-oauth": [
+      "GET",
+      "POST"
+    ],
+    "/security/mcp-oauth/rs-secret": [
+      "POST"
+    ],
+    "/segments/{seg_id}/alternates": [
+      "POST"
+    ],
+    "/segments/{seg_id}/approve": [
+      "POST"
+    ],
+    "/segments/{seg_id}/propagation": [
+      "POST"
+    ],
+    "/segments/{seg_id}/save": [
+      "POST"
+    ],
+    "/segments/{seg_id}/tag-repair": [
+      "POST"
+    ],
+    "/segments/{seg_id}/unlock": [
+      "POST"
+    ],
+    "/settings": [
+      "GET",
+      "POST"
+    ],
+    "/settings/context-default": [
+      "POST"
+    ],
+    "/settings/custom-fields": [
+      "GET",
+      "POST"
+    ],
+    "/settings/custom-fields/{field_id}/archive": [
+      "POST"
+    ],
+    "/settings/custom-fields/{field_id}/restore": [
+      "POST"
+    ],
+    "/settings/custom-fields/{field_id}/update": [
+      "POST"
+    ],
+    "/settings/enterprise": [
+      "GET"
+    ],
+    "/settings/enterprise/disable": [
+      "POST"
+    ],
+    "/settings/enterprise/enable": [
+      "POST"
+    ],
+    "/settings/enterprise/preflight": [
+      "POST"
+    ],
+    "/settings/features/{slug}": [
+      "POST"
+    ],
+    "/settings/languages": [
+      "GET",
+      "POST"
+    ],
+    "/settings/notifications": [
+      "GET"
+    ],
+    "/settings/notifications/channels": [
+      "POST"
+    ],
+    "/settings/notifications/channels/{cid}/delete": [
+      "POST"
+    ],
+    "/settings/notifications/channels/{cid}/retry": [
+      "POST"
+    ],
+    "/settings/notifications/channels/{cid}/test": [
+      "POST"
+    ],
+    "/settings/notifications/channels/{cid}/update": [
+      "POST"
+    ],
+    "/settings/notifications/mute": [
+      "POST"
+    ],
+    "/settings/notifications/routes": [
+      "POST"
+    ],
+    "/settings/notifications/routes/{rid}/delete": [
+      "POST"
+    ],
+    "/settings/retention": [
+      "POST"
+    ],
+    "/settings/segmentation": [
+      "POST"
+    ],
+    "/settings/segprofiles": [
+      "POST"
+    ],
+    "/settings/segprofiles/{pid}/clone": [
+      "POST"
+    ],
+    "/settings/segprofiles/{pid}/default": [
+      "POST"
+    ],
+    "/settings/segprofiles/{pid}/delete": [
+      "POST"
+    ],
+    "/settings/segprofiles/{pid}/rename": [
+      "POST"
+    ],
+    "/setup-ai": [
+      "GET",
+      "POST"
+    ],
+    "/setup-ai/assist-limits": [
+      "POST"
+    ],
+    "/setup-ai/cloud/models": [
+      "POST"
+    ],
+    "/setup-ai/engines": [
+      "POST"
+    ],
+    "/setup-ai/engines/{eid}": [
+      "POST"
+    ],
+    "/setup-ai/engines/{eid}/delete": [
+      "POST"
+    ],
+    "/setup-ai/engines/{eid}/inspect": [
+      "GET"
+    ],
+    "/setup-ai/engines/{eid}/inspect/try": [
+      "POST"
+    ],
+    "/setup-ai/engines/{eid}/models": [
+      "POST"
+    ],
+    "/setup-ai/engines/{eid}/test": [
+      "POST"
+    ],
+    "/setup-ai/jev/import-env": [
+      "POST"
+    ],
+    "/setup-ai/keys/{provider}": [
+      "POST"
+    ],
+    "/setup-ai/keys/{provider}/delete": [
+      "POST"
+    ],
+    "/setup-ai/local": [
+      "POST"
+    ],
+    "/setup-ai/local/models": [
+      "POST"
+    ],
+    "/setup-ai/local/test": [
+      "POST"
+    ],
+    "/setup-ai/mock-egress": [
+      "POST"
+    ],
+    "/setup-ai/spend": [
+      "POST"
+    ],
+    "/setup-ai/test": [
+      "POST"
+    ],
+    "/setup-ai/tm": [
+      "POST"
+    ],
+    "/static": [],
+    "/style-guides": [
+      "GET",
+      "POST"
+    ],
+    "/style-guides/{guide_id}": [
+      "GET"
+    ],
+    "/style-guides/{guide_id}/approve": [
+      "POST"
+    ],
+    "/style-guides/{guide_id}/body": [
+      "POST"
+    ],
+    "/style-guides/{guide_id}/delete": [
+      "POST"
+    ],
+    "/style-guides/{guide_id}/rename": [
+      "POST"
+    ],
+    "/style-guides/{guide_id}/scope": [
+      "POST"
+    ],
+    "/style-guides/{guide_id}/unapprove": [
+      "POST"
+    ],
+    "/templates": [
+      "GET"
+    ],
+    "/templates/prompts": [
+      "POST"
+    ],
+    "/templates/prompts/{template_id}/delete": [
+      "POST"
+    ],
+    "/templates/prompts/{template_id}/rename": [
+      "POST"
+    ],
+    "/templates/{template_id}/delete": [
+      "POST"
+    ],
+    "/templates/{template_id}/rename": [
+      "POST"
+    ],
+    "/tm": [
+      "GET"
+    ],
+    "/tm/bulk-delete": [
+      "POST"
+    ],
+    "/tm/{entry_id}": [
+      "GET"
+    ],
+    "/tm/{entry_id}/delete": [
+      "POST"
+    ],
+    "/tm/{entry_id}/edit": [
+      "POST"
+    ],
+    "/users": [
+      "GET",
+      "POST"
+    ],
+    "/users/invite": [
+      "POST"
+    ],
+    "/users/invite/{invite_id}/revoke": [
+      "POST"
+    ],
+    "/users/{uid}/apikeys/revoke": [
+      "POST"
+    ],
+    "/users/{uid}/customer": [
+      "POST"
+    ],
+    "/users/{uid}/department": [
+      "POST"
+    ],
+    "/users/{uid}/erase": [
+      "POST"
+    ],
+    "/users/{uid}/export": [
+      "GET"
+    ],
+    "/users/{uid}/mfa-reset": [
+      "POST"
+    ],
+    "/users/{uid}/role": [
+      "POST"
+    ],
+    "/users/{uid}/toggle": [
+      "POST"
+    ],
+    "/users/{uid}/unlock": [
+      "POST"
+    ],
+    "/utcp": [
+      "GET"
+    ],
+    "/vendor-studio/open": [
+      "POST"
+    ],
+    "/vendors": [
+      "GET",
+      "POST"
+    ],
+    "/vendors/{vid}": [
+      "GET",
+      "POST"
+    ],
+    "/vendors/{vid}/archive": [
+      "POST"
+    ],
+    "/vendors/{vid}/delete": [
+      "POST"
+    ],
+    "/vendors/{vid}/dispatch-options": [
+      "POST"
+    ],
+    "/vendors/{vid}/dispatches/{did}/approve-quote": [
+      "POST"
+    ],
+    "/vendors/{vid}/dispatches/{did}/decline-quote": [
+      "POST"
+    ],
+    "/vendors/{vid}/dispatches/{did}/poll": [
+      "POST"
+    ],
+    "/vendors/{vid}/dispatches/{did}/quote": [
+      "POST"
+    ],
+    "/vendors/{vid}/dispatches/{did}/reject-rework": [
+      "POST"
+    ],
+    "/vendors/{vid}/dispatches/{did}/return": [
+      "POST"
+    ],
+    "/vendors/{vid}/dispatches/{did}/xliff": [
+      "GET"
+    ],
+    "/vendors/{vid}/link-customer": [
+      "POST"
+    ],
+    "/vendors/{vid}/rate-card": [
+      "POST"
+    ],
+    "/vendors/{vid}/secret": [
+      "POST"
+    ],
+    "/vendors/{vid}/unarchive": [
+      "POST"
+    ],
+    "/vendors/{vid}/unlink-customer": [
+      "POST"
+    ],
+    "/webhooks/connectors/{connection_id}": [
+      "POST"
+    ],
+    "/webhooks/vendor-quotes": [
+      "POST"
+    ],
+    "/webhooks/vendor-returns": [
+      "POST"
+    ],
+    "/workflow-groups": [
+      "POST"
+    ],
+    "/workflow-groups/{group_id}": [
+      "GET"
+    ],
+    "/workflow-groups/{group_id}/add": [
+      "POST"
+    ],
+    "/workflow-groups/{group_id}/add-pair": [
+      "POST"
+    ],
+    "/workflow-groups/{group_id}/default": [
+      "POST"
+    ],
+    "/workflow-groups/{group_id}/delete": [
+      "POST"
+    ],
+    "/workflow-groups/{group_id}/rename": [
+      "POST"
+    ],
+    "/workflows": [
+      "GET",
+      "POST"
+    ],
+    "/workflows/author": [
+      "POST"
+    ],
+    "/workflows/author/confirm": [
+      "POST"
+    ],
+    "/workflows/author/repair": [
+      "POST"
+    ],
+    "/workflows/building-blocks": [
+      "GET"
+    ],
+    "/workflows/building-blocks/system-prompts/{key}/reset": [
+      "POST"
+    ],
+    "/workflows/building-blocks/system-prompts/{key}/restore": [
+      "POST"
+    ],
+    "/workflows/building-blocks/system-prompts/{key}/save": [
+      "POST"
+    ],
+    "/workflows/draft-jobs/{job_id}": [
+      "GET"
+    ],
+    "/workflows/draft-jobs/{job_id}.json": [
+      "GET"
+    ],
+    "/workflows/models": [
+      "POST"
+    ],
+    "/workflows/new": [
+      "GET"
+    ],
+    "/workflows/{workflow_id}": [
+      "GET"
+    ],
+    "/workflows/{workflow_id}/archive": [
+      "POST"
+    ],
+    "/workflows/{workflow_id}/author": [
+      "POST"
+    ],
+    "/workflows/{workflow_id}/author.json": [
+      "POST"
+    ],
+    "/workflows/{workflow_id}/clone": [
+      "POST"
+    ],
+    "/workflows/{workflow_id}/copy-to-pairs": [
+      "POST"
+    ],
+    "/workflows/{workflow_id}/delete": [
+      "POST"
+    ],
+    "/workflows/{workflow_id}/plan": [
+      "GET"
+    ],
+    "/workflows/{workflow_id}/rename": [
+      "POST"
+    ],
+    "/workflows/{workflow_id}/steps": [
+      "POST"
+    ],
+    "/workflows/{workflow_id}/steps/{step_id}/delete": [
+      "POST"
+    ],
+    "/workflows/{workflow_id}/steps/{step_id}/edit": [
+      "POST"
+    ],
+    "/workflows/{workflow_id}/steps/{step_id}/move": [
+      "POST"
+    ],
+    "/workflows/{workflow_id}/steps/{step_id}/override": [
+      "POST"
+    ],
+    "/workflows/{workflow_id}/steps/{step_id}/prompt": [
+      "POST"
+    ],
+    "/workflows/{workflow_id}/steps/{step_id}/restore-prompt": [
+      "POST"
+    ],
+    "/workflows/{workflow_id}/system-prompts/{key}/reset": [
+      "POST"
+    ],
+    "/workflows/{workflow_id}/system-prompts/{key}/restore": [
+      "POST"
+    ],
+    "/workflows/{workflow_id}/system-prompts/{key}/save": [
+      "POST"
+    ],
+    "/workflows/{workflow_id}/unarchive": [
+      "POST"
+    ]
+  },
+  "settings_keys": [
+    "accessibility_contact",
+    "advanced_workflows_enabled",
+    "ai_tagging_enabled",
+    "allow_mock_egress",
+    "api_rate_limit_per_minute",
+    "api_read_rate_limit_per_minute",
+    "apikey_max_age_days",
+    "app_base_url",
+    "assist_calls_per_day",
+    "assist_calls_per_minute",
+    "assist_enabled",
+    "assist_model",
+    "assist_provider",
+    "audit_chain_verify_hours",
+    "audit_enabled",
+    "audit_fail_open",
+    "batch_max_parallel",
+    "blobstore_s3_bucket",
+    "blobstore_s3_credentials",
+    "blobstore_s3_enabled",
+    "blobstore_s3_endpoint_url",
+    "blobstore_s3_prefix",
+    "blobstore_s3_region",
+    "brand_ledger",
+    "brand_llmemory",
+    "brand_name",
+    "connector_disabled_kinds",
+    "connector_token_org_id",
+    "custom_fields_enabled",
+    "data_export_allow_plaintext_staging",
+    "data_export_download_grace_minutes",
+    "data_export_enabled",
+    "data_export_max_active_artifacts",
+    "data_export_max_bytes",
+    "data_export_retention_hours",
+    "data_export_signed_url_ttl",
+    "databricks_export_enabled",
+    "default_fallback_provider",
+    "default_provider",
+    "default_source_locale",
+    "default_ui_locale",
+    "egress_private_allowlist",
+    "embedded_trust_host_auth",
+    "enabled_locales",
+    "encrypt_db",
+    "encrypt_uploads",
+    "evaluations_enabled",
+    "export_tag_damage_policy",
+    "glossary_fix_guard_enabled",
+    "glossary_prompt_token_cap",
+    "image_localization_enabled",
+    "job_queue_backend",
+    "key_autounverify",
+    "key_changelog_retention_days",
+    "key_image_context_enabled",
+    "key_image_export_max_bytes",
+    "key_image_export_max_files",
+    "key_projects_enabled",
+    "ldap_base_dn",
+    "ldap_bind_dn",
+    "ldap_bind_password_enc",
+    "ldap_ca_cert",
+    "ldap_default_role",
+    "ldap_enabled",
+    "ldap_host",
+    "ldap_user_filter",
+    "ledger_purge_reconcile_grace_seconds",
+    "llmemory_enabled",
+    "llmemory_suggestions_enabled",
+    "local_api_key",
+    "local_base_url",
+    "local_judge_temperature",
+    "local_model",
+    "local_model_warmup",
+    "local_seed",
+    "local_temperature",
+    "login_trusted_networks",
+    "lqa_adjudication_enabled",
+    "lqa_glossary_context_enabled",
+    "lqa_tm_lock_exclusion_enabled",
+    "mcp_oauth_cimd_hosts",
+    "mcp_oauth_dcr_enabled",
+    "mcp_oauth_enabled",
+    "mcp_oauth_resource",
+    "mcp_oauth_rs_secret_hash",
+    "metrics_enabled",
+    "mfa_required",
+    "model_claude",
+    "model_gemini",
+    "model_openai",
+    "mt_concurrency",
+    "multi_org_enabled",
+    "notify_on_budget_threshold",
+    "notify_on_job_finish",
+    "notify_on_query",
+    "notify_on_review_assigned",
+    "notify_outbound_enabled",
+    "oauth_airtable_client_id",
+    "oauth_airtable_client_secret",
+    "oauth_atlassian_client_id",
+    "oauth_atlassian_client_secret",
+    "operator_key_hash",
+    "org_name",
+    "otel_enabled",
+    "otel_endpoint",
+    "password_block_common",
+    "password_history",
+    "password_max_age_days",
+    "password_min_length",
+    "password_require_classes",
+    "pii_ner_enabled",
+    "pii_ner_entities",
+    "pii_ner_spacy_model",
+    "pii_redaction",
+    "project_auto_close_days",
+    "project_automation_enabled",
+    "project_scoping",
+    "prompt_tap_enabled",
+    "prompt_tap_envelopes_enabled",
+    "prompt_tap_orphan_reap_hours",
+    "prompt_tap_ttl_days",
+    "qe_jev_confidence_floor",
+    "qe_jev_enabled",
+    "queries_enabled",
+    "remote_admin_enabled",
+    "reports_enabled",
+    "retention_days",
+    "retention_enabled",
+    "routing_enabled",
+    "saml_allow_idp_initiated",
+    "saml_default_role",
+    "saml_enabled",
+    "saml_idp_metadata_xml",
+    "saml_sp_acs_url",
+    "saml_sp_entity_id",
+    "saml_sp_private_key_enc",
+    "saml_sp_x509_cert",
+    "scim_default_role",
+    "scim_enabled",
+    "security_allowed_hosts",
+    "security_auth_required",
+    "session_idle_minutes",
+    "session_max_hours",
+    "smtp_from",
+    "smtp_host",
+    "smtp_password",
+    "smtp_port",
+    "smtp_tls",
+    "smtp_user",
+    "spend_cap_usd",
+    "spend_period",
+    "srx_enabled",
+    "srx_file",
+    "sso_client_id",
+    "sso_client_secret",
+    "sso_default_role",
+    "sso_enabled",
+    "sso_issuer",
+    "sso_provider",
+    "sso_trust_unverified_email",
+    "sync_scheduler_enabled",
+    "system_prompt_overrides_enabled",
+    "tag_llm_repair_enabled",
+    "tag_llm_repair_verify_enabled",
+    "tag_llm_repair_verify_provider",
+    "tag_llm_repair_verify_votes",
+    "terminology_concept_editor_enabled",
+    "tm_context_floor",
+    "tm_empty_delivery_gate",
+    "tm_fill_threshold",
+    "tm_fix_protection_enabled",
+    "tm_fuzzy_lock_mode",
+    "tm_hundreds_enter_lqa",
+    "tm_lock_ice",
+    "trusted_proxy_ips",
+    "utcp_manual_enabled",
+    "vendor_dispatch_ttl_hours",
+    "vendor_rework_max_rounds",
+    "vendor_studio_sso_secret",
+    "vendor_studio_url",
+    "vendors_enabled",
+    "workflow_max_visits",
+    "workflow_total_step_cap",
+    "worklist_enabled"
+  ]
+}

@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Enterprise features{% endblock %}
+{% block content %}
+
+{% set header_meta %}
+  <p class="muted">The one place to turn on OpenTelemetry, Prometheus <code>/metrics</code>,
+  SAML SSO, SCIM provisioning, PII named-entity redaction, the durable job queue, and
+  S3-compatible storage. Each runs a <strong>preflight</strong> against your proposed
+  configuration <em>before</em> the write, so a missing library or a bad endpoint is caught
+  here instead of at the next restart. <strong>All seven take effect at boot - restart the
+  server after enabling.</strong></p>
+  {% if saved and saved != 'preflight' %}<p class="ok">{{ saved }}</p>{% endif %}
+  {# a11y T7: ?error= renders once, as a sentence, in the page error summary at the top
+     of main (base.html + _form_errors.html). #}
+{% endset %}
+{{ m.page_header("Enterprise features", meta=header_meta) }}
+
+{% if not operator_configured %}
+<section class="card">
+  <p class="notice notice-warn"><strong>Read-only.</strong> Enabling or disabling a feature
+  here requires the host <strong>operator key</strong>, but none is configured. Mint one on
+  the host:
+  <br><code>loc-tms config set operator_key_hash &lt;sha256hex&gt;</code>
+  <br>(the SHA-256 hex of a secret you keep; then supply that secret in the field on each
+  action). Status and preflight below stay visible.</p>
+</section>
+{% endif %}
+
+<div class="settings-frame">
+<nav class="settings-index" aria-label="Enterprise features">
+{% for c in cards %}<a href="#feature-{{ c.key }}">{{ c.title }}</a>{% endfor %}
+</nav>
+<div class="settings-content">
+{% for c in cards %}
+<section class="card" id="feature-{{ c.key }}">
+  <h2>{{ c.title }}
+    {{ m.status_badge("active" if c.enabled else "inactive", "On" if c.enabled else "Off") }}
+    <span class="badge">restart to apply</span>
+  </h2>
+  <p class="muted">{{ c.description }}</p>
+
+  {# --- preflight (offline panel-load, or the flashed network result for this feature) --- #}
+  {% set pf = net_preflight if (net_preflight and net_preflight.feature == c.key) else None %}
+  <div class="preflight">
+    {% if pf %}
+      <p><strong>Preflight ({{ 'with network probes' if pf.network_ran else 'offline' }}):</strong>
+        <span class="{{ 'ok' if pf.ok else 'notice-warn' }}">{{ 'GREEN - ready' if pf.ok else 'RED - not ready' }}</span></p>
+      <ul>
+        {% for chk in pf.checks %}
+        <li>{{ '✓' if chk.ok else '✗' }} {{ chk.name }}{% if chk.detail %} - <span class="muted">{{ chk.detail }}</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p><strong>Preflight (offline):</strong>
+        <span class="{{ 'ok' if c.preflight.ok else 'notice-warn' }}">{{ 'GREEN - ready' if c.preflight.ok else 'RED - not ready' }}</span></p>
+      <ul>
+        {% for chk in c.preflight.checks %}
+        <li>{{ '✓' if chk.ok else '✗' }} {{ chk.name }}{% if chk.detail %} - <span class="muted">{{ chk.detail }}</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+    <form method="post" action="/settings/enterprise/preflight" class="rowform">
+      {% include "_csrf.html" %}
+      <input type="hidden" name="feature" value="{{ c.key }}">
+      <button type="submit" data-busy-label="{{ t(request, 'busy.checking') }}">Run preflight (live network)</button>
+    </form>
+  </div>
+
+  {# --- configure / enable / disable (operator-key step-up on every write) ---
+
+       The field form renders WHETHER OR NOT the feature is on. It must: an IdP rotates its
+       signing certificate, and if `saml_idp_metadata_xml` were only reachable while SAML is
+       OFF, the operator would have to lock every SSO user out to paste the new metadata --
+       and /security let pii_ner_spacy_model be edited while the feature was ON before this
+       panel took the field over, so hiding it here would LOSE behavior in the move. `enable`
+       is idempotent (an already-on feature reports action="noop"), still runs the boot-brick
+       preflight, still audits, and still needs the operator key. #}
+  {% if c.fields or not c.enabled %}
+  <form method="post" action="/settings/enterprise/enable" class="form">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="feature" value="{{ c.key }}">
+    {% for fld in c.fields %}
+    <label>{{ fld.label }}
+      {% if fld.kind == 'textarea' %}
+      <textarea name="{{ fld.form_name }}" rows="4" placeholder="{{ fld.placeholder }}">{{ fld.value }}</textarea>
+      {% elif fld.kind == 'secret' %}
+      <input aria-label="{{ fld.label }}" type="password" name="{{ fld.form_name }}" placeholder="{{ '(stored - leave blank to keep)' if fld.is_set else fld.placeholder }}" autocomplete="new-password">
+      {% else %}
+      <input aria-label="{{ fld.label }}" type="text" name="{{ fld.form_name }}" value="{{ fld.value }}" placeholder="{{ fld.placeholder }}">
+      {% endif %}
+      {% if fld.help %}<span class="muted">{{ fld.help }}</span>{% endif %}
+    </label>
+    {% endfor %}
+    {% if operator_configured %}
+    <label>Operator key <span class="muted">(required; not stored)</span>
+      <input type="password" name="operator_key" autocomplete="new-password" required></label>
+    <label class="toggle"><input type="checkbox" name="force" value="1">
+      <span>Force - write even if the preflight is red (the next restart may refuse to boot).</span></label>
+    <button type="submit">{{ 'Save configuration' if c.enabled else 'Enable ' ~ c.title }}</button>
+    {% else %}
+    <button type="submit" disabled>{{ 'Save configuration' if c.enabled else 'Enable' }} (operator key required)</button>
+    {% endif %}
+  </form>
+  {% endif %}
+
+  {% if c.enabled %}
+  <form method="post" action="/settings/enterprise/disable" class="form"
+        data-confirm="Disable {{ c.title }}? Turning it off takes effect on the next restart.">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="feature" value="{{ c.key }}">
+    {% if operator_configured %}
+    <label>Operator key <span class="muted">(required to disable; not stored)</span>
+      <input type="password" name="operator_key" autocomplete="new-password" required></label>
+    <button type="submit">Disable {{ c.title }}</button>
+    {% else %}
+    <button type="submit" disabled>Disable (operator key required)</button>
+    {% endif %}
+  </form>
+  {% endif %}
+</section>
+{% endfor %}
+
+</div>
+</div>
+
+<script nonce="{{ csp_nonce() }}">
+ document.querySelectorAll('form[data-confirm]').forEach(function (f) {
+   f.addEventListener('submit', function (e) {
+     if (window.LocAsk && window.LocAsk.guard) { window.LocAsk.guard(e, f.getAttribute('data-confirm')); }
+      else { e.preventDefault(); }
+   });
+ });
+</script>
+
+{% endblock %}

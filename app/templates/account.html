@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_form_errors.html" as fe %}
+{% block title %}{{ t(request, 'page.account.title') }}{% endblock %}
+{% block content %}
+
+{% set page_title %}{{ tl(request, 'page.account.title') }}{% endset %}
+{% set layout_action %}<button type="button" class="ghost layout-edit-btn layout-edit-inline" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>{% endset %}
+{{ m.page_header(page_title, secondary=layout_action) }}
+  {% if not auth_on %}<p class="notice notice-warn">{{ tl(request, 'page.account.auth_off_notice') }}</p>{% endif %}
+  {% if saved == 'name' %}<p class="ok">{{ tl(request, 'page.account.saved_name') }}</p>{% endif %}
+  {% if saved == 'pw' %}<p class="ok">{{ tl(request, 'page.account.saved_pw') }}</p>{% endif %}
+  {# a11y T6: ?saved=pwfail|mismatch are page errors (the /account alias in
+     app/web/form_errors.py) and render in the summary at the top of main. #}
+  {% if saved == 'locale' %}<p class="ok">{{ tl(request, 'page.account.saved_locale') }}</p>{% endif %}
+  {% if saved == 'theme' %}<p class="ok" role="status">{{ tl(request, 'page.account.saved_theme') }}</p>{% endif %}
+  {% if saved == 'getstarted' %}<p class="ok" role="status">{{ tl(request, 'page.account.saved_getstarted') }}</p>{% endif %}
+
+
+<div class="auth-admin-layout">
+<nav class="auth-section-nav" aria-label="{{ t(request, 'page.account.title') }}">
+  <a href="#account-profile">{{ tl(request, 'page.account.profile') }}</a>
+  <a href="#account-password">{{ tl(request, 'page.account.change_password') }}</a>
+  {% if auth_on and mfa %}<a href="#mfa">Two-step sign-in</a>{% endif %}
+  <a href="#account-appearance">{{ tl(request, 'page.account.appearance') }}</a>
+  {% if auth_on and me and me.id %}
+  <a href="#account-apikeys">{{ tl(request, 'page.account.api_keys') }}</a>
+  <a href="#account-data">{{ tl(request, 'page.account.your_data') }}</a>
+  {% endif %}
+</nav>
+<div id="page-layout" class="page-layout" data-layout-page="account">
+<div class="grid2">
+  <section class="card" data-card="profile" id="account-profile">
+    {% set section_label %}<h2>{{ tl(request, 'page.account.profile') }}</h2>{% endset %}
+{% call m.form_section('account-profile-fields', section_label) %}
+    <p class="muted">{{ tl(request, 'page.account.email') }}: <strong>{{ me.email }}</strong> · {{ tl(request, 'page.account.role') }}: <span class="chip">{{ role_label(request, me.role) }}</span>
+      {% if me.last_login %}<br>{{ tl(request, 'page.account.last_login') }}: {{ me.last_login.strftime('%Y-%m-%d %H:%M') }} UTC{% endif %}</p>
+    <form method="post" action="/account/name" class="form" data-preserve-draft="account-name">
+      {% include "_csrf.html" %}
+      <label>{{ tl(request, 'page.account.display_name') }} <input type="text" name="name" autocomplete="name" value="{{ me.name }}" /></label>
+      <button type="submit" {% if not auth_on %}disabled{% endif %}>{{ tl(request, 'page.account.save') }}</button>
+    </form>
+    <form method="post" action="/account/locale" class="form">
+      {% include "_csrf.html" %}
+      <label>{{ tl(request, 'page.account.language') }}
+        <select name="ui_locale">
+          {% set cur = current_locale(request) %}
+          {% for loc in locales %}
+            <option value="{{ loc }}" {{ 'selected' if loc == cur }}>{{ loc|upper }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <p class="help">{{ tl(request, 'page.account.language_hint') }}</p>
+      <button type="submit">{{ tl(request, 'page.account.save') }}</button>
+    </form>
+
+{% endcall %}
+</section>
+
+  <section class="card" data-card="password" id="account-password">
+    {% set section_label %}<h2>{{ tl(request, 'page.account.change_password') }}</h2>{% endset %}
+{% call m.form_section('account-password-fields', section_label) %}
+    {# Train sso-localpw: an account that does not sign in with a local password (SSO,
+       SAML, SCIM, LDAP) changes it at its identity provider or directory, so no form here
+       (the same pattern as the Two-step sign-in card below). #}
+    {% if auth_on and pw_refusal %}
+    <p class="muted">{{ pw_refusal }}</p>
+    {% else %}
+    <form method="post" action="/account/password" class="form">
+      <label>{{ tl(request, 'page.login.username') }} <input type="text" name="username" autocomplete="username" value="{{ me.email }}" readonly /></label>
+      {% include "_csrf.html" %}
+      <label>{{ tl(request, 'page.account.current_password') }} <input type="password" name="current" id="account-current-password" autocomplete="current-password"{{ fe.invalid_attrs(request, 'account-current-password') }} /></label>
+      <label>{{ tl(request, 'page.account.new_password') }} <input type="password" name="new" id="account-new-password" autocomplete="new-password" minlength="{{ password_rules().min_length }}" required{{ fe.invalid_attrs(request, 'account-new-password', 'account-password-rules', when=(page_error(request) and not page_error(request).field and not page_error(request).anchor)) }} /></label>
+      <p class="help" id="account-password-rules">{{ password_rules().summary }}</p>
+      <label>{{ tl(request, 'page.account.confirm_password') }} <input type="password" name="confirm" id="account-confirm-password" autocomplete="new-password" minlength="{{ password_rules().min_length }}" required{{ fe.invalid_attrs(request, 'account-confirm-password') }} /></label>
+      <button type="submit" {% if not auth_on %}disabled{% endif %}>{{ tl(request, 'page.account.update_password') }}</button>
+    </form>
+    {% endif %}
+
+{% endcall %}
+</section>
+</div>
+
+{# TOTP train (HECVAT AAAI-17 / DCTR-14): two-step sign-in status and self-service. Status
+   only (mfa = app/services/mfa.py::status): never a secret or a code. #}
+{% if auth_on and mfa %}
+<section class="card" data-card="mfa" id="mfa">
+  <h2>Two-step sign-in</h2>
+  {% if not mfa.applies %}
+    <p class="muted">You sign in through single sign-on, so your identity provider's own
+      multi-factor sign-in protects this account. There is nothing to set up here.</p>
+  {% elif mfa.enrolled %}
+    <p>{{ m.status_badge('active', 'On') }} Signing in needs your password and a code from your
+      authenticator app. Turned on {{ mfa.enabled_at[:16]|replace('T', ' ') }} UTC{% if mfa.last_used_at %}, last used {{ mfa.last_used_at[:16]|replace('T', ' ') }} UTC{% endif %}.</p>
+    <p>Recovery codes left: <strong>{{ mfa.recovery_codes_left }}</strong> of 10.{% if mfa.recovery_codes_left <= 3 %} <span class="notice-warn">Make a new set soon.</span>{% endif %}</p>
+    {% if mfa.required %}<p class="help">Your organization requires two-step sign-in for this account.</p>{% endif %}
+    <form method="post" action="/account/mfa/recovery-codes" class="form">
+      {% include "_csrf.html" %}
+      <label>Current code (from your app, or an unused recovery code)
+        <input type="text" name="code" id="mfa-regen-code" autocomplete="one-time-code" maxlength="20" required{{ fe.invalid_attrs(request, 'mfa-regen-code', 'mfa-regen-help') }} /></label>
+      <p class="help" id="mfa-regen-help">Makes ten new recovery codes and shows them once. The old codes stop working.</p>
+      <button type="submit">Make new recovery codes</button>
+    </form>
+    {% if not mfa.required %}
+    <form method="post" action="/account/mfa/disable" class="form mt"
+          data-action-confirm="Turn off two-step sign-in? Signing in will then need only your password.">
+      {% include "_csrf.html" %}
+      {% if not pw_refusal or me.auth_source == 'ldap' %}
+      <label>Current password
+        <input type="password" name="current" id="mfa-disable-current"
+               autocomplete="current-password" required
+               {{ fe.invalid_attrs(request, 'mfa-disable-current') }} /></label>
+      {% endif %}
+      <label>Current code (from your app, or an unused recovery code)
+        <input type="text" name="code" id="mfa-disable-code" autocomplete="one-time-code" maxlength="20" required{{ fe.invalid_attrs(request, 'mfa-disable-code', 'mfa-disable-help') }} /></label>
+      <p class="help" id="mfa-disable-help">Deletes the authenticator setup and every recovery code for this account.</p>
+      <button type="submit" class="danger-btn">Turn off two-step sign-in</button>
+    </form>
+    {% endif %}
+  {% else %}
+    {% if saved == 'mfa_off' %}<p class="ok" role="status">Two-step sign-in is off.</p>{% endif %}
+    <p>{{ m.status_badge('inactive', 'Off') }} Signing in needs only your password.{% if mfa.required %} <strong>Your organization requires two-step sign-in for this account; you will be asked to set it up at your next sign-in.</strong>{% endif %}</p>
+    <p>Two-step sign-in adds a 6-digit code from an app on your phone, so a stolen password
+      alone is not enough to get in.</p>
+    {% if me.password_hash or me.auth_source == 'ldap' %}
+    <p><a class="btn-primary" href="/account/mfa/setup">Set up two-step sign-in</a></p>
+    {% else %}
+    <p class="muted">This account has no password on this site, so two-step sign-in cannot be
+      set up here. Ask an administrator to send you an invitation or reset your password.</p>
+    {% endif %}
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="card" data-card="appearance" id="account-appearance">
+  {% set section_label %}<h2>{{ tl(request, 'page.account.appearance') }}</h2>{% endset %}
+{% call m.form_section('account-appearance-fields', section_label) %}
+  <p class="help">{{ tl(request, 'page.account.appearance_hint') }}</p>
+  {# Light / Dark / Match my computer, stored PER ACCOUNT (User.ui_theme, ADR 0063) and
+     rendered into every page before first paint. With JS, choosing applies and saves at
+     once (/static/theme.js posts it); without JS the Save button submits the form. #}
+  {% set _theme = current_theme(request) or 'system' %}
+  <form method="post" action="/account/theme" class="form" id="appearance-form">
+  {% include "_csrf.html" %}
+  <div class="choice-options" role="radiogroup" aria-label="{{ t(request, 'page.account.appearance') }}">
+    <label class="choice-option"><input type="radio" name="theme" value="light"{% if _theme == 'light' %} checked{% endif %} /> <span class="choice-meta"><span class="choice-name">{{ tl(request, 'page.account.theme_light') }}</span></span></label>
+    <label class="choice-option"><input type="radio" name="theme" value="dark"{% if _theme == 'dark' %} checked{% endif %} /> <span class="choice-meta"><span class="choice-name">{{ tl(request, 'page.account.theme_dark') }}</span></span></label>
+    <label class="choice-option"><input type="radio" name="theme" value="system"{% if _theme == 'system' %} checked{% endif %} /> <span class="choice-meta"><span class="choice-name">{{ tl(request, 'page.account.theme_system') }}</span></span></label>
+  </div>
+  <noscript><button type="submit" class="btn-secondary">{{ tl(request, 'page.account.save_appearance') }}</button></noscript>
+  </form>
+
+  {% if get_started and get_started.eligible %}
+  <h3 id="account-get-started">{{ tl(request, 'chrome.get_started') }}</h3>
+  <p class="help">{{ tl(request, 'page.account.get_started_hint') }}</p>
+  {% if get_started.hidden %}
+  <form method="post" action="/account/get-started" class="form" id="get-started-form">
+    {% include "_csrf.html" %}
+    <p class="muted">{{ tl(request, 'page.account.get_started_is_off') }}</p>
+    <button type="submit" class="btn-primary">{{ tl(request, 'page.account.get_started_show') }}</button>
+  </form>
+  {% else %}
+  <p class="muted" id="get-started-state">{{ tl(request, 'page.account.get_started_is_on') }}</p>
+  {% endif %}
+  {% endif %}
+
+{% endcall %}
+</section>
+
+{% if auth_on and me and me.id %}
+<section class="card" data-card="apikeys" id="account-apikeys">
+  {% set section_label %}<h2>{{ tl(request, 'page.account.api_keys') }}</h2>{% endset %}
+{% call m.form_section('account-apikeys-fields', section_label) %}
+  <p class="muted">Personal tokens for the inbound API (<code>X-Loc-Token</code> header).
+    Calls made with your key are attributed to <strong>{{ me.email }}</strong>.</p>
+  <p class="muted" id="account-connected-apps-link">AI apps you connected by signing in (MCP OAuth) are listed on
+    <a href="/account/connected-apps">Connected apps</a>, where you can disconnect them.</p>
+  {% if new_key_refusal %}
+    <p class="err" role="alert"><strong>Key not created.</strong> {{ new_key_refusal }}</p>
+  {% endif %}
+  {% if new_key_lost %}
+    <p class="err" role="alert"><strong>Key created, but it can no longer be shown.</strong>
+      It expired or the server restarted. Revoke it below and create another.</p>
+  {% endif %}
+  {% if new_key %}
+    <p class="ok"><strong>Key created.</strong> Copy it now - it won't be shown again.
+      {% if new_key_expires_at %}It expires on <strong>{{ new_key_expires_at }}</strong>.{% endif %}</p>
+    <input class="linkbox" readonly aria-label="New API key" value="{{ new_key }}" data-select-on-click />
+  {% endif %}
+  <form method="post" action="/account/apikeys" class="form inline-form">
+    {% include "_csrf.html" %}
+    <label>Name <input type="text" name="name" placeholder="e.g. CI script" /></label>
+    <label class="checkbox"><input type="checkbox" name="docs" value="1" />
+      Documents scope (upload / translate / download via the MCP front door)</label>
+    {% if feature_enabled('keys') %}
+    <label class="checkbox"><input type="checkbox" name="keys" value="1" />
+      Keys scope (key-based projects: read/write string keys and poll the change feed)</label>
+    {% endif %}
+    <label>Expires in (days)
+      <input type="number" name="expires_in_days" min="1" step="1" placeholder="no expiry" style="width: 6em" />
+    </label>
+    <button type="submit" class="btn-primary">Create key</button>
+  </form>
+  {% set keys = user_api_keys(me.id) %}
+  {% if keys %}
+    {% call m.data_table('API keys', [{'label': 'Name'}, {'label': 'Key'}, {'label': 'Scopes'}, {'label': 'Created'}, {'label': 'Last used'}, {'label': 'Expires'}, {'label': 'Status'}, {'label': '', 'actions': true}]) %}
+        {% for k in keys %}
+          {% set expired = k.expires_at and k.expires_at <= now() %}
+          <tr>
+            <td>{{ k.name }}</td>
+            <td><code>{{ k.prefix }}&hellip;</code></td>
+            <td class="muted small">{{ k.scopes }}</td>
+            <td class="muted small data-mono">{{ k.created_at.strftime('%Y-%m-%d %H:%M') }} UTC</td>
+            <td class="muted small data-mono">{{ (k.last_used.strftime('%Y-%m-%d %H:%M') ~ ' UTC') if k.last_used else 'never' }}</td>
+            <td class="muted small data-mono">{{ (k.expires_at.strftime('%Y-%m-%d %H:%M') ~ ' UTC') if k.expires_at else 'never' }}</td>
+            <td>{% if not k.active %}{{ m.status_badge('inactive', 'revoked') }}{% elif expired %}{{ m.status_badge('inactive', 'expired') }}{% else %}{{ m.status_badge('active', 'active') }}{% endif %}</td>
+            <td>
+              {% if k.active %}
+                <form method="post" action="/account/apikeys/{{ k.id }}/revoke" class="rowform">
+                  {% include "_csrf.html" %}
+                  <button class="mini" data-busy-keep-label>Revoke</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+  {% else %}
+    {{ m.empty_state('No API keys yet.') }}
+  {% endif %}
+
+{% endcall %}
+</section>
+
+<section class="card" data-card="data" id="account-data">
+  <h2>{{ tl(request, 'page.account.your_data') }}</h2>
+  <p class="muted">Download a machine-readable copy of everything {{ brand }} holds about you -
+    your profile, API keys (names only, never the secret), and every project, document, job,
+    connection, invite and log entry attributed to you (GDPR Art. 15/20).</p>
+  <p><a class="btn-primary" href="/account/export">Download my data (NDJSON)</a></p>
+  <p class="help">Your audit-log history is included in the download but is <strong>retained</strong>
+    even if your account is later erased - keeping that record is a legal obligation (GDPR Art. 17(3)(b)).</p>
+</section>
+{% endif %}
+</div>
+</div>
+{% with layout_page = 'account' %}{% include "_page_layout.html" %}{% endwith %}
+
+{% endblock %}

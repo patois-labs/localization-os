@@ -1,0 +1,72 @@
+# Factory spec for the REBUILT Notion connector (connector parity). Describes the real shipped tree;
+# `python scripts/factory/generate.py check scripts/factory/specs/notion.yaml` must PASS.
+# No bb-io code was read (built from developers.notion.com only), so no bb_io block and no
+# THIRD_PARTY_NOTICES entry.
+
+connector:
+  kind: notion
+  name: Notion
+  class_name: NotionConnector
+  module: notion
+  icon: "🗒"
+  cat: "Knowledge base / help center"
+  blurb: >-
+    Translate Notion pages into any language. Notion has no native localization, so each
+    translation is created as a CHILD page of the source (titled '[locale] Title') and tracked
+    in an internal id map, so the source page and other locales are never overwritten. Works
+    under a page or a database; formatting, links and mentions are kept. A partial build
+    resumes instead of duplicating.
+  docs_url: "https://developers.notion.com/reference"
+  supports_oauth: false
+  archived: false
+
+  topology: T3
+  auth: [api_key]
+  api_version: "2026-03-11"
+  rich_text: notion_blocks
+  regions: fixed
+  change_signals:
+    webhook_sig: null
+    poll_field: last_edited_time
+    stale_flag: null
+    thin_payload: true
+  anti_loop_label: false
+
+  retry_noun: page
+  delegator_extra_guard: ""
+
+  harvest_title_field: title
+
+  article_id_shape: "<page-id>"
+  api_docstring: >-
+    Translate Notion page(s) on the fly into one or more locales, each written as
+    a per-locale CHILD page of the source (T3). article_id(s) are source page ids.
+
+  article_noun_phrase: "a Notion"
+  cli_parser_help: >-
+    Translate Notion pages into the connection's locales, each created as a per-locale child page
+    of the source (T3, document-per-locale).
+
+  item_units:
+    scan: "your Notion pages"
+    becomes: 'a per-locale child page of the source (titled "[locale] Title"), tracked in an internal id map and resuming partial builds without duplicating'
+
+  help_row_body: "Translate Notion page(s) as per-locale child pages. Body: <code>article_ids</code>/<code>article_id</code>, <code>target_locales</code>."
+  mcp_scope_tag: tune-ai
+
+  docs_row_body: "Translate Notion pages (default: the root page's child pages, or the root database's rows). `--article-ids` takes source page ids (32 hex characters or dashed UUIDs) that sit under the connection's root; ids and locale overrides are comma/space separated."
+
+  cli_expected_desc: "translate Notion pages into per-locale child pages (T3 DocPerLocaleStrategy; POST /api/connectors/{cid}/notion/translate parity)"
+
+  config_fields:
+    - {name: parent_page_id, label: "Root page or database id", help: "The page whose child pages (or the database whose rows) are the source pages.", placeholder: "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d"}
+    - {name: source_locale, label: "Source locale", help: "Language of the source pages.", required: false, placeholder: "en"}
+    - {name: target_locales, label: "Target locales", help: "Comma-separated locales to create.", required: false, placeholder: "de-DE, fr, es-MX"}
+  secret_fields:
+    - {name: token, label: "Integration token", help: "Internal integration token (notion.so/profile/integrations).", secret: true, placeholder: "ntn_"}
+  setup_steps:
+    - "Create an internal integration and copy its token."
+    - "Share the root page with the integration (Connections menu), then set the Root page or database id."
+  other_side: >-
+    Notion change detection polls the root's source pages and gates re-translation on a
+    per-(page,locale) source-content hash.

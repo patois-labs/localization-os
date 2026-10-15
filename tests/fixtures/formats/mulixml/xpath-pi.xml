@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?loc-multilingual mode="xpath" source="en_US" lang-attr="loc" source-xpath="//msg/v[@loc='{lang}']" target-xpath="../v[@loc='{lang}']"?>
+<messages>
+  <msg name="greet"><v loc="en_US">Hello</v><v loc="ja_JP">こんにちは</v></msg>
+  <msg name="bye"><v loc="en_US">Goodbye</v></msg>
+</messages>

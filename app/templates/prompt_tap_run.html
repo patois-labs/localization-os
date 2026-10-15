@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Run {{ run.run_id }} - {{ names.ledger }}{% endblock %}
+
+{# --- one call, bodies-withheld digest or full text ------------------------------ #}
+{% macro run_call(c) %}
+  {% set oc = c.outcome %}
+  {% if oc == 'ok' %}{% set ost, olbl = 'completed', 'ok' %}
+  {% elif oc == 'refused-by-spend-cap' %}{% set ost, olbl = 'failed', 'refused (spend cap)' %}
+  {% else %}{% set ost, olbl = 'error', oc %}{% endif %}
+  <li class="tap-call">
+    <div class="tap-call-head">
+      {{ m.status_badge(ost, olbl) }}
+      <span class="chip">{{ c.provider or '?' }}</span>
+      {% if c.model %}<span class="chip">{{ c.model }}</span>{% endif %}
+      {% if c.task %}<span class="chip">{{ c.task }}</span>{% endif %}
+      {% if c.get('purpose') %}<span class="chip">{{ c.purpose }}</span>{% endif %}
+      {% if c.get('round') is not none %}<span class="chip">round: {{ c.round }}</span>{% endif %}
+      {% if c.get('attempt') %}<span class="chip">attempt: {{ c.attempt }}</span>{% endif %}
+      {% if c.get('cost_usd') is not none %}<span class="chip mono">cost ${{ '%.6f'|format(c.cost_usd) }}</span>{% endif %}
+      {% if c.get('finish_reason') %}<span class="chip mono">finish: {{ c.finish_reason }}</span>{% endif %}
+      {% if c.get('error_class') %}<span class="chip mono">error class: {{ c.error_class }}</span>{% endif %}
+      {% if c.get('redacted') %}<span class="chip">secret redacted</span>{% endif %}
+      <span class="muted small tap-call-ts">{{ c.ts }}</span>
+      {% if c.get('record_key') %}
+      <a class="small ghost btnlink" href="/prompt-tap/download?record={{ c.record_key }}"
+         title="Download this one record as pretty-printed JSON">Download</a>
+      {% endif %}
+    </div>
+    <div class="tap-call-meta small muted">
+      <span>prompt {{ c.prompt.chars }} chars</span>
+      <span>response {{ c.response.chars }} chars</span>
+      {% if c.prompt.sha256 %}<span>sha <code>{{ c.prompt.sha256[:12] }}</code></span>{% endif %}
+    </div>
+    {% if bodies %}
+      {% if c.system and c.system.text %}
+      <details class="adv"><summary>System</summary><pre class="code" role="region" aria-label="System" tabindex="0">{{ c.system.text }}</pre></details>
+      {% endif %}
+      <details class="adv" open><summary>Prompt</summary><pre class="code" role="region" aria-label="Prompt" tabindex="0">{{ c.prompt.text }}</pre></details>
+      {% if c.response %}
+      <details class="adv"><summary>Response{% if c.usage %} · usage{% endif %}</summary>
+        <pre class="code" role="region" aria-label="Response" tabindex="0">{{ c.response.text }}</pre>
+        {% if c.usage %}<pre class="code" role="region" aria-label="usage" tabindex="0">{{ c.usage | tojson(indent=2) }}</pre>{% endif %}
+      </details>
+      {% endif %}
+      {% if c.error and c.error.text %}<p class="err small">{{ c.error.text }}</p>{% endif %}
+    {% else %}
+      {% if c.prompt.head or c.response.head %}
+      <p class="small muted">head: <code>{{ c.prompt.head or '' }}</code>{% if c.response.head %} &rarr; <code>{{ c.response.head }}</code>{% endif %}</p>
+      {% endif %}
+    {% endif %}
+  </li>
+{% endmacro %}
+
+{% block content %}
+<div class="insight-page insight-prompt_tap_run">
+{% include "_ledger_status.html" %}
+{% set insight_title %}Run <span class="mono">{{ run.run_id }}</span>{% endset %}
+{% set insight_meta %}<p class="muted">
+    <span class="chip">{{ run.kind }}</span>
+    {{ run.calls }} call{{ '' if run.calls == 1 else 's' }}, {{ run.failures }} failed
+    {% if run.spend_usd is not none %}· <span class="mono">${{ '%.6f'|format(run.spend_usd) }}</span>{% endif %}
+    · tokens {{ run.tokens_in }}/{{ run.tokens_out }}
+  </p>
+  {% if run.engines %}<p class="small muted">engines: {{ run.engines | join(', ') }}</p>{% endif %}
+  <p class="help"><a href="/prompt-tap/runs"><span aria-hidden="true">&larr;</span> All runs</a></p>{% endset %}
+{% set insight_actions %}{% endset %}
+{{ m.page_header(insight_title, meta=insight_meta, secondary=insight_actions) }}
+
+<section class="card">
+  {% if run.bodies_withheld %}
+    <p class="help">Bodies are withheld (lengths + hash + a 24-char head only for a body over 48 chars).
+    <a href="/prompt-tap/runs/{{ run.run_id }}?bodies=1">Show full payloads</a> - the raw
+    request/response text, host-only on this page.</p>
+  {% else %}
+    <p class="help">Showing full payloads.
+    <a href="/prompt-tap/runs/{{ run.run_id }}">Hide bodies</a></p>
+  {% endif %}
+
+  {% if not run.steps %}
+    {% set insight_empty %}This run has no captured calls (they may have been swept).{% endset %}{{ m.empty_state(insight_empty) }}
+  {% else %}
+    {% for step in run.steps %}
+    <div class="tap-step">
+      <h3>step: <code>{{ step.step if step.step is not none else '-' }}</code>
+        <span class="muted small">{{ step.call_count }} call{{ '' if step.call_count == 1 else 's' }}</span></h3>
+      {% for unit in step.units %}
+      <div class="tap-unit">
+        <h4 class="muted small">unit: <code>{{ unit.unit if unit.unit is not none else '-' }}</code>
+          ({{ unit.call_count }} call{{ '' if unit.call_count == 1 else 's' }})</h4>
+        <ol class="tap-calls">
+          {% for c in unit.calls %}{{ run_call(c) }}{% endfor %}
+        </ol>
+        {% if unit.more %}<p class="small muted">(+{{ unit.more }} more calls not shown)</p>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  {% endif %}
+</section>
+</div>
+{% endblock %}

@@ -1,0 +1,1148 @@
+{% extends "base.html" %}
+{# Work surface: full width, not the centered list column (Console). #}
+{% set wide_page = true %}
+{% import "_macros.html" as m %}
+{% block title %}{{ doc.filename }} - Editor{% endblock %}
+{% block content %}
+{#- T5 (a11y, WCAG 3.1.2): the language of each part. lang (and dir for RTL) goes on the
+    element holding ONLY source or target text, never on English chrome. -#}
+{% set src_lang = source_locale|langattrs %}{% set tgt_lang = selected|langattrs %}
+
+<p><a href="/documents/{{ doc.id }}" class="back"><span aria-hidden="true">←</span> {{ doc.filename }}</a></p>
+
+<section class="review-intro">
+  {{ m.page_header('Post-editing - ' ~ selected) }}
+  {% if has_targets %}
+  <p class="help" id="editor-intro">The grid is pre-translated. Edit or accept, then approve to save to TM.</p>
+  {% else %}
+  <p class="help" id="editor-intro" data-untranslated>Nothing is translated into {{ selected }} yet. Start a translation from the document page, or type the translations here; approve each one to save it to TM.</p>
+  {% endif %}
+  {% if ai_off %}
+  {# AI opt-out (HECVAT DPAI-08): say plainly which Editor helpers are gone. #}
+  <p class="notice notice-warn" data-ai-off><strong>AI is off for this project.</strong>
+    Machine translation, AI alternatives, AI tag repair and AI quality checks are not
+    available here. TM matches, glossary terms, concordance and the structural checks still work.</p>
+  {% endif %}
+  {% if waiting_run %}
+  {#- #617: the run is parked on a human review step; the machine translation below is its pending text. -#}
+  <p class="notice notice-warn" data-waiting-review role="status">{{ tl(request, 'editor.waiting_review_html', run=waiting_run.run_id) }}</p>
+  {% endif %}
+  {% if locales|length > 1 %}
+    <div class="tabs">
+      {% for l in locales %}
+        <a class="tab {% if l == selected %}active{% endif %}" href="/documents/{{ doc.id }}/editor?locale={{ l }}">{{ l }}</a>
+      {% endfor %}
+    </div>
+  {% endif %}
+  {#
+    FULL_TEXT recovery link (GitHub #42). In full_text mode the whole document is ONE
+    unit here, so a linguist facing an inline-tag quarantine has nowhere to go - the
+    per-paragraph recovery page is the way out. `doc.mode` is a plain string constant
+    (TransMode is not an Enum), so compare the value directly; a `.value` access would
+    render nothing and the link would silently never appear.
+  #}
+  {% if doc.mode == 'full_text' %}
+    <p class="mt"><a class="btnlink small" href="/documents/{{ doc.id }}/paragraphs?locale={{ selected }}">Paragraph view &amp; tag recovery <span aria-hidden="true">→</span></a></p>
+  {% endif %}
+</section>
+
+{# --- Translation context (SPEC-context-metadata phase 4): "what the model saw"
+     for THIS document, read-only, compact + collapsible so it never crowds the grid. #}
+{% if context_block %}
+<section class="card">
+  <details>
+    <summary class="btnlink small">Translation context - what the model saw</summary>
+    <p class="help mt">Effective context resolved for this document (reference
+      data, never instructions).</p>
+    <pre class="code small">{{ context_block }}</pre>
+  </details>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Segments</h2>
+  <details class="editor-concordance">
+    <summary class="btnlink small">Concordance - search the TM for how a phrase was translated</summary>
+    <div class="form inline-form mt">
+      <input type="text" id="concQ" aria-label="Search translation memory" placeholder="search TM (source or target)…" />
+      <button type="button" class="small" id="concBtn" data-busy-label="{{ t(request, 'busy.searching') }}" data-csp-handler="csp-1">Search</button>
+    </div>
+    <div id="concResults" class="muted" style="margin-top:8px"></div>
+  </details>
+  {% if locale_seeding %}
+  <p class="muted small" id="localeSeedingNotice" role="status">The language {{ selected }} is still being added to this document, so some segments are not here yet. Counts for it are incomplete until setup finishes; start a translation for the language to finish it.</p>
+  {% endif %}
+  <div class="editor-toolbar">
+    {# T4 (a11y, WCAG 4.1.3): the Editor's two live regions, present at load. The polite
+       one is also a short visible status line; the assertive one shows only while an
+       error is true (not saved, not approved) and is emptied once it no longer is. #}
+    <span id="edStatus" class="muted small" role="status" aria-live="polite" aria-atomic="true"></span>
+    <span id="edAlert" class="ed-alert small" role="alert" aria-atomic="true"></span>
+    <div class="prog-wrap">
+      <span class="prog-count"><b id="approvedCount">{{ approved_count }}</b> of {{ total_segments }} confirmed</span>
+      <div class="prog" id="progBar" aria-hidden="true">
+        <div class="prog-bar" id="progFill"
+             style="width: {{ (approved_count / total_segments * 100) if total_segments else 0 }}%"></div>
+      </div>
+      {% if inconsistent_count %}
+      <details class="badgeinfo"><summary><span class="badge fuzzy">{{ inconsistent_count }} inconsistent</span></summary><span class="muted small">Segments whose source is translated differently elsewhere in this document (informational).</span></details>
+      {% elif inconsistent_count is none %}
+      <details class="badgeinfo"><summary><span class="badge muted-badge">consistency not computed</span></summary><span class="muted small">Consistency is not computed for very large documents.</span></details>
+      {% endif %}
+    </div>
+    <p class="kbd-hint muted">
+      <kbd>Enter</kbd> save &amp; next · <kbd>Ctrl/⌘+Enter</kbd> approve &amp; next unconfirmed · <kbd>Alt+A</kbd> (<kbd>Ctrl+Shift+A</kbd> on Mac) alternates: arrow keys choose, <kbd>Enter</kbd> inserts, <kbd>Esc</kbd> goes back
+    </p>
+  </div>
+  <div class="review-workspace">
+  <table class="table grid editor review-editor" data-preserve-draft="editor">
+    <thead><tr><th scope="col" class="num">#</th><th scope="col">Source</th><th scope="col">Target ({{ selected }})</th>
+      <th scope="col">TM</th><th scope="col">Terms</th><th scope="col">QA</th><th scope="col">Status</th><th scope="col"></th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+        <tr data-seg="{{ r.seg.id }}">
+          <td class="num">{{ r.seg.order_index + 1 }}</td>
+          <td class="src"><span class="review-cell-label">Source</span><div{{ src_lang }}>{{ r.seg.source_text|tagchips }}</div></td>
+          <td class="tgt">
+            <span class="review-cell-label">Target ({{ selected }})</span>
+            {% set meta = r.seg.meta or {} %}
+            {% if r.seg.lock_band %}
+              {# TM-matching lock (PROPOSAL-tm-matching-workflow-step D-1). A hard lock is
+                 refused at the write seam; a soft lock enters LQA. Editing this segment
+                 clears the lock (your edit wins, audited). Batch 15 T1 (M2): a "fuzzy"
+                 lock_band is a below-100 fuzzy fill -- show its REAL match % (from
+                 tm_match_pct), NEVER "TM 100%" (that dishonesty is the class the LAWs
+                 exist to prevent). #}
+              {% set _is_fuzzy = (r.seg.lock_band|string|lower == 'fuzzy') %}
+              {#- T4 (a11y): the explanation was a title tooltip (mouse only); it is now a
+                  disclosure a keyboard and screen reader user can open. -#}
+              <details class="lockinfo"><summary><span class="badge {% if r.seg.lock_hard %}warn{% else %}exact{% endif %}">
+                {% if r.seg.lock_hard %}<span aria-hidden="true">&#128274;</span> TM locked{% elif _is_fuzzy %}<span aria-hidden="true">&#128273;</span> TM {{ r.seg.tm_match_pct }}%{% else %}<span aria-hidden="true">&#128273;</span> TM 100%{% endif %}</span></summary><p class="muted small">{% if r.seg.lock_hard %}Hard TM lock: no automated step may change this.{% elif _is_fuzzy %}Soft TM lock: filled from a {{ r.seg.tm_match_pct }}% fuzzy TM match.{% else %}Soft TM lock: filled from a 100% TM match.{% endif %} Edit the text to clear it.</p></details>
+            {% endif %}
+            {% if r.tm_changed %}<p class="muted small tm-drift" id="drift-{{ r.seg.id }}"><span class="badge warn">{{ tl(request, 'editor.tm_changed') }}</span> <span class="muted small">{{ tl(request, 'editor.tm_changed_hint') }}</span></p>{% endif %}
+            {#- K8: the ENFORCED character limit is the KEY's `char_limit`, resolved into
+                the row dict as `r.char_limit`; that is what the write seam gates on and
+                what key_view derives from. `meta.get('char_limit')` is the PRE-EXISTING
+                phase-4 per-unit display chip (SPEC-context-metadata) and is DISPLAY-ONLY --
+                nothing writes it and the seam deliberately ignores it (reviewer M3), so it
+                never competes with the key limit; it just renders when present. The key
+                limit takes precedence in the chip. -#}
+            {% set eff_char_limit = r.char_limit or meta.get('char_limit') %}
+            {% if eff_char_limit or meta.get('key') or meta.get('notes') %}
+              <p class="unit-context muted small" title="Per-unit context metadata (display only)">
+                {% if meta.get('key') %}<span class="chip">{{ meta['key'] }}</span>{% endif %}
+                {% if eff_char_limit %}<span class="chip">&le;{{ eff_char_limit }} chars</span>{% endif %}
+                {% if meta.get('notes') %}<em>{{ meta['notes'] }}</em>{% endif %}
+              </p>
+            {% endif %}
+            {% if '⟦' in r.seg.source_text %}
+              <p class="tag-hint muted small" title="This segment carries formatting tags. Keep the ⟦ ⟧ tokens in place and in order so bold/links/inline elements survive export."><span aria-hidden="true">⚑</span> contains formatting tags - keep <code>⟦ ⟧</code> in place</p>
+            {% endif %}
+            {#- #610: a below-100 TM suggestion gets an inline badge too (it was visible only in the TM column). -#}
+            {% if r.tm and r.tm.match_pct is not none and r.tm.match_pct < 100 and not r.seg.lock_band and r.seg.status in ('mt', 'new') %}
+              <p class="muted small fuzzy-hint" id="fz-{{ r.seg.id }}"><span class="badge fuzzy">Fuzzy {{ r.tm.match_pct }}%</span> TM suggestion, check before approving</p>
+            {% endif %}
+            {% if waiting_run %}
+            <div class="pending-mt" id="pend-{{ r.seg.id }}"{{ tgt_lang }} data-pending-mt data-number="{{ r.seg.order_index + 1 }}" style="white-space:pre-wrap">{{ r.pending }}</div>
+            {% else %}
+            <textarea class="tgt-edit" id="tgt-{{ r.seg.id }}"{{ tgt_lang }} rows="2" aria-label="Target text for segment {{ r.seg.order_index + 1 }}"
+              data-number="{{ r.seg.order_index + 1 }}" data-seg="{{ r.seg.id }}">{{ r.seg.target_text }}</textarea>
+            {% endif %}
+          </td>
+          <td class="tm">
+            <span class="review-cell-label">TM</span>
+            {% if r.tm %}
+              <span class="badge {% if r.tm.match_pct == 100 %}exact{% else %}fuzzy{% endif %}">{{ r.tm.match_pct }}%</span>
+              {% if not waiting_run %}<button type="button" class="mini" data-busy-keep-label title="Accept TM" aria-label="Accept TM match for segment {{ r.seg.order_index + 1 }}"
+                data-action="accept-tm" data-id="{{ r.seg.id }}" data-tm="{{ r.tm.target_text|e }}"><span aria-hidden="true">✓</span></button>{% endif %}
+            {% else %}<span class="muted small cell-empty">No match</span>
+            {% endif %}
+          </td>
+          <td class="terms">
+            <span class="review-cell-label">Terms</span>
+            {% for t in r.terms %}
+              <span class="term {% if t.dnt %}dnt{% endif %}" title="{% if t.sense_label %}sense: {{ t.sense_label }}{% elif t.dnt %}do not translate{% endif %}">
+                <span{{ src_lang }}>{{ t.source_term }}</span>{% if t.dnt %} <span aria-hidden="true">🔒</span><span class="sr-only"> (do not translate)</span>{% elif t.target_term %} → <span{{ tgt_lang }}>{{ t.target_term }}</span>{% endif %}{% if t.sense_label %} <em>({{ t.sense_label }})</em>{% endif %}
+              </span>
+            {% else %}<span class="muted small cell-empty">None</span>
+            {% endfor %}
+          </td>
+          <td class="qa"><span class="review-cell-label">QA</span><div id="qa-{{ r.seg.id }}">
+            {% for f in r.qa %}{% if f.type == 'qe_autofix' %}{# QE auto-fix (Train B): the label plus the rounds the reviewer can open. #}<details class="qe-autofix"><summary><span class="badge {% if f.severity=='major' %}warn{% else %}fuzzy{% endif %}" title="{{ f.message }}">{{ f.label or f.type }}</span></summary>
+              <div class="muted small">{{ f.message }}{% if f.fixer and f.fixer.provider %} (post-editor {{ f.fixer.provider }}{% if f.fixer.model %} / {{ f.fixer.model }}{% endif %}){% endif %}</div>
+              {% if f.rounds %}<ol start="0" class="small">{% for rd in f.rounds %}<li>{% if rd.round == 0 %}original{% else %}round {{ rd.round }}{% endif %}: {% if rd.score is not none %}score {{ rd.score }}{% else %}not scored{% endif %}{% if rd.unsure %} (unsure: {{ rd.unsure | join(', ') }}){% endif %}{% if rd.rejected_reason %} - rejected ({{ rd.rejected_reason }}){% elif rd.error %} - {{ rd.error }}{% endif %}<br><span class="muted"{{ tgt_lang }}>{{ rd.rejected_text or rd.text }}</span></li>{% endfor %}</ol>{% endif %}
+            </details>{% else %}<details class="qa-flag"><summary><span class="badge {% if f.severity=='major' %}warn{% else %}fuzzy{% endif %}" title="{{ f.message }}">{{ f.label or f.type }}</span></summary><div class="muted small">{{ f.message }}</div></details> {% endif %}{% endfor %}
+          </div></td>
+          {#- #610: a 100% TM fill is stored with status "mt" (the re-lock whitelist keys on it),
+              but a translator must not read "MT" on text that came from the memory. The stored
+              status is unchanged; only the chip says "TM". A fuzzy fill keeps "MT" (its own
+              badge shows the real match %). -#}
+          {% set _tm_fill = r.seg.status == 'mt' and r.seg.lock_band and (r.seg.lock_band|string|lower != 'fuzzy') %}
+          <td class="review-state"><span class="chip st-{{ r.seg.status }}" id="st-{{ r.seg.id }}"{% if _tm_fill %} data-tm-fill="1"{% endif %}>{{ 'TM' if _tm_fill else m.status_label(r.seg.status) }}</span></td>
+          <td class="acts">
+            {% if waiting_run %}<span class="muted small">{{ tl(request, 'editor.waiting_label') }}</span>{% else %}
+            {% if not ai_off %}<button type="button" class="mini" aria-expanded="false" aria-controls="alts-{{ r.seg.id }}" data-busy-keep-label title="Show alternative translations" data-action="alternates" data-id="{{ r.seg.id }}">alternatives<span class="sr-only"> for segment {{ r.seg.order_index + 1 }}</span></button>{% endif %}
+            {# AI Tagging 1.5c: the repair action appears ONLY on a segment the gate
+               actually flagged for tag damage - it is a fix for a specific, named
+               problem, not a general-purpose "rewrite this" button. Web twin of
+               `loc-tms tagging repair --segment N --apply`. #}
+            {% if r.qa | selectattr('type', 'equalto', 'tag_integrity') | list %}
+              <button type="button" class="mini" data-busy-keep-label title="Ask the AI to put the missing inline formatting tags back in the right places, then verify the placement"
+                      data-action="repair-tags" data-id="{{ r.seg.id }}">fix tags</button>
+            {% endif %}
+            <button type="button" class="mini ok-btn" data-busy-keep-label data-action="approve" data-id="{{ r.seg.id }}">approve<span class="sr-only"> segment {{ r.seg.order_index + 1 }}</span></button>
+            {#- #617 item 6: per-segment opt-out of repeat propagation (to and from this segment). -#}
+            {% if r.has_repeats or r.unlinked %}<button type="button" class="mini" data-busy-keep-label data-action="propagation" data-id="{{ r.seg.id }}" data-unlinked="{{ '1' if r.unlinked else '0' }}" title="{{ t(request, 'js.prop_toggle_title') }}">{% if r.unlinked %}{{ tl(request, 'js.prop_link') }}{% else %}{{ tl(request, 'js.prop_unlink') }}{% endif %}<span class="sr-only"> {{ r.seg.order_index + 1 }}</span></button>{% endif %}
+            {% endif %}
+            {# SPEC-wave3 §4.2: raise a query where the question is. Gated on the queries
+               kill switch so it vanishes with the feature (the affordance-render probe,
+               test 16f). Links to the /queries list scoped to this segment, where the
+               compose form carries the scope + the §7.2 egress disclosure. #}
+            {# §4.2 / M-8: live open+answered thread-count badge (route owner supplies the
+               count now); the whole affordance is gated on the queries kill switch. #}
+            {% if feature_enabled('queries') %}<a class="mini" href="/queries?segment={{ r.seg.id }}" title="Ask or read a query about this segment">ask a question<span class="sr-only"> about segment {{ r.seg.order_index + 1 }}</span>{% if query_counts.get(r.seg.id) %} <span class="badge">{{ query_counts[r.seg.id] }}</span>{% endif %}</a>{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <aside class="review-resources" aria-label="TM, Terms" hidden>
+    <h3 class="review-resource-segment"></h3>
+    <section data-resource="tm"></section>
+    <section data-resource="terms"></section>
+  </aside>
+  </div>
+  {% if pages and pages > 1 %}
+    {{ m.pager('/documents/' ~ doc.id ~ '/editor', page, pages, total_segments, 'segments', '&locale=' ~ selected) }}
+  {% endif %}
+</section>
+
+{# Issue #600: the in-page, focus-trapped confirmation the editor asks instead of the native
+   window.confirm (which freezes the tab and automation and is not reliably exposed to
+   screen readers). Opened by askInPage() below with showModal(): the browser traps focus
+   and Escape closes it, which counts as "no" (fail closed). No aria-modal in the markup
+   (showModal makes it modal; see _session_timeout.html). #}
+<dialog class="modal session-dialog" id="edAsk" role="alertdialog" aria-labelledby="edAskTitle" aria-describedby="edAskMsg">
+  <div class="card modal-card">
+    <h2 id="edAskTitle"></h2>
+    <p id="edAskMsg"></p>
+    <div class="session-actions">
+      <button type="button" id="edAskYes"></button>
+      <button type="button" class="ghost" id="edAskNo"></button>
+    </div>
+  </div>
+</dialog>
+
+<script nonce="{{ csp_nonce() }}">
+const PROJECT_ID = {{ project.id }}, SRC = {{ source_locale|tojson }}, TGT = {{ selected|tojson }};
+// T5 (a11y, WCAG 3.1.2): the lang / dir of the text parts this script builds (the
+// alternates and the concordance hits), normalized server-side ("" when unusable).
+const SRC_LANG = {{ source_locale|langtag|tojson }}, SRC_DIR = {{ source_locale|langdir|tojson }};
+const TGT_LANG = {{ selected|langtag|tojson }}, TGT_DIR = {{ selected|langdir|tojson }};
+function setLang(el, lang, dir) {
+  if (!lang) return;
+  el.lang = lang;
+  if (dir === 'rtl') el.dir = 'rtl';
+}
+const TOTAL_SEGMENTS = {{ total_segments }};
+const focusAt = {};
+
+// ux/review-editor: move existing resource nodes, never clone IDs or listeners.
+// Small screens and no-JS retain resources alongside their original segment.
+// Only read-only TM and Terms text moves to the rail: QA flags are disclosures a
+// keyboard user opens, so they stay in their row's Tab order (the rail is after every
+// row, and tabbing through the rows to reach it would select another segment).
+const resourceRail = document.querySelector('.review-resources');
+const resourceViewport = window.matchMedia('(min-width: 701px)');
+let resourceRow = null;
+function selectResources(row) {
+  if (!row) return;
+  const focused = document.activeElement;
+  if (resourceRow) {
+    for (const kind of ['tm', 'terms']) {
+      const cell = resourceRow.querySelector('td.' + kind);
+      const back = resourceRail.querySelector('[data-resource="' + kind + '"]').childNodes;
+      const button = cell.querySelector('[data-action="accept-tm"]');
+      if (button) button.before(...back); else cell.append(...back);
+    }
+    resourceRow.classList.remove('review-selected');
+  }
+  resourceRow = row;
+  resourceRail.hidden = !resourceViewport.matches;
+  document.querySelector('.review-workspace').classList.toggle('has-resource-rail', resourceViewport.matches);
+  if (resourceViewport.matches) {
+    row.classList.add('review-selected');
+    resourceRail.querySelector('h3').textContent = 'TM and terms for segment ' + row.querySelector('.tgt-edit, [data-pending-mt]').dataset.number;  // #564 p5
+    for (const kind of ['tm', 'terms']) {
+      // The Accept TM button stays in its row (right after the target in Tab order);
+      // everything else about the selected segment's resources shows in the rail.
+      const keep = n => n.nodeType === 1 && n.matches('[data-action="accept-tm"]');
+      resourceRail.querySelector('[data-resource="' + kind + '"]').append(...Array.from(row.querySelector('td.' + kind).childNodes).filter(n => !keep(n)));
+    }
+  }
+  if (focused && focused.isConnected && document.activeElement !== focused) {
+    focused.focus({ preventScroll: true });
+  }
+}
+document.querySelector('.review-editor').addEventListener('focusin', e => {
+  const row = e.target.closest('tr[data-seg]');
+  if (row && row !== resourceRow) selectResources(row);
+});
+document.querySelector('.review-editor').addEventListener('click', e => {
+  const row = e.target.closest('tr[data-seg]');
+  if (row && row !== resourceRow) selectResources(row);
+});
+resourceViewport.addEventListener('change', () => selectResources(resourceRow));
+selectResources(document.querySelector('.review-editor tr[data-seg]'));
+
+// T4 (a11y, WCAG 4.1.3): what the Editor says, through announce.js (loaded by
+// _busy.html) and the two toolbar regions. Routine saves are silent (moving focus is
+// the feedback). Polite: approved + count, none left, a save that recovered, TM
+// accepted, alternates. Assertive (and visible): not saved, not approved; save
+// failures inside one second are spoken as one message. Outcomes the user asked for
+// (approved, saved again, inserted, repaired) are said with { keep: true }: an alert
+// about ANOTHER row arriving while one waits out the 1 s gap (a blur save of the row
+// just left fails a second later) must not drop it, nor may a later message replace it.
+const edAnnouncer = makeAnnouncer(document.getElementById('edStatus'), document.getElementById('edAlert'), { minGapMs: 1000 });
+const failedSaves = new Set();
+let failureTimer = null;
+// Per-segment save request counter: only the LATEST save of a segment may change its
+// row (responses can arrive out of order; a superseded save's late answer is ignored).
+const saveSeq = {};
+const savesInFlight = {};  // segId -> { text, promise } of the save being sent
+function segmentNumber(segId) {
+  const ta = document.getElementById('tgt-' + segId);
+  return (ta && ta.dataset.number) || String(segId);
+}
+// A failure is spoken after one second, together with any other in that second; a row
+// that saved again in the meantime is dropped from the message (nothing stale).
+function saveFailure(segId) {
+  failedSaves.add(segmentNumber(segId));
+  if (failureTimer) return;
+  failureTimer = setTimeout(() => {
+    const numbers = Array.from(failedSaves);
+    failedSaves.clear();
+    failureTimer = null;
+    if (!numbers.length) return;
+    edAnnouncer.alert(numbers.length === 1
+      ? `Segment ${numbers[0]} was not saved. Your text is kept; press Enter to retry.`
+      : `${numbers.length} segments were not saved. Your text is kept; press Enter in each to retry.`);
+  }, 1000);
+}
+// Move focus to a row's textarea without restarting its time-to-edit clock (the
+// focus handler below stamps focusAt; a return from the popover or a Retry is not a
+// new edit). `options` goes to focus() (e.g. { preventScroll: true }).
+function focusTarget(segId, options) {
+  const ta = document.getElementById('tgt-' + segId);
+  if (!ta) return;
+  const started = focusAt[segId];
+  ta.focus(options);
+  if (started) focusAt[segId] = started;
+}
+
+// T4 (a11y, WCAG 1.4.1): row state as TEXT, not only the dirty / save-failed tint.
+// state is '' | 'dirty' | 'failed'. The tints stay (same classes); the words live in
+// a span created on demand AFTER the status chip (the chip itself is never touched:
+// setStatusClass rewrites its classes). A failed row gets a Retry button. Nothing is
+// rebuilt when the state does not change, so a focused Retry keeps focus when a retry
+// fails again; when the span goes away while it holds focus, focus returns to the
+// row's textarea.
+function setRowState(segId, state) {
+  const chip = document.getElementById('st-' + segId);
+  if (!chip) return;
+  const row = chip.closest('tr');
+  let box = document.getElementById('rs-' + segId);
+  if (box && box.contains(document.activeElement) && state !== 'failed') focusTarget(segId);
+  row.classList.toggle('dirty', !!state);
+  row.classList.toggle('save-failed', state === 'failed');
+  if (!state) { if (box) box.remove(); return; }
+  if (box && box.dataset.state === state) return;
+  if (!box) {
+    box = document.createElement('span');
+    box.id = 'rs-' + segId;
+    box.className = 'rowstate';
+    chip.after(box);
+  }
+  box.dataset.state = state;
+  box.replaceChildren();
+  const mark = document.createElement('span');
+  mark.setAttribute('aria-hidden', 'true');
+  mark.textContent = state === 'failed' ? '⚠ ' : '● ';
+  box.appendChild(mark);
+  box.appendChild(document.createTextNode(state === 'failed' ? 'Save failed ' : 'Unsaved'));
+  if (state === 'failed') {
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'mini';
+    retry.appendChild(document.createTextNode('Retry'));
+    const suffix = document.createElement('span');
+    suffix.className = 'sr-only';
+    suffix.textContent = ' saving segment ' + segmentNumber(segId);
+    retry.appendChild(suffix);
+    retry.addEventListener('click', () => busyRun(retry, () => save(segId, elapsed(segId), false, true)));
+    box.appendChild(retry);
+  }
+}
+// An edit marks the row unsaved, but never downgrades a failed row (its marker stays
+// until a save succeeds) and never writes the DOM on every keystroke.
+function markDirty(segId) {
+  const ta = document.getElementById('tgt-' + segId);
+  const row = ta && ta.closest('tr');
+  if (row && !row.classList.contains('dirty')) setRowState(segId, 'dirty');
+}
+// Segments already confirmed (seeded from the server-rendered chips on THIS page).
+// approve() is one-way in this UI: we add to this set and never remove, so the
+// client-side confirmed count only ever grows and never double-counts a re-approve.
+const approvedIds = new Set(
+  Array.from(document.querySelectorAll('.chip.st-approved')).map(c => c.id.replace('st-', '')));
+
+function textareas() { return Array.from(document.querySelectorAll('.tgt-edit')); }
+
+// Swap the status chip's st-* class (color-by-value) to match a returned status,
+// so in-session state renders identically to a fresh reload. Additive: keeps the
+// base `chip` class and the chip text/id untouched.
+function statusLabel(status) {
+  // Same labels as the server-rendered chip (_macros.html status_label).
+  const raw = String(status).replace('SegStatus.', '').toLowerCase();
+  if (raw === 'mt' || raw === 'ok') return raw.toUpperCase();
+  const label = raw.replaceAll('_', ' ');
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+function setStatusClass(segId, status) {
+  const chip = document.getElementById('st-' + segId);
+  if (!chip) return;
+  chip.className = chip.className.replace(/\bst-\S+/g, '').trim();
+  chip.classList.add('chip');
+  if (status) chip.classList.add('st-' + status);
+}
+
+function bumpProgress() {
+  const el = document.getElementById('approvedCount');
+  if (!el) return;
+  const n = (parseInt(el.textContent, 10) || 0) + 1;
+  el.textContent = n;
+  const fill = document.getElementById('progFill');
+  if (fill && TOTAL_SEGMENTS) fill.style.width = (n / TOTAL_SEGMENTS * 100) + '%';
+}
+
+function flashProgress() {
+  const bar = document.getElementById('progBar');
+  if (!bar) return;
+  bar.classList.remove('flash');       // restart the animation
+  void bar.offsetWidth;                // reflow
+  bar.classList.add('flash');
+}
+
+// Issue #600: ask the linguist a yes/no question in the page. Resolves true ONLY when the
+// yes button is pressed; Escape, the no button, a dialog that cannot open and a dialog
+// already open all resolve false, so every caller fails closed. The texts are set with
+// textContent (never markup). Focus starts on the no button (the safe answer) and returns
+// to where it was when the dialog closes.
+function askInPage(title, message, yesLabel, noLabel) {
+  const dlg = document.getElementById('edAsk');
+  if (!dlg || typeof dlg.showModal !== 'function' || dlg.open) return Promise.resolve(false);
+  const yes = document.getElementById('edAskYes');
+  const no = document.getElementById('edAskNo');
+  document.getElementById('edAskTitle').textContent = title;
+  document.getElementById('edAskMsg').textContent = message;
+  yes.textContent = yesLabel;
+  no.textContent = noLabel;
+  const opener = document.activeElement;
+  return new Promise((resolve) => {
+    let answer = false;
+    const onYes = () => { answer = true; dlg.close(); };
+    const onNo = () => { dlg.close(); };
+    dlg.addEventListener('close', () => {
+      yes.removeEventListener('click', onYes);
+      no.removeEventListener('click', onNo);
+      if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus();
+      resolve(answer);
+    }, { once: true });
+    yes.addEventListener('click', onYes);
+    no.addEventListener('click', onNo);
+    dlg.showModal();
+    no.focus();
+  });
+}
+
+function autosize(ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }
+
+// Returns the saved segment, or null when nothing was saved (the request failed, or
+// the linguist declined the tag-loss confirm). Callers that go on to do more (approve)
+// MUST stop on null. `announce`: undefined = speak a failure only when the row
+// becomes failed (a blur save on an already-failed row stays quiet); true = always
+// (the user asked for this save: Enter, Retry, an alternate, Accept TM); false = never
+// (the caller says its own message).
+// Only the LATEST save of a segment owns its row: when a newer save was sent while this
+// one was in flight, this one's outcome (success or failure) is ignored and it returns
+// null. A save that succeeded while the text was edited further leaves the row
+// "Unsaved" (the server has the older text). Only a JSON body with ok === true is a save.
+// A blur save (announce undefined) of the SAME text a save of this segment is already
+// sending joins that request instead of superseding it: Enter then moving on must not
+// turn the Enter save (the retry the user asked for, announced on failure) into a
+// superseded one.
+function save(segId, tte, confirmTags, announce) {
+  const ta = document.getElementById('tgt-' + segId);
+  const current = savesInFlight[segId];
+  if (announce === undefined && !confirmTags && current && current.text === ta.value) return current.promise;
+  const entry = { text: ta.value };
+  entry.promise = sendSave(segId, tte, confirmTags, announce).finally(() => {
+    if (savesInFlight[segId] === entry) delete savesInFlight[segId];
+  });
+  savesInFlight[segId] = entry;
+  return entry.promise;
+}
+async function sendSave(segId, tte, confirmTags, announce) {
+  const ta = document.getElementById('tgt-' + segId);
+  const row = ta.closest('tr');
+  const wasFailed = row.classList.contains('save-failed');
+  const sent = ta.value;
+  const seq = (saveSeq[segId] || 0) + 1;
+  saveSeq[segId] = seq;
+  const params = { target_text: sent, tte_ms: String(tte || 0) };
+  // AI Tagging 1.7: the editor save guard replies {needs_confirm:true} when the save
+  // would drop/break inline-formatting tokens (formatting lost on export). Ask once,
+  // then re-submit with confirm=1 on a Yes; keep the row unsaved (dirty) on a No.
+  if (confirmTags) params.confirm = '1';
+  const body = new URLSearchParams(params);
+  try {
+    const r = await fetch(`/segments/${segId}/save`, { method: 'POST', headers: { 'X-CSRF-Token': window.CSRF_TOKEN }, body });
+    if (!r.ok) throw new Error('save HTTP ' + r.status);
+    const data = await r.json();
+    if (saveSeq[segId] !== seq) return null;  // superseded by a later save
+    if (data && data.needs_confirm) {
+      // #623: asked in the page (askInPage), not with window.confirm; anything but the yes
+      // button (no, Escape, no <dialog> support) leaves the row unsaved.
+      if (await askInPage('Save with damaged formatting?', String(data.message), 'Save anyway', 'Do not save')) {
+        return save(segId, tte, true, announce);
+      }
+      // declined -> leave it marked unsaved (a failed row keeps its failure marker)
+      setRowState(segId, wasFailed ? 'failed' : 'dirty');
+      return null;
+    }
+    if (!data || data.ok !== true) throw new Error('save: not saved');
+    // An unchanged save (focus in and out of the row) must not relabel the chip: a 100% TM
+    // fill is stored as status "mt" and reads "TM" (data-tm-fill), so rewriting the text
+    // from the status alone turned TM into MT. A changed save clears the TM lock and relabels.
+    const stChip = document.getElementById('st-' + segId);
+    if (!data.unchanged) {
+      stChip.textContent = statusLabel(data.status);
+      delete stChip.dataset.tmFill;
+    }
+    setStatusClass(segId, data.status);
+    renderQA(segId, data.qa);
+    failedSaves.delete(segmentNumber(segId));
+    setRowState(segId, ta.value === sent ? '' : 'dirty');
+    if (wasFailed) {
+      edAnnouncer.clearAlert();
+      edAnnouncer.say(`Segment ${segmentNumber(segId)} saved.`, { keep: true });
+    }
+    return data;
+  } catch (e) {
+    if (saveSeq[segId] !== seq) return null;  // superseded: the later save reports
+    // A silent network/save failure must become VISIBLE: keep the unsaved marker
+    // and add a danger-tinted state so the row never looks saved when it isn't.
+    setRowState(segId, 'failed');
+    if (announce === true || (announce === undefined && !wasFailed)) saveFailure(segId);
+    return null;
+  }
+}
+
+function renderQA(segId, flags) {
+  const cell = document.getElementById('qa-' + segId);
+  cell.replaceChildren();
+  (flags || []).forEach(f => {
+    const el = document.createElement('span');
+    el.className = 'badge ' + (f.severity === 'major' ? 'warn' : 'fuzzy');
+    el.title = f.message;
+    el.textContent = f.type;
+    if (f.label) el.textContent = f.label;  // qe_autofix: "auto-fixed in N rounds"
+    if (cell.childNodes.length) cell.appendChild(document.createTextNode(' '));
+    // T4 (a11y): the same disclosure the server renders, so the message is reachable
+    // by keyboard and screen reader (a title tooltip is mouse only). Text nodes only.
+    const details = document.createElement('details');
+    details.className = f.type === 'qe_autofix' ? 'qe-autofix' : 'qa-flag';
+    const summary = document.createElement('summary');
+    summary.appendChild(el);
+    const message = document.createElement('div');
+    message.className = 'muted small';
+    message.textContent = f.message;
+    details.appendChild(summary);
+    details.appendChild(message);
+    cell.appendChild(details);
+  });
+}
+
+// AI Tagging 1.5c - ask the server to AI-repair this segment's broken inline tags.
+// Thin caller: every lock, the write and the verification live server-side in
+// tag_llm_repair.repair_stored_segments (the same seam `tagging repair` uses).
+// Busy indicators: the editor's row buttons are icon-sized (data-busy-keep-label), so
+// busy = the shared spinner on the button + the top bar, released on every outcome.
+// { announce: false }: the Editor says its own outcome, so the app-wide
+// "Working..." / "Done" live message would only talk over it.
+function busyRun(btn, fn) {
+  return (window.LocBusy && btn) ? window.LocBusy.wrap(btn, fn, { announce: false }) : fn();
+}
+
+async function repairTags(segId, btn) {
+  const done = window.LocBusy ? window.LocBusy.start(btn, { announce: false }) : () => {};
+  edAnnouncer.say(`Repairing formatting tags in segment ${segmentNumber(segId)}.`);
+  try {
+    const r = await fetch(`/segments/${segId}/tag-repair`, {
+      method: 'POST', headers: { 'X-CSRF-Token': window.CSRF_TOKEN } });
+    const data = await r.json();
+    if (!data.ok) { alert(data.error || 'Tag repair failed.'); return; }
+    // The textarea is the linguist's working copy - update it in place so the repair
+    // is visible immediately rather than only after a reload.
+    const ta = document.getElementById('tgt-' + segId);
+    if (ta) ta.value = data.target_text;
+    const chip = document.getElementById('st-' + segId);
+    if (chip && data.status) {
+      chip.textContent = statusLabel(data.status);
+      setStatusClass(segId, String(data.status).replace('SegStatus.', '').toLowerCase());
+    }
+    // Honest outcome: a VERIFIED repair is done; an unverified one put the tags back
+    // but still needs the reviewer's eyes on placement, so say so rather than implying
+    // the segment is finished.
+    if (data.verified) {
+      done();
+      // The button goes away; a keyboard user on it lands back in the text, not on <body>.
+      if (document.activeElement === btn) focusTarget(segId);
+      btn.remove();
+      edAnnouncer.say(`Formatting tags repaired and verified in segment ${segmentNumber(segId)}.`, { keep: true });
+    } else {
+      done();
+      alert('Tags were put back, but their placement could not be verified - '
+            + 'please check them. ' + (data.note || ''));
+    }
+  } catch (e) {
+    done();
+    alert('Tag repair failed: ' + e);
+  } finally {
+    done();
+  }
+}
+
+// The row "approve" button: approve() itself stays button-free (Ctrl+Enter calls it).
+function approveBtn(btn, segId) {
+  return busyRun(btn, () => approve(segId));
+}
+
+// Approve = save the textarea, THEN approve what was saved. T4 bug fix: when the save
+// fails or the tag-loss confirm is declined, save() returns null and approve STOPS.
+// Before, it approved the server's OLD text anyway and cleared the save-failed marker,
+// so a linguist whose edit never reached the server saw the row turn "approved". Now
+// nothing is POSTed, the row keeps its failure / unsaved marker and the user is told
+// (visibly and assertively). A failed approve request is reported the same way.
+// The text approved must be the text in the textarea: an edit typed while the save was
+// in flight (or a newer save that superseded it) stops the approve the same way.
+// Returns the approve response, or null when nothing was approved.
+async function approve(segId) {
+  const ta = document.getElementById('tgt-' + segId);
+  const text = ta.value;
+  const saved = await save(segId, elapsed(segId), false, false);
+  if (!saved || ta.value !== text) {
+    edAnnouncer.alert('Not approved: the edit was not saved.');
+    return null;
+  }
+  const n = segmentNumber(segId);
+  let data;
+  let notInTM = '';
+  try {
+    const post = async (acknowledge) => {
+      const opts = { method: 'POST', headers: { 'X-CSRF-Token': window.CSRF_TOKEN } };  // # pregate: allow-secret CSRF header name, value is the page session variable
+      if (acknowledge) opts.body = new URLSearchParams({ acknowledge_placeholder_loss: '1' });
+      const r = await fetch(`/segments/${segId}/approve`, opts);
+      if (!r.ok) throw new Error('approve HTTP ' + r.status);
+      const d = await r.json();
+      if (!d || !d.status) throw new Error('approve: no status');
+      return d;
+    };
+    data = await post(false);
+    // Issue #562: a target that dropped or added a placeholder is approved but NOT written
+    // to TM. Say so, and let the linguist knowingly save it to TM anyway (the same pattern
+    // as the tag-loss confirm on save).
+    if (data.tm_skipped_code === 'placeholder_integrity') {
+      if (await askInPage('Save it to TM anyway?',
+          `Segment ${n} is approved but was NOT saved to TM: ${data.tm_skipped}.`,
+          'Save to TM', 'Do not save to TM')) {
+        data = await post(true);
+      } else {
+        notInTM = ' Not saved to TM: a placeholder differs from the source.';
+      }
+    } else if (data.tm_skipped_code === 'tag_integrity') {
+      // #581: damaged inline tags are never saved to TM (no override); say so.
+      notInTM = ' Not saved to TM: an inline tag differs from the source.';
+    }
+  } catch (e) {
+    edAnnouncer.alert(`Segment ${n} was not approved. Try again.`);
+    return null;
+  }
+  const chip = document.getElementById('st-' + segId);
+  chip.textContent = statusLabel(data.status) + (data.tm_written ? ' →TM' : '');
+  setStatusClass(segId, data.status);
+  // one-way confirmed count: bump only the first time this segment reaches approved
+  if (data.status === 'approved' && !approvedIds.has(String(segId))) {
+    approvedIds.add(String(segId));
+    bumpProgress();
+  }
+  edAnnouncer.clearAlert();
+  const propNote = showPropagated(segId, data);
+  const count = document.getElementById('approvedCount');
+  edAnnouncer.say(data.status === 'approved'
+    ? `Segment ${n} approved.${notInTM} ${count ? count.textContent : approvedIds.size} of ${TOTAL_SEGMENTS} confirmed.${propNote}`
+    : `Segment ${n}: ${data.status}.`, { keep: true });
+  return data;
+}
+
+// Issue #617 item 6: an approve may have applied the target to the segment's repeats. Show
+// the new text and a "propagated" badge on each one on this page (repeats on other pages
+// show it after a reload) and return the sentence for the live announcer.
+function propText(key, n) {
+  const I = window.I18N || {};
+  const fallback = {
+    prop_applied_one: 'Applied to 1 repeat.',
+    prop_applied_other: 'Applied to {n} repeats.',
+    prop_refused_one: '1 repeat was left unchanged because the text would break a placeholder or tag.',
+    prop_refused_other: '{n} repeats were left unchanged because the text would break a placeholder or tag.',
+    prop_badge: 'Propagated',
+    prop_undo: 'Undo repeats',
+    prop_undone_one: 'Undone: 1 repeat restored.',
+    prop_undone_other: 'Undone: {n} repeats restored.',
+    prop_undo_kept_one: '1 repeat was kept because it changed since.',
+    prop_undo_kept_other: '{n} repeats were kept because they changed since.',
+    prop_undo_none: 'Nothing to undo.',
+  };
+  return String(I[key] || fallback[key] || key).replace('{n}', n);
+}
+function showPropagated(segId, data) {
+  const ids = (data && data.propagated) || [];
+  const refused = (data && data.propagation_refused) || [];
+  const text = document.getElementById('tgt-' + segId).value;
+  ids.forEach(id => {
+    const ta = document.getElementById('tgt-' + id);
+    if (!ta) return;
+    ta.value = text;
+    autosize(ta);
+    const chip = document.getElementById('st-' + id);
+    if (chip) { chip.textContent = statusLabel('edited'); setStatusClass(id, 'edited'); }
+    const qa = document.getElementById('qa-' + id);
+    if (qa && !qa.querySelector('[data-propagated]')) {
+      const b = document.createElement('span');
+      b.className = 'badge fuzzy';
+      b.setAttribute('data-propagated', '1');
+      b.textContent = propText('prop_badge', 0);
+      qa.appendChild(b);
+    }
+  });
+  addUndoButton(segId, ids.length);
+  let note = '';
+  if (ids.length) note += ' ' + propText(ids.length === 1 ? 'prop_applied_one' : 'prop_applied_other', ids.length);
+  if (refused.length) note += ' ' + propText(refused.length === 1 ? 'prop_refused_one' : 'prop_refused_other', refused.length);
+  return note;
+}
+
+// Undo for the "Applied to N repeats" the approve just announced: a real button in the approved
+// row's action cell (keyboard reachable, wired by handlers.js data-action, no inline handler).
+// It uses the same route as the CLI/API twin and restores only copies still as propagated.
+function addUndoButton(segId, count) {
+  const tgt = document.getElementById('tgt-' + segId);
+  const acts = tgt && tgt.closest('tr') ? tgt.closest('tr').querySelector('td.acts') : null;
+  if (!acts) return;
+  acts.querySelectorAll('[data-action="undo-propagation"]').forEach(b => b.remove());
+  if (!count) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'mini';
+  btn.setAttribute('data-busy-keep-label', '');
+  btn.setAttribute('data-action', 'undo-propagation');
+  btn.setAttribute('data-id', segId);
+  btn.title = String((window.I18N || {}).prop_undo_title || 'Put the repeats this approval filled back the way they were');
+  btn.appendChild(document.createTextNode(propText('prop_undo', count)));
+  const sr = document.createElement('span');
+  sr.className = 'sr-only';
+  sr.textContent = ' (' + propText(count === 1 ? 'prop_applied_one' : 'prop_applied_other', count) + ')';
+  btn.appendChild(sr);
+  const approveBtn = acts.querySelector('[data-action=approve]');
+  if (approveBtn && approveBtn.nextSibling) acts.insertBefore(btn, approveBtn.nextSibling); else acts.appendChild(btn);
+}
+
+function undoPropagation(btn, segId) {
+  return busyRun(btn, async () => {
+    try {
+      const r = await fetch(`/segments/${segId}/propagation`, {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': window.CSRF_TOKEN },  // # pregate: allow-secret CSRF header name, value is the page session variable
+        body: new URLSearchParams({ action: 'undo' }),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      (data.segments || []).forEach(it => {
+        const ta = document.getElementById('tgt-' + it.id);
+        if (!ta) return;
+        ta.value = it.target_text || '';
+        autosize(ta);
+        const st = String(it.status || '').replace('SegStatus.', '').toLowerCase();
+        const chip = document.getElementById('st-' + it.id);
+        if (chip) { chip.textContent = statusLabel(st); setStatusClass(it.id, st); }
+        const qa = document.getElementById('qa-' + it.id);
+        if (qa) qa.querySelectorAll('[data-propagated]').forEach(b => b.remove());
+      });
+      const done = (data.restored || []).length, kept = (data.kept || []).length;
+      let said = '';
+      if (done) said += propText(done === 1 ? 'prop_undone_one' : 'prop_undone_other', done);
+      if (kept) said += ' ' + propText(kept === 1 ? 'prop_undo_kept_one' : 'prop_undo_kept_other', kept);
+      if (!said) said = propText('prop_undo_none', 0);
+      const row = btn.closest('tr');
+      const approveBtn = row ? row.querySelector('[data-action=approve]') : null;
+      btn.remove();
+      if (approveBtn) approveBtn.focus();
+      edAnnouncer.clearAlert();
+      edAnnouncer.say(said.trim(), { keep: true });
+    } catch (e) {
+      edAnnouncer.alert(String((window.I18N || {}).prop_undo_failed || 'The undo did not complete. Try again.'));
+    }
+  });
+}
+
+// The row "unlink repeats" / "link repeats" button: persisted per segment on the server.
+function togglePropagation(btn, segId) {
+  const unlink = btn.dataset.unlinked !== '1';
+  return busyRun(btn, async () => {
+    try {
+      const r = await fetch(`/segments/${segId}/propagation`, {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': window.CSRF_TOKEN },  // # pregate: allow-secret CSRF header name, value is the page session variable
+        body: new URLSearchParams({ action: unlink ? 'unlink' : 'link' }),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      btn.dataset.unlinked = unlink ? '1' : '0';
+      const I = window.I18N || {};
+      btn.firstChild.textContent = unlink ? (I.prop_link || 'Link repeats') : (I.prop_unlink || 'Unlink repeats');
+      edAnnouncer.say(unlink ? (I.prop_unlinked_said || 'Segment unlinked from its repeats.')
+                             : (I.prop_linked_said || 'Segment linked to its repeats again.'), { keep: true });
+    } catch (e) {
+      edAnnouncer.alert(String((window.I18N || {}).prop_failed || 'The change was not saved. Try again.'));
+    }
+  });
+}
+
+function acceptTM(segId, btn) {
+  document.getElementById('tgt-' + segId).value = btn.dataset.tm;
+  return busyRun(btn, async () => {
+    const data = await save(segId, 0, false, true);
+    if (data) edAnnouncer.say(`TM match inserted in segment ${segmentNumber(segId)}.`, { keep: true });
+    return data;
+  });
+}
+
+// T4 (a11y, WCAG 2.1.1 / 4.1.2): the alternates popover. The "alt" button carries
+// aria-expanded / aria-controls; the popover is a named group holding a LIST OF REAL
+// BUTTONS (not a role=menu: that needs the whole menu pattern and puts some screen
+// readers in application mode). It is inserted right after its trigger (DOM order =
+// Tab order) but placed with position:fixed from the trigger's rect, so the Editor
+// table's horizontal scroller never clips it; it follows scroll and resize.
+// Keys on the popover: ArrowDown/ArrowUp (wrap), Home/End move; Enter/Space (native
+// button) insert + save and return focus to the textarea; Escape or Alt+A close and
+// return focus to the textarea; Tab / Shift+Tab work as usual, and focus leaving for
+// anything but the trigger closes it where focus went.
+let altMenu = null;  // { el, trigger, segId, inView } of the one open popover
+// Is the trigger visible: inside the viewport and inside the Editor table's scroller?
+function triggerInView(rect, vw, vh) {
+  if (rect.bottom <= 0 || rect.top >= vh || rect.right <= 0 || rect.left >= vw) return false;
+  const scroller = altMenu.trigger.closest('.tablewrap');
+  if (!scroller) return true;
+  const box = scroller.getBoundingClientRect();
+  return rect.right > box.left && rect.left < box.right && rect.bottom > box.top && rect.top < box.bottom;
+}
+// Places the popover from its trigger's rect. It is measured at the viewport origin
+// first (at its in-flow spot inside the actions cell its shrink-to-fit size is wrong).
+// Once the trigger has been in view, scrolling it out of view (page, or the table's own
+// scroller) closes the popover instead of leaving it clamped to the viewport edge,
+// detached from its row; focus that was inside goes back to the row's text without
+// scrolling anything.
+function placeAltMenu() {
+  if (!altMenu) return;
+  const el = altMenu.el;
+  const rect = altMenu.trigger.getBoundingClientRect();
+  const vw = document.documentElement.clientWidth || window.innerWidth;
+  const vh = window.innerHeight;
+  const inView = triggerInView(rect, vw, vh);
+  if (altMenu.inView && !inView) {
+    const hadFocus = el.contains(document.activeElement);
+    const segId = altMenu.segId;
+    closeAlternates(false);
+    if (hadFocus) focusTarget(segId, { preventScroll: true });
+    return;
+  }
+  altMenu.inView = inView;
+  el.style.top = '0px';
+  el.style.left = '0px';
+  const w = el.offsetWidth, h = el.offsetHeight;
+  let top = rect.bottom + 4;
+  if (top + h > vh - 8 && rect.top - h - 4 >= 8) top = rect.top - h - 4;  // flip above
+  el.style.top = Math.max(8, Math.min(top, vh - h - 8)) + 'px';
+  el.style.left = Math.max(8, Math.min(rect.right - w, vw - w - 8)) + 'px';
+}
+function closeAlternates(restoreFocus) {
+  const menu = altMenu;
+  if (!menu) return;
+  altMenu = null;  // first: the focusout the focus move below fires finds nothing open
+  window.removeEventListener('scroll', placeAltMenu, true);
+  window.removeEventListener('resize', placeAltMenu);
+  if (menu.toolbarWatch) menu.toolbarWatch.disconnect();
+  menu.trigger.setAttribute('aria-expanded', 'false');
+  if (restoreFocus) focusTarget(menu.segId);
+  menu.el.remove();
+}
+function altMenuKeys(e) {
+  if (!altMenu) return;
+  if (e.key === 'Escape' || isAltA(e)) {
+    e.preventDefault();
+    e.stopPropagation();
+    closeAlternates(true);
+    return;
+  }
+  const items = Array.from(altMenu.el.querySelectorAll('.altitem'));
+  const i = items.indexOf(document.activeElement);
+  let next = -1;
+  if (e.key === 'ArrowDown') next = i < 0 ? 0 : (i + 1) % items.length;
+  else if (e.key === 'ArrowUp') next = i < 0 ? items.length - 1 : (i - 1 + items.length) % items.length;
+  else if (e.key === 'Home') next = 0;
+  else if (e.key === 'End') next = items.length - 1;
+  if (next >= 0) { e.preventDefault(); items[next].focus(); }
+}
+function altMenuFocusOut(e) {
+  const to = e.relatedTarget;
+  // No relatedTarget: the window lost focus or a click landed on something that is not
+  // focusable; the outside-click handler below owns the second case.
+  if (!altMenu || !to || altMenu.el.contains(to) || to === altMenu.trigger) return;
+  closeAlternates(false);
+}
+async function pickAlternate(segId, text) {
+  closeAlternates(true);
+  const ta = document.getElementById('tgt-' + segId);
+  ta.value = text;
+  autosize(ta);
+  markDirty(segId);
+  if (await save(segId, elapsed(segId), false, true)) {
+    edAnnouncer.say(`Alternate inserted in segment ${segmentNumber(segId)} and saved.`, { keep: true });
+  }
+}
+function openAlternates(segId, btn, choices) {
+  closeAlternates(false);
+  const n = segmentNumber(segId);
+  const menu = document.createElement('div');
+  menu.className = 'altmenu';
+  menu.id = 'alts-' + segId;
+  menu.setAttribute('role', 'group');
+  menu.setAttribute('aria-label', `Alternate translations for segment ${n}`);
+  const list = document.createElement('ul');
+  list.className = 'altlist';
+  choices.forEach(text => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'altitem';
+    item.textContent = text;
+    setLang(item, TGT_LANG, TGT_DIR);
+    item.addEventListener('click', () => pickAlternate(segId, text));
+    const li = document.createElement('li');
+    li.appendChild(item);
+    list.appendChild(li);
+  });
+  menu.appendChild(list);
+  menu.addEventListener('keydown', altMenuKeys);
+  menu.addEventListener('focusout', altMenuFocusOut);
+  btn.after(menu);
+  altMenu = { el: menu, trigger: btn, segId: segId };
+  btn.setAttribute('aria-expanded', 'true');
+  // The row can have moved while the alternates loaded (a status message wrapping the
+  // toolbar above the table pushes a bottom row off screen): bring the trigger back
+  // into view first, so the popover opens attached to it, not clamped to the edge.
+  btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  placeAltMenu();
+  window.addEventListener('scroll', placeAltMenu, true);
+  window.addEventListener('resize', placeAltMenu);
+  // A status line wrapping (or unwrapping) the sticky toolbar above the table moves the
+  // row without a scroll or resize event, the popover's own "N alternates" first: keep
+  // the trigger in view (a reflow is not the user scrolling away) and re-place.
+  const toolbar = document.querySelector('.editor-toolbar');
+  if (toolbar && window.ResizeObserver) {
+    altMenu.toolbarWatch = new ResizeObserver(() => {
+      if (!altMenu) return;
+      altMenu.trigger.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      placeAltMenu();
+    });
+    altMenu.toolbarWatch.observe(toolbar);
+  }
+  edAnnouncer.say(`${choices.length} alternates. Use arrow keys to choose, Escape to go back.`);
+  list.querySelector('.altitem').focus();
+}
+async function alternates(segId, btn) {
+  if (btn.dataset.loading) return;  // in flight: a second click or Alt+A is ignored
+  if (altMenu && altMenu.trigger === btn) { closeAlternates(false); return; }  // toggle
+  const n = segmentNumber(segId);
+  // Alternates that arrived while the user had moved to another row wait on the
+  // button: open them now instead of paying for a second LLM call.
+  if (btn.altCache) {
+    const cached = btn.altCache;
+    btn.altCache = null;
+    openAlternates(segId, btn, cached);
+    return;
+  }
+  btn.dataset.loading = 'true';
+  edAnnouncer.say(`Loading alternates for segment ${n}.`);
+  let data;
+  try {
+    data = await busyRun(btn, async () => {
+      const r = await fetch(`/segments/${segId}/alternates`, { method: 'POST', headers: { 'X-CSRF-Token': window.CSRF_TOKEN } });  // # pregate: allow-secret CSRF header name, value is the page session variable
+      if (!r.ok) throw new Error('alternates HTTP ' + r.status);
+      return r.json();
+    });
+  } catch (e) {
+    edAnnouncer.alert(`Could not load alternates for segment ${n}. Try again.`);
+    return;
+  } finally {
+    delete btn.dataset.loading;
+  }
+  if (!data) return;
+  const choices = (data.alternates || []).filter(a => typeof a === 'string' && a);
+  if (!choices.length) { edAnnouncer.say(`No alternates for segment ${n}.`); return; }
+  // Focus moves into the popover only while the user is still on this row (or on
+  // nothing, e.g. a Safari mouse click that does not focus buttons). Someone who moved
+  // on is not yanked back: the result waits on the button.
+  const active = document.activeElement;
+  const row = btn.closest('tr');
+  if (active && active !== document.body && !(row && row.contains(active))) {
+    btn.altCache = choices;
+    edAnnouncer.say(`Alternates for segment ${n} are ready. Press ${altAName()} in that segment to see them.`);
+    return;
+  }
+  openAlternates(segId, btn, choices);
+}
+
+async function concordance() {
+  const q = document.getElementById('concQ').value;
+  let data;
+  try {
+    data = await busyRun(document.getElementById('concBtn'), async () => {
+      const r = await fetch(`/concordance?project_id=${PROJECT_ID}&q=${encodeURIComponent(q)}&source=${SRC}&target=${TGT}`);
+      return r.json();
+    });
+  } catch (e) {
+    return;
+  }
+  if (!data) return;
+  const box = document.getElementById('concResults');
+  if (!data.results.length) { box.textContent = 'No matches.'; return; }
+  box.innerHTML = data.results.map(m =>
+    `<div class="concrow"><span class="src">${chips(m.source)}</span> → <span class="ok">${chips(m.target)}</span></div>`).join('');
+  box.querySelectorAll('.concrow .src').forEach(el => setLang(el, SRC_LANG, SRC_DIR));
+  box.querySelectorAll('.concrow .ok').forEach(el => setLang(el, TGT_LANG, TGT_DIR));
+}
+
+{% include '_html_escape.js' %}
+// Read-only preview helper: HTML-escape, then turn inline-fidelity placeholder
+// tokens (⟦r1⟧, ⟦g1⟧…⟦/g1⟧, ⟦x1⟧) into compact tag chips. Mirrors the server
+// `tagchips` filter so concordance/TM previews never show raw ⟦ ⟧. NEVER used to
+// fill the editable target textarea - that must keep literal tokens.
+function chips(s) {
+  const str = String(s == null ? '' : s);
+  const closed = new Set();
+  let mm; const re = /⟦(\/?)([a-z]?)(\d+)⟧/g;
+  while ((mm = re.exec(str))) { if (mm[1]) closed.add(mm[3]); }
+  return esc(str).replace(re, (_all, slash, k, num) => {
+    const kind = slash ? 'close' : (closed.has(num) ? 'open' : 'point');
+    const title = slash ? 'formatting tag (close)' : (kind === 'point' ? 'formatting tag' : 'formatting tag (open)');
+    return `<span class="tag-chip ${kind}" title="${title}">${slash}${k}${num}</span>`;
+  });
+}
+function elapsed(segId) { const t = focusAt[segId]; return t ? Date.now() - t : 0; }
+
+// Focus the next textarea whose row is NOT yet approved (confirm-and-advance,
+// item 3). Wrap → none left returns false so the caller can flash the progress bar.
+function focusNextUnconfirmed(fromIdx) {
+  const tas = textareas();
+  for (let j = fromIdx + 1; j < tas.length; j++) {
+    const chip = document.getElementById('st-' + tas[j].dataset.seg);
+    if (!chip || !chip.classList.contains('st-approved')) { tas[j].focus(); return true; }
+  }
+  edAnnouncer.say('No unconfirmed segments left on this page.');
+  return false;
+}
+
+// The alternates shortcut must never swallow a keystroke that TYPES a letter.
+// Windows / Linux: Alt+A, matched by the typed letter a / A with no Ctrl (AltGr is
+// reported as Ctrl+Alt on Windows and types 'ą' on Polish layouts), no Meta and no
+// AltGraph. macOS: Option is the character layer there (Option+A types 'å' on US and
+// German layouts, 'ą' on Polish Pro), and Ctrl+Option is VoiceOver's own modifier
+// (VO+A reads everything, so the page never sees it: a11y T11). The Mac shortcut is
+// Ctrl+Shift+A: no Option (types nothing on any Mac layout), not a VoiceOver, Safari
+// or Chrome command, matched by the physical key. The same predicate serves the
+// textarea, the row's other controls and the popover itself.
+function onMac() {
+  const platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+  return /mac|iphone|ipad|ipod/i.test(platform);
+}
+function isAltA(e) {
+  if (e.metaKey) return false;
+  if (onMac()) return e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyA';
+  return e.altKey && !e.ctrlKey && !(e.getModifierState && e.getModifierState('AltGraph')) &&
+    (e.key === 'a' || e.key === 'A');
+}
+function altAName() {
+  return onMac() ? 'Ctrl+Shift+A' : 'Alt+A';
+}
+
+textareas().forEach((ta, i) => {
+  const segId = ta.dataset.seg;
+  ta.addEventListener('focus', () => { focusAt[segId] = Date.now(); autosize(ta); });
+  ta.addEventListener('input', () => {
+    markDirty(segId);   // unsaved edit (one DOM write per edit, not per keystroke)
+    autosize(ta);
+  });
+  ta.addEventListener('blur', () => { save(segId, elapsed(segId)); });
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      // Ctrl/⌘+Enter = approve + advance to the next UNCONFIRMED row. Only when
+      // approved: a row that was not saved or not approved keeps focus.
+      e.preventDefault();
+      approve(segId).then(data => { if (data && !focusNextUnconfirmed(i)) flashProgress(); });
+    } else if (e.key === 'Enter' && !e.shiftKey) {
+      // Plain Enter = save + next-any (legacy behavior, unchanged). A failure is
+      // announced even on a row that already failed: Enter is how you retry.
+      e.preventDefault(); save(segId, elapsed(segId), false, true);
+      const next = textareas()[i + 1]; if (next) next.focus();
+    } else if (isAltA(e)) {
+      e.preventDefault();
+      const btn = ta.closest('tr').querySelector('[data-action="alternates"]'); if (btn) btn.click();
+    }
+  });
+});
+
+// Enter in the concordance box triggers the search (item 7).
+const concQ = document.getElementById('concQ');
+if (concQ) concQ.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); concordance(); }
+});
+
+// Alt+A from any other control in a row (its buttons, the Retry) opens that row's
+// alternates too. Escape with focus outside the popover (on its trigger) closes it
+// and leaves focus where it is; an outside click closes it (item 7).
+document.addEventListener('keydown', (e) => {
+  if (!e.defaultPrevented && isAltA(e) && e.target.closest && e.target.closest('.editor tbody tr')) {
+    const btn = e.target.closest('tr').querySelector('[data-action="alternates"]');
+    if (btn) { e.preventDefault(); btn.click(); }
+  }
+  if (e.key === 'Escape' && altMenu) closeAlternates(false);
+});
+document.addEventListener('click', (e) => {
+  if (altMenu && !altMenu.el.contains(e.target) && !altMenu.trigger.contains(e.target)) closeAlternates(false);
+});
+
+document.querySelectorAll('[data-csp-handler="csp-1"]').forEach(function (el) {
+  el.addEventListener('click', function () { concordance(); });
+});
+</script>
+
+{% endblock %}

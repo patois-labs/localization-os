@@ -1,0 +1,94 @@
+# Python
+.venv/
+.venv*/
+__pycache__/
+*.pyc
+*.pyo
+
+# Tool caches and coverage output
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Packaging build artifacts (from `pip install -e .` / builds, see pyproject.toml)
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Node apps under integrations/ and tools/
+node_modules/
+
+# Secrets and local runtime data: NEVER commit these.
+# data/ holds the SQLite DB, uploaded files, the encryption keyfile (.enc_key),
+# the session secret, and the DB vault. The keyfile decrypts stored API tokens,
+# so the whole directory stays local.
+.env
+.env.*
+!.env.example
+data/
+
+# Stray runtime artifacts if the app/CLI/QA-server is ever run with a data dir
+# resolved to the repo ROOT (not data/): belt-and-suspenders so a mislaunched
+# process can never sweep these into a commit.
+/loc_tms.db
+/loc_tms.db-wal
+/loc_tms.db-shm
+/.enc_key
+/.session_secret
+/.protected
+/uploads/
+
+# Editors and OS
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+suite_*.log
+
+# Agent tooling: .claude/ is local state EXCEPT the shared project settings, hooks and
+# path-scoped rules, which are part of the repository.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/rules/
+.claude/worktrees/
+
+# Scratch test files for manually exercising the app, not repo content.
+sample-docs/
+.test-tmp/
+
+# `keys changes --cursor-file` default path: a CI consumer's sync position, not
+# repo content.
+.locstudio-sync.json
+
+# Pre-gate records written by scripts/pregate.py
+.pregate/
+
+# Retained local dependency audit evidence and CI-only test tools
+_audit-results/
+image-freeze*.txt
+.ci-check-tools/
+scan-reports/
+
+# Lock refresh scratch directories
+.lock-refresh/
+.lock-postgres/
+.lock-ldap/
+.lock-saml/
+
+# Isolated test instances stood up by scripts/test-instance.cmd (throwaway data dirs,
+# minted API keys, server logs): never repo content.
+.test-instances/
+
+# Offline UX verification output
+.ux-logs/
+
+# Official TBX-Basic files for strict validation: fetched by scripts/fetch_tbx_schemas.py, never committed.
+app/resources/tbx/*.rng
+app/resources/tbx/*.sch
+app/resources/tbx/*.tbx

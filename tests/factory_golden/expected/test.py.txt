@@ -1,0 +1,141 @@
+"""WidgetCMS connector — offline verify suite (GENERATED SKELETON).
+
+Fill the FAKE and wire the taxonomy tests before merge. This file is a standalone script:
+run directly (`python tests/verify_widgetcms.py`) or via the pytest wrapper
+(tests/test_verify_suites.py runs it as a subprocess and requires the final 'OK' line).
+
+TAXONOMY G — THE FAKE MUST MODEL THE PLATFORM'S REAL VALIDATION, or every payload
+assertion is vacuous. The Strapi fixture-dodge lesson: the first Strapi fake stored ONE
+representation per (type, id, locale) with a merging update, which simultaneously hid the
+draft/published split (C) AND meant the "omitted fields survive" assertion (B) would have
+PASSED with the merge logic DELETED. Make FakeWidgetCMSConnector 400/409/422 exactly as the
+real API does (unknown key, stale version, size cap), and model its existence-probe
+semantics faithfully — then the A-H tests below actually bite.
+
+The generic contract shapes (inventory §3 "generatable generically") are stubbed and named
+below; the platform-specific parts (fake validation, field-selection heuristics, format
+fidelity, concurrency, anti-loop) stay hand-written per §7b.
+
+ASCII-only prints; final line is 'verify_widgetcms OK'.
+"""
+import os
+import sys
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(_ROOT)
+sys.path.insert(0, _ROOT)
+from tests._bootstrap import init_env  # noqa: E402
+init_env("loctms_widgetcms_")
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from app.main import app  # noqa: E402
+
+
+# ============================================================================
+# FAKE-TODO: model WidgetCMS's real write-acceptance semantics here.
+# Until this enforces the platform's validation, the payload tests are vacuous (taxonomy G).
+# ============================================================================
+class FakeWidgetCMSConnector:
+    """A fake WidgetCMS over httpx.MockTransport. TODO: model the real store +
+    validator (reject unknown/system keys, model versioning/existence exactly as the API)."""
+
+    def __init__(self, **kw):
+        raise NotImplementedError(
+            "FakeWidgetCMSConnector: model the platform's real validation before the "
+            "taxonomy A-H tests below can be non-vacuous (see the module docstring).")
+
+    def transport(self):
+        raise NotImplementedError("FakeWidgetCMSConnector.transport")
+
+
+# ---- generic contract tests (inventory §3 generatable list) — WIRE THESE IN ----
+# Each asserts a shape shared by every connector; fill the fake, then call it from main().
+def _test_scope_escape_A():
+    """TAXONOMY A: a table of hostile article_ids ('..','%2e%2e%2f',unicode,NUL,CR/LF,
+    '?','#', and a PREFIX of a configured value) are REFUSED with ZERO external writes."""
+    raise NotImplementedError("wire _test_scope_escape_A once FakeWidgetCMSConnector exists")
+
+
+def _test_held_back_never_overwrites_B():
+    """TAXONOMY B: a held-back (NEEDS_REVIEW) unit never overwrites an existing stored
+    translation with the source; prove the stored translation survives on UPDATE."""
+    raise NotImplementedError("wire _test_held_back_never_overwrites_B")
+
+
+def _test_second_run_steady_state_C():
+    """TAXONOMY C: the existence probe reads the same version/state the write writes, so a
+    second run over unchanged source is fully SKIPPED (no re-translate loop)."""
+    raise NotImplementedError("wire _test_second_run_steady_state_C")
+
+
+def _test_shared_cap_no_starvation_E():
+    """TAXONOMY E: the shared cap round-robins across containers; assert DISTRIBUTION
+    (min per container), never just the total (a `len == N` assert locks starvation in)."""
+    raise NotImplementedError("wire _test_shared_cap_no_starvation_E")
+
+
+def _test_write_budget_ceiling_H():
+    """TAXONOMY H: MAX_WRITES_PER_RUN=1 stops after exactly one external write."""
+    raise NotImplementedError("wire _test_write_budget_ceiling_H")
+
+
+def _test_egress_guard_fires_H():
+    """TAXONOMY H: with egress_guard.egress_is_real monkeypatched True, a mock-MT run is
+    refused and performs NO external writes."""
+    raise NotImplementedError("wire _test_egress_guard_fires_H")
+
+
+def _test_parity_surfaces_H():
+    """TAXONOMY H: the four surfaces exist — REGISTRY membership, the /connectors tile, the
+    /api route, and the CLI leaf. This one runs generically the moment `new` wired the
+    touchpoints, so it is CALLED by main() below as a real smoke test."""
+    from app.services.connectors import REGISTRY
+    assert "widgetcms" in REGISTRY, "widgetcms missing from REGISTRY"
+    c = TestClient(app)
+    assert "WidgetCMS" in c.get("/connectors").text, "tile missing on /connectors"
+    from app.cli.__main__ import build_parser
+    leaves = _leaf_paths(build_parser())
+    assert "connector widgetcms-translate" in leaves, "CLI leaf missing"
+    from starlette.routing import Route
+    from app.web._routes import walk_routes
+    api_paths = {r.path for r in walk_routes(app) if isinstance(r, Route)}
+    assert "/api/connectors/{cid}/widgetcms/translate" in api_paths, "/api route missing"
+    print("  parity: REGISTRY + /connectors tile + /api route + CLI leaf")
+
+
+# TODO(builder): as you implement FakeWidgetCMSConnector, call each _test_* above from main()
+# and delete it from this pending list. The suite must NOT ship with these unwired.
+_PENDING_TAXONOMY_TESTS = (
+    "_test_scope_escape_A", "_test_held_back_never_overwrites_B",
+    "_test_second_run_steady_state_C", "_test_shared_cap_no_starvation_E",
+    "_test_write_budget_ceiling_H", "_test_egress_guard_fires_H",
+)
+
+
+def main():
+    _test_parity_surfaces_H()
+    # A freshly-generated skeleton FAILS here BY DESIGN: it must not ship a green suite that
+    # asserts nothing about the platform (taxonomy G). Implement FakeWidgetCMSConnector, wire
+    # each _test_* into main(), and empty _PENDING_TAXONOMY_TESTS. Only then does it pass.
+    assert not _PENDING_TAXONOMY_TESTS, (
+        "verify_widgetcms is a GENERATED SKELETON: build FakeWidgetCMSConnector to model the "
+        "platform's real validation, wire the taxonomy tests (" + ", ".join(_PENDING_TAXONOMY_TESTS)
+        + "), then clear _PENDING_TAXONOMY_TESTS. It fails until then by design.")
+    print("verify_widgetcms OK")
+
+
+def _leaf_paths(parser, prefix=""):
+    import argparse
+    out = set()
+    subs = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+    if not subs:
+        return {prefix} if prefix else set()
+    for sp in subs:
+        for name, subparser in sp.choices.items():
+            out |= _leaf_paths(subparser, f"{prefix} {name}".strip())
+    return out
+
+
+if __name__ == "__main__":
+    main()

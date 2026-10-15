@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Localization OS default segmentation ruleset (SRX 2.0).
+
+  This ruleset is engineered to reproduce, as closely as practical, the behavior
+  of the LEGACY regex splitter in app/services/segment.py so that turning the SRX
+  path on (srx_enabled=1, srx_file blank) does not regress existing segmentation.
+
+  Legacy splitter (for reference):
+    _SENT_SPLIT = (?<=[.!?])\s+(?=["'(\[A-Z0-9])   # break after . ! ? + space
+                                                   #   when next looks like a
+                                                   #   sentence start (quote /
+                                                   #   bracket / A-Z / 0-9)
+    _CJK_SPLIT  = (?<=[。！？])                      # break after any CJK terminator
+
+  Mapped here as two break rules plus the abbreviation no-break rules
+  (version 2). Boundaries land before the afterbreak text; Localization OS strips each segment, so leading/trailing whitespace is normalized
+  away exactly as the legacy .strip() did.
+
+  cascade="yes": the base "Default" rules apply to EVERY locale (the catch-all
+  languagemap ".*"), and locale-specific rulesets that precede it (e.g. Japanese)
+  contribute ADDITIONAL rules. Ordering: specific patterns first, ".*" last.
+
+  ABBREVIATIONS (version 2, decision 15, 2026-10-11): the built-in splitter no
+  longer breaks after common abbreviations ("e.g.", "incl.", "ext.", "Mr.", "Dr.",
+  "vs.", "Max. 5", "No. 7", single-letter initials, and per-language ones such as
+  German "z. B." / "bzw.", French "p. ex.", Spanish "Sra."). The
+  break="no" rules below are generated from segment._ABBREV_RULES and must stay
+  identical to it (tests/verify_srx.py and tests/verify_segment_abbrev.py compare
+  the two). "etc." is deliberately absent: it ends real sentences.
+  The version 1 ruleset (no abbreviation rules) ships as default_v1.srx so a
+  document stamped with its hash still re-splits exactly as it was imported.
+-->
+<srx xmlns="http://www.lisa.org/srx20" version="2.0">
+  <header segmentsubflows="yes" cascade="yes">
+    <formathandle type="start" include="no"/>
+    <formathandle type="end" include="yes"/>
+    <formathandle type="isolated" include="no"/>
+  </header>
+  <body>
+    <languagerules>
+      <!-- Japanese/CJK-style: break after any CJK sentence terminator, always.
+           Mirrors _CJK_SPLIT. Applies to ja.* via the maprule below AND (through
+           cascade) is also covered by the Default CJK rule for other locales. -->
+      <languagerule languagerulename="Japanese">
+        <rule break="yes">
+          <beforebreak>[。！？]</beforebreak>
+          <afterbreak></afterbreak>
+        </rule>
+      </languagerule>
+
+      <!-- German abbreviations (no break); cascade puts them before Default. -->
+      <languagerule languagerulename="German">
+        <rule break="no">
+          <beforebreak>(?&lt;![\w.])z\.</beforebreak>
+          <afterbreak>\s?B\.</afterbreak>
+        </rule>
+        <rule break="no">
+          <beforebreak>(?&lt;![\w.])(?:(?i:z\.\s?B|d\.\s?h|u\.\s?a|bzw|ggf|evtl|inkl|zzgl|vgl|bspw|sog)|Hr|Fr)\.</beforebreak>
+          <afterbreak>\s</afterbreak>
+        </rule>
+        <rule break="no">
+          <beforebreak>(?&lt;![\w.])(?i:abs|s)\.</beforebreak>
+          <afterbreak>\s+[0-9]</afterbreak>
+        </rule>
+      </languagerule>
+
+      <!-- French abbreviations (no break); cascade puts them before Default. -->
+      <languagerule languagerulename="French">
+        <rule break="no">
+          <beforebreak>(?&lt;![\w.])(?:(?i:p\.\s?ex|c\.-à-d|env)|MM)\.</beforebreak>
+          <afterbreak>\s</afterbreak>
+        </rule>
+      </languagerule>
+
+      <!-- Spanish abbreviations (no break); cascade puts them before Default. -->
+      <languagerule languagerulename="Spanish">
+        <rule break="no">
+          <beforebreak>(?&lt;![\w.])EE\.</beforebreak>
+          <afterbreak>\s?UU\.</afterbreak>
+        </rule>
+        <rule break="no">
+          <beforebreak>(?&lt;![\w.])(?:Sr|Sra|Srta|Dra|Ud|Uds|(?i:aprox|p\.\s?ej))\.</beforebreak>
+          <afterbreak>\s</afterbreak>
+        </rule>
+        <rule break="no">
+          <beforebreak>(?&lt;![\w.])(?i:pág|núm)\.</beforebreak>
+          <afterbreak>\s+[0-9]</afterbreak>
+        </rule>
+      </languagerule>
+
+      <!-- Portuguese abbreviations (no break); cascade puts them before Default. -->
+      <languagerule languagerulename="Portuguese">
+        <rule break="no">
+          <beforebreak>(?&lt;![\w.])(?:Sr|Sra|Srta|Dra|Ud|Uds|(?i:aprox|p\.\s?ej))\.</beforebreak>
+          <afterbreak>\s</afterbreak>
+        </rule>
+        <rule break="no">
+          <beforebreak>(?&lt;![\w.])(?i:pág|núm)\.</beforebreak>
+          <afterbreak>\s+[0-9]</afterbreak>
+        </rule>
+      </languagerule>
+
+      <!-- Italian abbreviations (no break); cascade puts them before Default. -->
+      <languagerule languagerulename="Italian">
+        <rule break="no">
+          <beforebreak>(?&lt;![\w.])(?:Sig|Dott|Ing|Avv)\.</beforebreak>
+          <afterbreak>\s</afterbreak>
+        </rule>
+        <rule break="no">
+          <beforebreak>(?&lt;![\w.])(?i:pag)\.</beforebreak>
+          <afterbreak>\s+[0-9]</afterbreak>
+        </rule>
+      </languagerule>
+
+      <!-- Dutch abbreviations (no break); cascade puts them before Default. -->
+      <languagerule languagerulename="Dutch">
+        <rule break="no">
+          <beforebreak>(?&lt;![\w.])(?i:bijv|bv|o\.a|d\.w\.z|i\.p\.v|m\.b\.t)\.</beforebreak>
+          <afterbreak>\s</afterbreak>
+        </rule>
+        <rule break="no">
+          <beforebreak>(?&lt;![\w.])(?i:blz)\.</beforebreak>
+          <afterbreak>\s+[0-9]</afterbreak>
+        </rule>
+      </languagerule>
+
+      <!-- Catch-all default, applied to every locale via the ".*" maprule. -->
+      <languagerule languagerulename="Default">
+        <!-- Abbreviations every locale shares (no break). Before the break rules:
+             the first matching rule decides a position. -->
+        <rule break="no">
+          <beforebreak>(?&lt;![\w.])(?:(?i:e\.g|i\.e|incl|excl|ext|approx|appr|vs|cf|resp|esp|viz)|ca)\.</beforebreak>
+          <afterbreak>\s</afterbreak>
+        </rule>
+        <rule break="no">
+          <beforebreak>(?&lt;![\w.])(?:Mr|Mrs|Ms|Mx|Dr|Prof|Rev|Hon|Gen|Capt|Sgt|Lt|Messrs)\.</beforebreak>
+          <afterbreak>\s</afterbreak>
+        </rule>
+        <rule break="no">
+          <beforebreak>(?&lt;![\w.])(?i:no|nos|nr|max|min|fig|figs|vol|vols|pp|p|ch|sec|art|tel|ph|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\.</beforebreak>
+          <afterbreak>\s+[0-9]</afterbreak>
+        </rule>
+        <rule break="no">
+          <beforebreak>(?&lt;![\w.])[A-HJ-Z]\.</beforebreak>
+          <afterbreak>\s+(?!(?:The|This|That|These|Those|Then|There|They|Their|We|Our|It|Its|In|If|Is|You|Your|He|His|Her|She|My|And|But|So|Or|For|When|What|Why|How|Where|Who|Which|Please|Next|Now|Also|However|After|Before|Once|To|On|At|By|With|As|An|All|Each|Some|Click|Select|See|Note|Use|Do|Not|No|Yes|Let|Here|Der|Die|Das|Den|Dem|Ein|Eine|Es|Er|Sie|Wir|Ich|Und|Aber|Dann|Bitte|Le|Les|Il|Elle|Ils|Nous|Vous|Je|Ce|Cette|Puis|Ensuite|Et|Mais|El|Los|Las|Una|Un|Ella|Luego|Pero|Os|Um|Uma|Ele|Gli|Lo|Poi|Ma|Het|Een|Dit|Dat|Wij|Ik|Dan|Maar)\b|[AI]\s)[A-Z]</afterbreak>
+        </rule>
+        <!-- Latin sentence break: after . ! ? followed by whitespace and a
+             sentence-start character (quote, open bracket, A-Z, or digit).
+             Mirrors _SENT_SPLIT exactly (ASCII A-Z / 0-9, not \p{Lu}/\p{N}). -->
+        <rule break="yes">
+          <beforebreak>[.!?]</beforebreak>
+          <afterbreak>\s+["'(\[A-Z0-9]</afterbreak>
+        </rule>
+        <!-- CJK terminators break unconditionally. Mirrors _CJK_SPLIT. -->
+        <rule break="yes">
+          <beforebreak>[。！？]</beforebreak>
+          <afterbreak></afterbreak>
+        </rule>
+      </languagerule>
+    </languagerules>
+
+    <maprules>
+      <!-- Japanese source contributes the Japanese rule first, then (cascade)
+           the Default rules. -->
+      <languagemap languagepattern="[Jj][Aa].*" languagerulename="Japanese"/>
+      <languagemap languagepattern="[Dd][Ee]([-_].*)?$" languagerulename="German"/>
+      <languagemap languagepattern="[Ff][Rr]([-_].*)?$" languagerulename="French"/>
+      <languagemap languagepattern="[Ee][Ss]([-_].*)?$" languagerulename="Spanish"/>
+      <languagemap languagepattern="[Pp][Tt]([-_].*)?$" languagerulename="Portuguese"/>
+      <languagemap languagepattern="[Ii][Tt]([-_].*)?$" languagerulename="Italian"/>
+      <languagemap languagepattern="[Nn][Ll]([-_].*)?$" languagerulename="Dutch"/>
+      <!-- Everything else (and, via cascade, every locale above too) uses Default. -->
+      <languagemap languagepattern=".*" languagerulename="Default"/>
+    </maprules>
+  </body>
+</srx>

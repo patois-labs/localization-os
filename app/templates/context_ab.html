@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ doc.filename }} - Context A/B{% endblock %}
+{% block content %}
+<div class="documents-page">
+
+<p><a href="/documents/{{ doc.id }}" class="back"><span aria-hidden="true">←</span> {{ doc.filename }}</a></p>
+
+<section class="document-heading">
+  {% set page_title %}Context A/B measurement - {{ ab.locale }}{% endset %}
+  {{ m.page_header(page_title) }}
+  <p class="muted">The same segments translated twice - context <strong>ON</strong> vs
+    <strong>OFF</strong> - then scored by the QE judge. Everything else is held constant,
+    so the delta is attributable to context. Ship numbers, not vibes.</p>
+  <p>
+    Provider: <strong>{{ ab.provider }}</strong>{% if ab.model %} / {{ ab.model }}{% endif %}
+    · Judge: {{ ab.qe_provider }}
+    · N = {{ ab.n }} of {{ ab.n_available }} translatable (cap {{ ab.max_segments }})
+    {% if ab.is_mock %}
+      · <span class="badge warn">offline mock - structural test only</span>
+    {% else %}
+      · <span class="badge exact">live measurement</span>
+    {% endif %}
+  </p>
+  {% if ab.is_mock %}
+  <p class="help">MockProvider is deterministic and context-blind, so both arms
+    produce identical output and the delta is ~0 by construction - this confirms the
+    plumbing works, <strong>not</strong> translation quality. Point <code>--provider</code> /
+    this page's <code>provider</code> at a live engine for a real number.</p>
+  {% endif %}
+  {% if not ab.context_present %}
+  <p class="muted">No context package resolved for this document - both arms are identical.
+    Set a document context override or a matching context card first.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Result</h2>
+  {% set column_0 %}Dimension{% endset %}
+  {% set column_1 %}Context ON{% endset %}
+  {% set column_2 %}Context OFF{% endset %}
+  {% set column_3 %}Delta{% endset %}
+{% call m.data_table('Result', [{'label': column_0}, {'label': column_1}, {'label': column_2}, {'label': column_3}]) %}
+      <tr>
+        <td>Overall QE (mean, 0–100)</td>
+        <td class="data-mono">{{ ab.on.mean_qe if ab.on.mean_qe is not none else 'n/a' }}
+          <span class="muted small">(scored {{ ab.on.scored }}, skipped {{ ab.on.skipped }})</span></td>
+        <td class="data-mono">{{ ab.off.mean_qe if ab.off.mean_qe is not none else 'n/a' }}
+          <span class="muted small">(scored {{ ab.off.scored }}, skipped {{ ab.off.skipped }})</span></td>
+        <td class="data-mono">{% if ab.delta.mean_qe is not none %}
+          <strong class="{% if ab.delta.mean_qe > 0 %}good{% elif ab.delta.mean_qe < 0 %}bad{% endif %}">
+            {{ '%+.2f' % ab.delta.mean_qe }}</strong>{% else %}n/a{% endif %}</td>
+      </tr>
+      <tr>
+        <td>Terminology adherence (DNT preserved, 0–1)</td>
+        <td class="data-mono">{{ ab.on.term_adherence if ab.on.term_adherence is not none else 'n/a' }}
+          <span class="muted small">({{ ab.on.term_applicable - ab.on.term_violations }}/{{ ab.on.term_applicable }})</span></td>
+        <td class="data-mono">{{ ab.off.term_adherence if ab.off.term_adherence is not none else 'n/a' }}
+          <span class="muted small">({{ ab.off.term_applicable - ab.off.term_violations }}/{{ ab.off.term_applicable }})</span></td>
+        <td class="data-mono">{% if ab.delta.term_adherence is not none %}{{ '%+.4f' % ab.delta.term_adherence }}{% else %}n/a{% endif %}</td>
+      </tr>
+    {% endcall %}
+  <p class="mt"><strong>Verdict:</strong> {{ ab.verdict }}</p>
+</section>
+
+{% if ab.segments %}
+<section class="card">
+  <h2>Per-segment</h2>
+  <div class="comparison-results">
+  {% set column_0 %}#{% endset %}
+  {% set column_1 %}Source{% endset %}
+  {% set column_2 %}ON → target (QE){% endset %}
+  {% set column_3 %}OFF → target (QE){% endset %}
+{% call m.data_table('Per-segment', [{'label': column_0}, {'label': column_1}, {'label': column_2}, {'label': column_3}]) %}
+      {% for s in ab.segments %}
+      <tr>
+        <td class="data-mono">{{ s.index }}</td>
+        <td class="small"><span{{ project.source_locale|langattrs }}>{{ s.source }}</span></td>
+        <td class="small"><span{{ ab.locale|langattrs }}>{{ s.on.target }}</span>
+          <span class="badge {% if s.on.skipped %}warn{% else %}exact{% endif %}">
+            {% if s.on.skipped %}skipped{% else %}{{ s.on.score }}{% endif %}</span></td>
+        <td class="small"><span{{ ab.locale|langattrs }}>{{ s.off.target }}</span>
+          <span class="badge {% if s.off.skipped %}warn{% else %}exact{% endif %}">
+            {% if s.off.skipped %}skipped{% else %}{{ s.off.score }}{% endif %}</span></td>
+      </tr>
+      {% endfor %}
+    {% endcall %}</div>
+</section>
+{% endif %}
+
+</div>
+{% endblock %}

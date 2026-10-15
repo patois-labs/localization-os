@@ -1,0 +1,24 @@
+# Rails i18n fixture (hand-written for verify_yaml_filter.py).
+en:
+  activerecord:
+    errors:
+      messages:
+        # Shown under a required field
+        blank: "can't be blank"
+        too_long:
+          one: is too long (maximum is %{count} character)
+          other: is too long (maximum is %{count} characters)
+  inbox:
+    messages:
+      zero: No messages
+      one: One message
+      other: "%{count} messages"
+  date:
+    abbr_day_names:
+    - Sun
+    - Mon
+    formats:
+      default: "%Y-%m-%d"
+  helpers:
+    submit:
+      create: Create %{model}

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE task PUBLIC "-//OASIS//DTD DITA Task//EN" "task.dtd">
+<task id="print" xml:lang="en-US">
+  <title>Printing a <ph>report</ph></title>
+  <shortdesc>Send the report to   a
+    printer.</shortdesc>
+  <!-- authoring note: keep this comment -->
+  <taskbody>
+    <context><p>Use the <codeph>lpr -P {0}</codeph> command or see <xref href="other.dita"/>.<indexterm>printing<indexterm>reports</indexterm></indexterm></p>
+      <p conref="shared.dita#shared/warning"/>
+      <p translate="no">Internal build 42</p>
+      <draft-comment>Check with legal</draft-comment>
+      <p>Press <uicontrol>Print</uicontrol> &amp; wait &lt;5&gt; seconds for &product;.</p>
+    </context>
+    <steps>
+      <step><cmd>Click <b>OK</b>.</cmd></step>
+    </steps>
+    <example><codeblock xml:space="preserve">lpr -P office
+  report.txt</codeblock><image href="printer.png" alt="A laser printer"/></example>
+  </taskbody>
+</task>

@@ -1,0 +1,583 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}New workflow{% endblock %}
+{% block content %}
+<div class="ux-workflows">
+
+{# Workflow Studio Wave B: a two-pane layout - the create flow (main) beside the AIDS
+   RAIL of click-to-insert intelligence. Everything is scoped under .wf-studio (leak
+   lesson). The page NEVER requires JS: every rail item renders its full insert text as
+   copyable plain text, and the customer panel refreshes via a plain GET form.
+
+   2026-09-03 visual cleanup (pre-demo): the rail is now a TABBED toolbox that
+   sits beside the description box instead of one long column. The tabs are a pure
+   enhancement: the scoped script at the bottom adds `wf-tabbed` to the wrapper and
+   shows one panel at a time; without JS every panel renders stacked exactly as before.
+   The "What we already know" customer panel is promoted to the FIRST tab and becomes
+   the default tab once a customer is selected. #}
+{% set _default_tab = 'know' if customer_facts is not none else 'shapes' %}
+<div class="wf-studio" data-default-tab="{{ _default_tab }}">
+<div class="wf-studio-main">
+
+<section class="wf-intro">
+  {% set workflow_title %}Create a new workflow{% endset %}
+  {{ m.page_header(workflow_title) }}
+  <p class="muted">Describe the workflow in plain language and an LLM drafts every step onto a
+  review screen; nothing is created until you confirm. The building aids beside the box drop
+  in shapes, presets, placeholders, and what we already know about a customer.
+  <a href="/workflows"><span aria-hidden="true">←</span> Back to all workflows</a></p>
+</section>
+
+{# The RBAC gate is belt-and-braces: the GET /workflows/new route already redirects a
+   non-AI viewer to the dashboard, and every form here POSTs to a route that enforces
+   the same can_tune_ai gate server-side. #}
+<section class="card wf-create"
+         data-spotlight-anchor="workflow"
+         data-spotlight-title="{{ t(request, 'page.onboarding.step_workflow_title') }}"
+         data-spotlight-desc="{{ t(request, 'page.onboarding.spot_workflow_target') }}">
+  <h2>Design a workflow
+    <button type="button" class="wf-info-btn"
+      title="Type what the workflow should do (the steps, models, an LQA gate, a review step) and an LLM fills the builder for you. Languages come from the project it runs on. You review and edit every value before anything is created."
+      aria-label="About Design a workflow: type what the workflow should do (the steps, models, an LQA gate, a review step) and an LLM fills the builder for you. Languages come from the project it runs on. You review and edit every value before anything is created."><span aria-hidden="true">i</span></button>
+  </h2>
+  <form method="post" action="/workflows/author" class="form" data-preserve-draft="workflow-describe">
+{% call m.form_section('workflows_new-author', 'Design a workflow') %}
+    {% include "_csrf.html" %}
+    <label>Detail each step of the workflow below
+      <textarea name="description" id="wf-describe-desc" rows="7" spellcheck="false"
+        placeholder="3 steps: translate, then an LQA that passes at 90%, then a review step that fixes the errors. Use claude for marketing content for Acme."></textarea>
+      <span class="wf-describe-hint muted small">Click any building aid to insert it at the cursor.</span>
+    </label>
+    <div class="wf-create-row">
+      <label>Use provider
+        <select name="provider" id="wf-describe-provider"><option value="">default</option>
+          {% for p in providers %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+          {% for value, label in engine_options(request) %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+        </select>
+      </label>
+      {# Authoring MODEL picker: fetch-driven from the provider (POST /workflows/models,
+         the same seam Add-a-step uses), degrading to a manual text input without JS.
+         Only the ENABLED control (select OR manual) submits its shared name="model".
+         Blank = the provider's default (a keyed cloud provider resolves one server-
+         side, so the empty-model failure never reaches the operator). #}
+      <label class="wfmodel" data-provider="wf-describe-provider"><span>Model <span class="muted">(blank = default)</span></span>
+        <select name="model" class="wfmodel-select" disabled style="display:none"></select>
+        <input aria-label="Model id" type="text" name="model" class="wfmodel-manual" placeholder="(default)" />
+        <span class="row-actions">
+          <button type="button" class="small ghost wfmodel-fetch" data-busy-label="{{ t(request, 'busy.fetching_models') }}">Fetch models</button>
+          <button type="button" class="small ghost wfmodel-toggle"><span class="wfmodel-toggle-label">Type id manually</span></button>
+          <span class="wfmodel-out muted small"></span>
+        </span>
+      </label>
+    </div>
+    <div class="wf-create-actions">
+      {# Busy label: the POST runs the LLM draft as a background author job and waits up
+         to 25 s for it (app/web/author_jobs.py); a slower draft redirects to a progress
+         page. The button says what it is doing and counts meanwhile. #}
+      <button type="submit" data-busy-label="{{ t(request, 'busy.designing_workflow') }}">Design workflow</button>
+      <span class="muted small">Drafts the steps onto a review screen first.</span>
+    </div>
+  {% endcall %}
+</form>
+  <script nonce="{{ csp_nonce() }}">
+  // Per-form model dropdown (same pattern as the builder/review pages). The provider
+  // <select> named in data-provider drives a fetch of /workflows/models; without JS
+  // the manual text input submits (blank = provider default) -- graceful degradation.
+  (function () {
+    var wrap = document.querySelector('.np-describe-wf, form[action="/workflows/author"] .wfmodel');
+    if (!wrap) return;
+    var modelFetchGeneration = 0;
+    function els() {
+      return { sel: wrap.querySelector('.wfmodel-select'),
+               man: wrap.querySelector('.wfmodel-manual'),
+               out: wrap.querySelector('.wfmodel-out'),
+               lbl: wrap.querySelector('.wfmodel-toggle-label'),
+               prov: document.getElementById(wrap.dataset.provider) };
+    }
+    function useList() { var e = els(); if (!e.sel) return;
+      e.man.disabled = true; e.man.style.display = 'none';
+      e.sel.disabled = false; e.sel.style.display = '';
+      if (e.lbl) e.lbl.textContent = 'Type id manually'; }
+    function useManual() { var e = els(); if (!e.sel) return;
+      e.sel.disabled = true; e.sel.style.display = 'none';
+      e.man.disabled = false; e.man.style.display = '';
+      if (e.lbl) e.lbl.textContent = 'Pick from list'; }
+    function toggle() { var e = els();
+      if (e.man.disabled) { e.man.value = e.sel.value || e.man.value; useManual(); }
+      else { fetchModels(false); } }
+    function requestIsCurrent(ref, generation) { var e = els();
+      return generation === modelFetchGeneration &&
+        (((e.prov && e.prov.value) || '') === ref); }
+    async function fetchModels(silent, refresh) {
+      var generation = ++modelFetchGeneration;
+      var e = els(); var ref = e.prov ? e.prov.value : '';
+      if (!ref) { if (!silent) e.out.textContent = 'provider default -- leave blank, or type an id manually.'; useManual(); return; }
+      if (!silent) e.out.textContent = 'fetching models...';
+      var d;
+      try {
+        d = { models: await window.LocModelCatalog.get(ref, { refresh: !!refresh }) };
+      } catch (err) {
+        if (!requestIsCurrent(ref, generation)) return;
+        e.out.textContent = 'could not fetch models -- type an id manually.';
+        useManual(); return;
+      }
+      if (!requestIsCurrent(ref, generation)) return;
+      if (!d.models || !d.models.length) {
+        e.out.textContent = 'no model list for this provider -- type an id manually (blank = provider default).';
+        useManual(); return; }
+      var cur = ((e.man.value || e.sel.value) || '').trim();
+      e.sel.textContent = '';
+      var def = document.createElement('option'); def.value = ''; def.textContent = '(default)'; e.sel.appendChild(def);
+      d.models.forEach(function (mm) { var o = document.createElement('option'); o.value = mm; o.textContent = mm; e.sel.appendChild(o); });
+      if (cur && d.models.indexOf(cur) === -1) {
+        var o = document.createElement('option'); o.value = cur; o.textContent = cur + ' (current)';
+        e.sel.insertBefore(o, e.sel.children[1] || null); }
+      e.sel.value = cur; useList();
+      e.out.textContent = d.models.length + ' model(s) -- pick one, or (default).';
+    }
+    var e = els();
+    wrap.querySelector('.wfmodel-fetch').addEventListener('click', function () {
+      var p = fetchModels(false, true);
+      if (window.LocBusy) window.LocBusy.wrap(this, p);
+    });
+    wrap.querySelector('.wfmodel-toggle').addEventListener('click', function () { toggle(); });
+    if (e.prov) e.prov.addEventListener('change', function () { fetchModels(true); });
+  })();
+  </script>
+</section>
+
+{# Secondary paths, side by side in ONE compact card: the plain manual form
+   (name/scope/customer -> POST /workflows) and the multilingual group create
+   (-> POST /workflow-groups). Each is a quiet zero-JS <details> disclosure holding
+   its own independent <form>; no JS switches a form action, so both work exactly
+   the same with JS on or off (this repo requires graceful no-JS degradation). #}
+<section class="card wf-other">
+  <h2 class="wf-other-h">Other ways to start</h2>
+  <div class="wf-other-grid">
+    <details class="adv">
+      <summary>Start from a blank workflow</summary>
+      <p class="muted small">Creates the workflow right away and drops you into the builder, where
+      you add and edit each step. Nothing runs until you run it.</p>
+      <form method="post" action="/workflows" class="form inline-form">
+        {% include "_csrf.html" %}
+        <label>Name <input type="text" name="name" placeholder="Marketing 3-step MT" required /></label>
+        <label>Scope
+          <select name="scope">
+            {% for s in scopes %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>Customer <span class="muted">(if customer-scoped)</span>
+          <select name="customer_id">
+            <option value="">-</option>
+            {% for c in customers %}<option value="{{ c.id }}">{{ customer_label(c) }}</option>{% endfor %}
+          </select>
+        </label>
+        <button type="submit">Create</button>
+      </form>
+    </details>
+    <details class="adv">
+      <summary>Advanced: per-language variants (workflow group)</summary>
+      <p class="muted small">Most workflows work for every language as they are. Use per-language variants only when one language needs a different prompt.</p>
+      <p class="muted small">A group holds one workflow variant per language pair. Create the
+      group, build one variant, then Copy to language pair(s) from its builder; the matching
+      variant runs automatically.</p>
+      <form method="post" action="/workflow-groups" class="form inline-form">
+        {% include "_csrf.html" %}
+        <label>New group <input type="text" name="name" placeholder="Marketing MT (multilingual)" required /></label>
+        <label>Customer <span class="muted">(optional)</span>
+          <select name="customer_id">
+            <option value="">global</option>
+            {% for c in customers %}<option value="{{ c.id }}">{{ customer_label(c) }}</option>{% endfor %}
+          </select>
+        </label>
+        <button type="submit">Create group</button>
+      </form>
+    </details>
+  </div>
+</section>
+
+</div>{# /wf-studio-main #}
+
+{# ==========================================================================
+   THE AIDS RAIL (Wave B). Every insertable control is a `.wf-ins` <button>
+   carrying the FULL text in data-insert; the scoped helper at the bottom
+   splices it into #wf-describe-desc at the cursor. Zero-JS honesty: every
+   section renders its EXACT insert text as copyable plain text - the shape
+   seed on the card face, a preset/template <details> "full text" block, and a
+   per-section "Insert lines (copy)" <details> for the pairs / glossary terms /
+   style-guide reference lines whose buttons show a shorthand face. So nothing
+   here is required to build a workflow - the rail is pure enhancement.
+
+   Each panel is a `.wf-rail-card[data-panel]`; the tab strip (hidden until JS
+   runs) switches which one is visible. Panel order = tab order.
+   ========================================================================== #}
+{% set _tpl_count = prompt_templates | length if prompt_templates else 0 %}
+{% set _ph_count = m.PLACEHOLDER_DEFS | map(attribute='tokens') | map('length') | sum %}
+<aside class="wf-studio-rail" aria-label="Workflow building aids">
+
+  <div class="wf-rail-head">
+    <h2 class="wf-rail-title">Building aids</h2>
+    <p class="wf-rail-lead muted small">Click any item to drop it into the description
+    box. No JavaScript? Each item shows its full text below - copy it in.</p>
+  </div>
+
+  <div class="wf-tabs" role="tablist" aria-label="Building aid groups" hidden>
+    <button type="button" class="wf-tab" role="tab" data-tab="know" aria-selected="false"
+            title="A customer's own language pairs, glossary terms, style guides, context, and TM">
+      Customer{% if customer_facts is not none %}{% set _ns = namespace(n=(customer_facts.pairs | length) + (customer_facts.style_guides | length)) %}{% for _g in customer_facts.glossaries %}{% set _ns.n = _ns.n + (_g.terms | length) %}{% endfor %} <span class="wf-tab-n">{{ _ns.n }}</span>{% endif %}
+    </button>
+    <button type="button" class="wf-tab" role="tab" data-tab="shapes" aria-selected="false"
+            title="One-line seeds the drafter expands into a workflow shape">
+      Shapes <span class="wf-tab-n">{{ shape_cards | length }}</span>
+    </button>
+    <button type="button" class="wf-tab" role="tab" data-tab="presets" aria-selected="false"
+            title="Built-in orchestrator role prompts">
+      Presets <span class="wf-tab-n">{{ role_presets | length }}</span>
+    </button>
+    <button type="button" class="wf-tab" role="tab" data-tab="templates" aria-selected="false"
+            title="Your saved prompt templates">
+      Templates <span class="wf-tab-n">{{ _tpl_count }}</span>
+    </button>
+    <button type="button" class="wf-tab" role="tab" data-tab="placeholders" aria-selected="false"
+            title="Engine placeholders the prompts can use">
+      Placeholders <span class="wf-tab-n">{{ _ph_count }}</span>
+    </button>
+  </div>
+
+  {# 4. WHAT WE ALREADY KNOW - a customer's assets, all click-to-insert. Honest:
+       absent facts are omitted, never faked. FIRST panel: it is the one that makes
+       the description customer-specific. #}
+  <section class="wf-rail-card wf-know" data-panel="know">
+    <h2 class="wf-rail-h">What we already know</h2>
+    {% if customer_bound %}
+      {# A bound linguist is forced to their own customer - no picker, just the name. #}
+      {% if selected_customer %}
+      <p class="wf-rail-sub muted small">For <strong>{{ selected_customer.name }}</strong>.</p>
+      {% endif %}
+    {% else %}
+      {# Staff: a plain GET form re-renders the page with ?customer_id= (zero-JS). The
+         scoped helper below also auto-submits on change; the button is the fallback. #}
+      <form method="get" action="/workflows/new" class="wf-know-picker">
+        <label>Customer
+          <select name="customer_id" class="wf-know-select">
+            <option value="">- select a customer -</option>
+            {% for c in customers %}<option value="{{ c.id }}"
+              {{ 'selected' if selected_customer_id == c.id else '' }}>{{ c.name }}</option>{% endfor %}
+          </select>
+        </label>
+        <button type="submit" class="small ghost">Show</button>
+      </form>
+    {% endif %}
+
+    {% if customer_facts is none %}
+      <p class="muted small wf-know-empty">Pick a customer to see their language pairs, glossaries,
+      style guides, context, and TM - each item one click to insert.</p>
+    {% else %}
+      {% set f = customer_facts %}
+
+      {# Language pairs - INFORMATION ONLY. A workflow takes its languages from the
+         project it runs on, so these are shown for context and are NOT inserted into the
+         description (no data-insert, no copy block). Names + codes stay visible. #}
+      {% if f.pairs %}
+      <div class="wf-know-sec">
+        <h3 class="wf-know-h">Language pairs</h3>
+        <p class="muted small">For reference. A workflow takes its languages from the
+          project it runs on, so you do not need to name one here.</p>
+        <div class="wf-chip-row">
+          {% for p in f.pairs %}
+          <span class="wf-chip" title="{{ p.insert }}">{{ p.insert }}</span>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {# Glossaries - name + term/DNT counts; each term expands to click-to-insert lines.
+         Open by default so the terms are visible the moment the customer is picked. #}
+      {% if f.glossaries %}
+      <div class="wf-know-sec">
+        <h3 class="wf-know-h">Glossaries</h3>
+        {% for g in f.glossaries %}
+        <details class="wf-know-gloss" {{ 'open' if loop.first else '' }}>
+          <summary>
+            <span class="wf-know-name">{{ g.name }}</span>
+            <span class="muted small">{{ g.term_count }} term{{ '' if g.term_count == 1 else 's' }}{% if g.dnt_count %}, {{ g.dnt_count }} DNT{% endif %}</span>
+          </summary>
+          {% if g.terms %}
+          <ul class="wf-know-terms">
+            {% for tm_ in g.terms %}
+            <li>
+              {% if tm_.dnt %}
+              <button type="button" class="wf-ins wf-term"
+                      data-insert='Never translate &quot;{{ tm_.source }}&quot;.'
+                      title="Insert a do-not-translate line">
+                <span class="wf-term-dnt">DNT</span> <span class="wf-term-src">{{ tm_.source }}</span>
+              </button>
+              {% else %}
+              <button type="button" class="wf-ins wf-term"
+                      data-insert='Use the exact term &quot;{{ tm_.target }}&quot; for &quot;{{ tm_.source }}&quot;.'
+                      title="Insert a must-use term line">
+                <span class="wf-term-src">{{ tm_.source }}</span> → <span class="wf-term-tgt">{{ tm_.target }}</span>
+              </button>
+              {% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+          {% if g.terms_truncated %}
+          <p class="muted small">Showing first {{ g.terms_shown }} of {{ g.term_count }} terms.</p>
+          {% endif %}
+          {# Zero-JS: the exact insert line for every term, copyable without JS. #}
+          <details class="wf-ins-full-wrap wf-nojs-copy">
+            <summary class="muted small">Insert lines (copy)</summary>
+            <ul class="wf-ins-lines">
+              {% for tm_ in g.terms %}<li>{% if tm_.dnt %}Never translate "{{ tm_.source }}".{% else %}Use the exact term "{{ tm_.target }}" for "{{ tm_.source }}".{% endif %}</li>{% endfor %}
+            </ul>
+          </details>
+          {% else %}
+          <p class="muted small">No terms yet.</p>
+          {% endif %}
+        </details>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {# Approved style guides - insert a reference line. #}
+      {% if f.style_guides %}
+      <div class="wf-know-sec">
+        <h3 class="wf-know-h">Style guides <span class="muted small">(approved)</span></h3>
+        <ul class="wf-rail-list">
+          {% for sg in f.style_guides %}
+          <li class="wf-ins-item">
+            <button type="button" class="wf-ins wf-styleguide"
+                    data-insert='Follow the approved style guide &quot;{{ sg.name }}&quot;.'
+                    title="Insert a style-guide reference line">
+              <span class="wf-ins-name">{{ sg.name }}</span>
+              <span class="wf-ins-preview">{{ sg.scope }}</span>
+            </button>
+          </li>
+          {% endfor %}
+        </ul>
+        <details class="wf-ins-full-wrap wf-nojs-copy">
+          <summary class="muted small">Insert lines (copy)</summary>
+          <ul class="wf-ins-lines">
+            {% for sg in f.style_guides %}<li>Follow the approved style guide "{{ sg.name }}".</li>{% endfor %}
+          </ul>
+        </details>
+      </div>
+      {% endif %}
+
+      {# Context profiles - domain/audience/formality summary (reference, not insert
+         text: context is auto-resolved at run time, so we surface it honestly rather
+         than pretend a line steers it). #}
+      {% if f.context_profiles %}
+      <div class="wf-know-sec">
+        <h3 class="wf-know-h">Context profiles</h3>
+        <ul class="wf-know-ctx">
+          {% for cx in f.context_profiles %}
+          <li>
+            <span class="wf-know-name">{{ cx.name }}</span>
+            {% if cx.summary %}<span class="muted small">{{ cx.summary }}</span>
+            {% else %}<span class="muted small">{{ cx.scope }}</span>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        <p class="muted small">Resolved automatically at run time via the {context} placeholder.</p>
+      </div>
+      {% endif %}
+
+      {# TM size - a plain fact (omitted when the customer has no TM, not faked as 0). #}
+      {% if f.tm_entries %}
+      <div class="wf-know-sec">
+        <h3 class="wf-know-h">Translation memory</h3>
+        <p class="wf-know-tm data-mono">{{ f.tm_entries }} entr{{ 'y' if f.tm_entries == 1 else 'ies' }}</p>
+      </div>
+      {% endif %}
+
+      {% if not f.pairs and not f.glossaries and not f.style_guides
+            and not f.context_profiles and f.tm_entries == 0 %}
+      <p class="muted small">Nothing recorded for this customer yet.</p>
+      {% endif %}
+    {% endif %}
+  </section>
+
+  {# 5. SHAPE GALLERY - five taxonomy shapes as seed-sentence scaffolds. #}
+  <section class="wf-rail-card" data-panel="shapes">
+    <h2 class="wf-rail-h">Workflow shapes</h2>
+    <p class="wf-rail-sub muted small">A one-line seed the drafter expands into that shape.</p>
+    <ul class="wf-rail-list">
+      {% for sc in shape_cards %}
+      <li class="wf-ins-item">
+        <button type="button" class="wf-ins wf-shape" data-insert="{{ sc.seed }}"
+                title="{{ sc.hint }}">
+          <span class="wf-ins-name">{{ sc.label }}</span>
+          <span class="wf-ins-preview">{{ sc.seed }}</span>
+        </button>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  {# 1. ROLE PRESETS - built-in orchestrator quick-start prompts. #}
+  <section class="wf-rail-card" data-panel="presets">
+    <h2 class="wf-rail-h">Role presets <span class="badge">built-in</span></h2>
+    <p class="wf-rail-sub muted small">A ready-made prompt for one step. Insert it, then edit.</p>
+    <ul class="wf-rail-list">
+      {% for name, text in role_presets.items() %}
+      <li class="wf-ins-item">
+        <button type="button" class="wf-ins wf-preset" data-insert="{{ text }}"
+                title="Insert the {{ name }} preset at the cursor">
+          <span class="wf-ins-name">{{ name }}</span>
+          <span class="wf-ins-preview">{{ text.split('\n')[0] }}</span>
+        </button>
+        <details class="wf-ins-full-wrap">
+          <summary class="muted small">full text</summary>
+          <pre class="wf-ins-full">{{ text }}</pre>
+        </details>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  {# 2. PROMPT TEMPLATES - the caller's visible library (same seam as the builder). #}
+  <section class="wf-rail-card" data-panel="templates">
+    <h2 class="wf-rail-h">Prompt templates</h2>
+    {% if prompt_templates %}
+    <p class="wf-rail-sub muted small">Your saved step prompts, in view for this customer and org.</p>
+    <ul class="wf-rail-list">
+      {% for tpl in prompt_templates %}
+      <li class="wf-ins-item">
+        <button type="button" class="wf-ins wf-template" data-insert="{{ tpl.body }}"
+                title="Insert the template body at the cursor">
+          <span class="wf-ins-name">{{ tpl.name }}</span>
+          <span class="wf-ins-preview">{{ tpl.body | truncate(90, True) }}</span>
+        </button>
+        <details class="wf-ins-full-wrap">
+          <summary class="muted small">full text</summary>
+          <pre class="wf-ins-full">{{ tpl.body }}</pre>
+        </details>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted small">No prompt templates in view. Save one from a step to reuse it here.</p>
+    {% endif %}
+  </section>
+
+  {# 3. PLACEHOLDER CHIPS - the nine engine placeholders, one click each. Definitions
+       come from m.PLACEHOLDER_DEFS (the SAME source as the legend <dl>), never forked. #}
+  <section class="wf-rail-card" data-panel="placeholders">
+    <h2 class="wf-rail-h">Placeholders</h2>
+    <p class="wf-rail-sub muted small">Insert an engine placeholder. Hover for what it means.</p>
+    <div class="wf-chip-row">
+      {% for item in m.PLACEHOLDER_DEFS %}{% for tok in item.tokens %}<button
+        type="button" class="wf-ins wf-chip" data-insert="{{ tok }}"
+        title="{{ item.def }}">{{ tok }}</button>{% endfor %}{% endfor %}
+    </div>
+    {{ m.placeholder_legend() }}
+  </section>
+
+</aside>
+</div>{# /wf-studio #}
+
+<script nonce="{{ csp_nonce() }}">
+// Scoped click-to-insert helper (Wave B). One delegated listener on .wf-studio: a click
+// on any .wf-ins splices its data-insert text into #wf-describe-desc at the caret,
+// preserving focus + caret after the inserted text and firing an 'input' event for any
+// listeners. Pure enhancement - without JS every item's full text is already visible to
+// copy, and the customer panel refreshes via its plain GET form.
+(function () {
+  var root = document.querySelector('.wf-studio');
+  if (!root) return;
+  var ta = document.getElementById('wf-describe-desc');
+
+  function insertAtCursor(el, text) {
+    el.focus();
+    var start = (el.selectionStart != null) ? el.selectionStart : el.value.length;
+    var end = (el.selectionEnd != null) ? el.selectionEnd : el.value.length;
+    var before = el.value.slice(0, start);
+    var after = el.value.slice(end);
+    // Add a separating newline when splicing a block next to existing non-space text,
+    // so pasted presets/lines don't run together. A bare placeholder/token inserts raw.
+    var sep = '';
+    if (before && !/\s$/.test(before) && text.length > 24) sep = '\n';
+    var payload = sep + text;
+    el.value = before + payload + after;
+    var caret = start + payload.length;
+    el.selectionStart = el.selectionEnd = caret;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.focus();
+  }
+
+  if (ta) {
+    root.addEventListener('click', function (ev) {
+      var btn = ev.target.closest ? ev.target.closest('.wf-ins') : null;
+      if (!btn || !root.contains(btn)) return;
+      var text = btn.getAttribute('data-insert');
+      if (text == null) return;
+      ev.preventDefault();
+      insertAtCursor(ta, text);
+      // Brief "inserted" flash on the clicked item so the click is visibly acknowledged
+      // even when the description box is out of view.
+      btn.classList.add('wf-ins-done');
+      setTimeout(function () { btn.classList.remove('wf-ins-done'); }, 700);
+    });
+  }
+
+  // Rail tabs (enhancement): show one panel at a time. Without JS the tab strip stays
+  // hidden and every panel renders stacked. The server picks the default tab (the
+  // customer panel once a customer is selected, shapes otherwise).
+  var tabs = root.querySelector('.wf-tabs');
+  var panels = root.querySelectorAll('.wf-rail-card[data-panel]');
+  if (tabs && panels.length) {
+    panels.forEach(function (p) {
+      var name = p.getAttribute('data-panel');
+      p.id = 'wf-panel-' + name;
+      p.setAttribute('role', 'tabpanel');
+      p.setAttribute('aria-labelledby', 'wf-tab-' + name);
+      p.tabIndex = 0;
+    });
+    function show(name) {
+      var found = false;
+      panels.forEach(function (p) {
+        var on = p.getAttribute('data-panel') === name;
+        p.classList.toggle('is-active', on);
+        p.hidden = !on;
+        if (on) found = true;
+      });
+      tabs.querySelectorAll('.wf-tab').forEach(function (t) {
+        var on = t.getAttribute('data-tab') === name;
+        t.classList.toggle('is-active', on);
+        t.id = 'wf-tab-' + t.getAttribute('data-tab');
+        t.setAttribute('aria-controls', 'wf-panel-' + t.getAttribute('data-tab'));
+        t.tabIndex = on ? 0 : -1;
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      return found;
+    }
+    tabs.addEventListener('click', function (ev) {
+      var t = ev.target.closest ? ev.target.closest('.wf-tab') : null;
+      if (!t) return;
+      show(t.getAttribute('data-tab'));
+    });
+    tabs.addEventListener('keydown', function (ev) {
+      var items = Array.from(tabs.querySelectorAll('.wf-tab'));
+      var index = items.indexOf(ev.target);
+      if (index < 0) return;
+      if (ev.key === 'ArrowRight') index = (index + 1) % items.length;
+      else if (ev.key === 'ArrowLeft') index = (index + items.length - 1) % items.length;
+      else if (ev.key === 'Home') index = 0;
+      else if (ev.key === 'End') index = items.length - 1;
+      else return;
+      ev.preventDefault();
+      show(items[index].getAttribute('data-tab'));
+      items[index].focus();
+    });
+    var def = root.getAttribute('data-default-tab') || 'shapes';
+    if (!show(def)) show(panels[0].getAttribute('data-panel'));
+    tabs.hidden = false;
+    root.classList.add('wf-tabbed');
+  }
+})();
+</script>
+
+</div>
+{% endblock %}

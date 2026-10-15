@@ -1,0 +1,334 @@
+# Localization OS - CI.
+#
+# Two tiers, so a pull request gets an answer in minutes and the whole suite still runs
+# every day (suite counts are discovered at runtime):
+#
+#   Every pull request and every push to main (target: under 10 minutes):
+#   * lint            - ruff check + ruff format --check (config in pyproject.toml).
+#   * gitleaks        - secret scan of the working tree (config in .gitleaks.toml).
+#   * test-fast       - the global ratchet suites through tests/test_verify_suites.py -k:
+#                       kernel facade, CLI scope classification, ruff, docs architecture,
+#                       CLI and MCP parity, nullability self-heal, licences and branding.
+#   * default-install - installs ONLY requirements.lock (no dev, no extras) and proves
+#                       the DEFAULT install is copyleft-free AND functional: the app
+#                       imports, verify_licenses.py passes (no GPL-family dep), and
+#                       verify_pdf.py builds/parses PDFs on the pypdfium2+typst stack.
+#   * postgres-smoke  - a real Postgres 16 service, `alembic upgrade head`, then the
+#                       schema smoke check (tests/pg_smoke.py) that cannot run offline.
+#   * npm-audit       - `npm audit` over the lockfiles of integrations/jira-forge-app and
+#                       integrations/airtable-extension (the two Node apps; not Python).
+#
+#   Nightly, on push to main and on manual dispatch:
+#   * test-full       - EVERY verify suite, split into 8 deterministic shards
+#                       (LOC_TMS_SUITE_SHARD=i/8, see tests/_suite_shard.py), each suite as
+#                       its own subprocess on the SQLite default engine. The suites that
+#                       need Docker or a Windows host are deselected here and run by
+#                       release-image or on a developer machine.
+#   * release-image   - push to main, tags, or manual dispatch only, never PRs.
+#                       One base build plus LDAP/SAML validation layers, budget
+#                       8-15 min per release event (25 min hard timeout).
+#
+# Dependency vulnerability scanning is a SEPARATE, path-filtered + weekly-cron workflow,
+# .github/workflows/dep-audit.yml, deliberately NOT a job here: it must run only when
+# dependency files change (or on its weekly schedule), which needs a workflow-level
+# `on.push.paths` filter that a single shared-trigger job in this file cannot have.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["*"]
+  workflow_dispatch: {}
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  npm-audit:
+    name: npm audit (${{ matrix.directory }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      # One app's known advisories must not cancel the other app's audit (gate L3).
+      fail-fast: false
+      matrix:
+        directory: [integrations/jira-forge-app, integrations/airtable-extension]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+      - name: Require reviewed lock and audit all advisories
+        working-directory: ${{ matrix.directory }}
+        run: |
+          test -f package-lock.json
+          npm audit --package-lock-only --ignore-scripts
+
+  lint:
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    name: ruff (check + format)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install ruff (hashed dev lock)
+        # The dev toolchain is hash-pinned like the runtime locks (GitHub #412), so a
+        # compromised dev transitive cannot reach the lint gate. --no-deps installs the
+        # reviewed closure; pip check-style consistency is enforced by the lock itself.
+        run: pip install --require-hashes --no-deps -r requirements-dev.lock
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+  gitleaks:
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Scan the working tree
+        # The pinned scanner image runs against the checked-out tree with the repository
+        # config, which allowlists only the test fixture files that carry fake credentials.
+        # --redact=100 keeps any finding's value out of the job log.
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            dir /repo --config /repo/.gitleaks.toml --redact=100 --no-banner
+
+  test-fast:
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    name: global ratchet suites (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.11"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install dependencies
+        # Base + the opt-in LGPL extras (psycopg, ldap3). A hash on ANY requirement or
+        # constraint arms pip's require-hashes mode for the WHOLE invocation, so every file
+        # of this one call is fully hashed: the runtime/profile locks plus
+        # requirements-dev.lock (the dev toolchain's full transitive closure, pip included).
+        # The SAML lock is a constraint: the dev lock already carries python3-saml/xmlsec/
+        # isodate at the same pins and hashes. pip check verifies the installed set.
+        run: |
+          pip install --require-hashes --no-deps -r requirements.lock -r requirements-dev.lock -r requirements-postgres.lock -r requirements-ldap.lock -c requirements-saml.lock
+          pip check
+
+      - name: Global ratchet suites
+        # A dummy provider key is set on purpose: the verify suites must force MockProvider
+        # regardless of any key in the environment (they clear the keys in their own
+        # bootstrap). If a suite ever leaks a real provider call, this job fails here.
+        env:
+          ANTHROPIC_API_KEY: sk-ant-ci-dummy-not-real
+          GEMINI_API_KEY: ci-dummy
+          OPENAI_API_KEY: ci-dummy
+        run: >-
+          pytest tests/test_verify_suites.py -p no:cacheprovider -q
+          -k "verify_kernel_facade or verify_cli_scope_classification or verify_ruff or verify_docs_architecture or verify_cli_parity or verify_mcp_parity or verify_nullability_selfheal or verify_licenses or verify_branding"
+
+  test-full:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    name: all suites (shard ${{ matrix.shard }} of 8)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      # A red shard must not hide the others.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install non-Latin fonts for the PDF writer
+        # verify_pdf.py renders one PDF per script (ru/el/ja/zh/ko/ar/he/hi/bn/th) and
+        # asserts each is non-blank + non-tofu. typst needs real system fonts for that,
+        # so install the same Noto packages the container image ships.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-noto-core fonts-noto-cjk
+
+      - name: Install dependencies
+        # Same recipe as test-fast: one fully hashed call, then pip check.
+        run: |
+          pip install --require-hashes --no-deps -r requirements.lock -r requirements-dev.lock -r requirements-postgres.lock -r requirements-ldap.lock -c requirements-saml.lock
+          pip check
+
+      - name: Run this shard of the verify suites on SQLite
+        # LOC_TMS_SUITE_SHARD keeps one deterministic eighth of the suites. Deselected, by
+        # exact id: the suites that need Docker (db_verify, deploy_security, docker_image,
+        # docker_saml, image_scanning, nightly_backup_526, release_lock) or a Windows host
+        # (prompt_tap, test_instance, request_limits_fix2, review_editor_layout,
+        # workflow_step_tabs). Dummy provider keys guard test hermeticity, as in test-fast.
+        env:
+          LOC_TMS_SUITE_SHARD: ${{ matrix.shard }}/8
+          ANTHROPIC_API_KEY: sk-ant-ci-dummy-not-real
+          GEMINI_API_KEY: ci-dummy
+          OPENAI_API_KEY: ci-dummy
+        run: |
+          deselect=()
+          for suite in verify_db_verify verify_deploy_security verify_docker_image verify_docker_saml verify_image_scanning verify_nightly_backup_526 verify_release_lock verify_prompt_tap verify_test_instance verify_request_limits_fix2 verify_review_editor_layout verify_workflow_step_tabs; do
+            deselect+=(--deselect "tests/test_verify_suites.py::test_verify_suite[$suite]")
+          done
+          pytest tests/test_verify_suites.py -p no:cacheprovider -q "${deselect[@]}"
+
+  postgres-smoke:
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    name: postgres schema smoke
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
+        env:
+          POSTGRES_USER: localization_os
+          POSTGRES_PASSWORD: localization_os
+          POSTGRES_DB: localization_os
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U localization_os -d localization_os"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # Point every app/alembic entrypoint at the service DB (psycopg3 driver).
+      DATABASE_URL: postgresql+psycopg://localization_os:localization_os@localhost:5432/localization_os
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install runtime dependencies
+        # The Postgres smoke needs the psycopg driver, which is now an opt-in extra
+        # (requirements-postgres.txt) rather than a default dep - install it here.
+        run: |
+          pip install --require-hashes --no-deps -r requirements.lock -r requirements-postgres.lock
+          pip check
+
+      - name: Alembic upgrade head (build the Postgres schema)
+        run: alembic upgrade head
+
+      - name: Postgres schema smoke check
+        run: python tests/pg_smoke.py
+
+  default-install:
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    name: default install (copyleft-free)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install non-Latin fonts for the PDF writer
+        # The per-script render checks in verify_pdf.py need real system fonts; install
+        # the same Noto packages the container image ships.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-noto-core fonts-noto-cjk
+
+      - name: Install ONLY the default runtime deps (no dev, no extras)
+        # The bare install a "zero AGPL/GPL" procurement scan sees. Deliberately NOT
+        # requirements-dev.txt / -postgres.txt / -ldap.txt - this job's whole value is
+        # that the default set is copyleft-free AND boots.
+        run: |
+          pip install --require-hashes --no-deps -r requirements.lock
+          pip check
+
+      - name: License ratchet (no GPL-family dep in the default set)
+        run: python tests/verify_licenses.py --default-install
+
+      - name: App imports on the default install
+        run: python -c "import app.main"
+
+      - name: PDF build/parse works on the pypdfium2 + typst stack
+        # A dummy key keeps the OCR spend-guard case hermetic (it clears keys in its
+        # own bootstrap, mirroring the test-sqlite job).
+        env:
+          ANTHROPIC_API_KEY: sk-ant-ci-dummy-not-real
+          GEMINI_API_KEY: ci-dummy
+          OPENAI_API_KEY: ci-dummy
+        run: python tests/verify_pdf.py
+
+  release-image:
+    name: release image consistency
+    if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))) || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Prepare isolated validation tools
+        # Mount tools into the container; never alter its runtime site-packages.
+        # Hash-pinned subset of requirements-dev.lock (#412); its packaging must equal
+        # requirements.lock: /checks is first on PYTHONPATH and would otherwise shadow
+        # the image's locked dist (#404).
+        run: python -m pip install --require-hashes --no-deps --target .ci-check-tools -r scripts/locks/requirements-ci-check-tools.lock
+      - name: Build and exercise the shipped image
+        run: |
+          docker build --build-arg KEEP_PIP=1 --build-arg RELEASE="$(git describe --tags --always)" --build-arg RELEASE_COMMIT="$(git rev-parse HEAD)" -t localization-os-release-check .
+          docker build --build-arg RELEASE="$(git describe --tags --always)" --build-arg RELEASE_COMMIT="$(git rev-parse HEAD)" -t localization-os-release-ship .
+          docker run --rm --entrypoint sh localization-os-release-ship -c 'for py in /usr/local/bin/python3 /opt/venv/bin/python; do "$py" -c "import importlib.util as u, sys; sys.exit(u.find_spec(\"pip\") is not None)" || exit 1; done; for tool in pip pip3 pip3.13; do ! command -v "$tool" || exit 1; done'
+          docker run --rm --entrypoint /opt/venv/bin/python localization-os-release-check -m pip freeze > image-freeze.txt
+          docker run --rm --entrypoint /opt/venv/bin/python localization-os-release-check -m pip check
+          docker run --rm --entrypoint /opt/venv/bin/python localization-os-release-check -c "import app.main"
+          docker run --rm -v "$PWD:/repo:ro" -v "$PWD/.ci-check-tools:/checks:ro" -e PYTHONPATH=/checks --entrypoint /opt/venv/bin/python localization-os-release-check /repo/scripts/release_lock.py --verify --profile postgres --require-installed --exclude-path /checks
+          docker run --rm -v "$PWD:/repo:ro" -v "$PWD/.ci-check-tools:/checks:ro" -w /repo -e PYTHONPATH=/checks -e RELEASE_LOCK_PROFILE=postgres -e RELEASE_LOCK_EXCLUDE_PATHS=/checks --entrypoint /opt/venv/bin/python localization-os-release-check -m pytest tests/test_verify_suites.py -k verify_release_lock -p no:cacheprovider
+      - name: Exercise opt-in profile images
+        run: |
+          for profile in ldap saml; do
+            docker build -f .github/Dockerfile.profile-check --build-arg PROFILE="$profile" -t "localization-os-check-$profile" .
+            docker run --rm --entrypoint /opt/venv/bin/python "localization-os-check-$profile" -m pip freeze > "image-freeze-$profile.txt"
+            docker run --rm --entrypoint /opt/venv/bin/python "localization-os-check-$profile" -m pip check
+            docker run --rm --entrypoint /opt/venv/bin/python "localization-os-check-$profile" -c "import app.main"
+            docker run --rm -v "$PWD:/repo:ro" -v "$PWD/.ci-check-tools:/checks:ro" -w /repo -e PYTHONPATH=/checks -e RELEASE_LOCK_PROFILE="$profile" -e RELEASE_LOCK_EXCLUDE_PATHS=/checks --entrypoint /opt/venv/bin/python "localization-os-check-$profile" -m pytest tests/test_verify_suites.py -k verify_release_lock -p no:cacheprovider
+          done
+      - name: Retain image inventories
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-image-freezes
+          path: image-freeze*.txt

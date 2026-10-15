@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_review_runs_status.html" as rs %}
+{% block title %}Run {{ run.id }} - Step differences{% endblock %}
+{% block content %}
+<div class="review-runs-page">
+{# GitHub #340: the "Highlight differences" view of a run. Server-rendered word-level
+   diff of two step runs' per-segment output (run_overlay.step_diff_view, the SAME
+   data GET /api/runs/{id}/step-diff returns). Insertions/deletions are <ins>/<del>
+   with underline / strike-through (diff-ins/diff-del CSS) - never colour-only.
+   Unchanged segments are collapsed by default; only changed ones show open. #}
+<p><a href="/runs/{{ run.id }}" class="back"><span aria-hidden="true">←</span> Back to run {{ run.id }}</a></p>
+
+<section class="card">
+  {{ m.page_header("Highlight differences: Run " ~ run.id) }}
+  <p class="muted">
+    Document: {{ doc.filename }} · Step output compared segment by segment (word-level).
+    <strong>Underlined</strong> text was inserted by the second step; <strong>crossed-out</strong>
+    text was removed.
+  </p>
+  {% if step_rows|length > 1 %}
+  {# The picker: choose ANY two step runs of this run to compare (GET form; a
+     mistyped/omitted pair falls back to the default comparison). #}
+  <form method="get" action="/runs/{{ run.id }}/step-diff" class="form inline step-diff-picker">
+{% call m.form_section("rr-fields-1", "Highlight differences") %}
+    <label>From
+      <select name="from">
+        {% for row in step_rows %}
+        <option value="{{ row.sr.id }}"{% if row.sr.id == from_id %} selected{% endif %}>{{ row.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>To
+      <select name="to">
+        {% for row in step_rows %}
+        <option value="{{ row.sr.id }}"{% if row.sr.id == to_id %} selected{% endif %}>{{ row.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">Compare</button>
+  {% endcall %}
+</form>
+  {% call m.data_table('What each step changed against the previous translating step',
+      [{'label': 'Step run'}, {'label': 'Changed vs previous translating step'}],
+      caption='What each step changed against the previous translating step') %}
+    {% for st in diff.steps %}
+    <tr>
+      <td>#{{ st.step_run_id }} {{ st.step_name or st.step_type or "step" }} {{ rs.localized_status_badge(request, st.status) }}</td>
+      <td>
+        {% if st.changed is not none %}
+        <a href="/runs/{{ run.id }}/step-diff?from={{ st.vs_step_run_id }}&amp;to={{ st.step_run_id }}">{{ st.changed }} of {{ st.total }} segments changed</a>
+        {% elif not st.recorded %}<span class="muted">not recorded for this step</span>
+        {% else %}<span class="muted">-</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+  {% endif %}
+  {% if diff.from.step_run_id is none or diff.to.step_run_id is none %}
+  {{ m.empty_state('No comparable pair recorded for this run (a pair needs two step runs with recorded output). Steps still in flight record their output when they finish.') }}
+  {% elif diff.changed is none %}
+  <p class="muted">
+    {% if diff.not_recorded.from %}Not recorded for the "from" step (it saved no output text). {% endif %}
+    {% if diff.not_recorded.to %}Not recorded for the "to" step (it saved no output text).{% endif %}
+    There is nothing to compare for this pair.
+  </p>
+  {% else %}
+  <p>
+    {{ diff.changed }} of {{ diff.total }} segments changed
+    ({{ diff.from.step_name or diff.from.step_type or diff.from.step_id }} →
+    {{ diff.to.step_name or diff.to.step_type or diff.to.step_id }}).
+  </p>
+  {% if diff.count_mismatch %}
+  <p class="muted">The two steps recorded a different number of segment boundaries (a step may
+  have emitted the segment delimiter inside a segment); positions past the shorter side are
+  shown as fully inserted or deleted.</p>
+  {% endif %}
+  {% if diff.not_recorded.from or diff.not_recorded.to %}
+  <p class="muted">
+    {% if diff.not_recorded.from %}Not recorded for the "from" step (it saved no output text). {% endif %}
+    {% if diff.not_recorded.to %}Not recorded for the "to" step (it saved no output text).{% endif %}
+  </p>
+  {% endif %}
+
+  {% for row in seg_rows %}{% set seg = row.seg %}
+  <details class="step-diff-seg"{% if seg.changed %} open{% endif %}>
+    <summary>
+      Segment {{ seg.index + 1 }}
+      {% if seg.changed %}<span class="badge warn">changed</span>
+      {% else %}<span class="muted">unchanged</span>{% endif %}
+    </summary>
+    {% if seg.changed %}
+    {% if seg.coarse %}<p class="muted">This segment is very long, so it is shown as one removed
+    block and one inserted block instead of word by word.</p>{% endif %}
+    <div class="review-runs-comparison">
+      <section><h3>{{ tl(request, 'page.review_runs.from') }}</h3><div class="step-diff-text"{{ run.target_locale|langattrs }}>{{ seg.before }}</div></section>
+      <section><h3>{{ tl(request, 'page.review_runs.to') }}</h3><div class="step-diff-text"{{ run.target_locale|langattrs }}>
+        {#- row.html is server-built: every token escaped, then wrapped in <ins>/<del>. -#}
+        {{ row.html }}
+      </div></section>
+    </div>
+    {% else %}
+    <div class="step-diff-text">{{ seg.after }}</div>
+    {% endif %}
+  </details>
+  {% endfor %}
+  {% endif %}
+</section>
+</div>
+{% endblock %}

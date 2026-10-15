@@ -1,0 +1,512 @@
+{% extends "base.html" %}
+{# Work surface: full width, not the centered list column (Console). #}
+{% set wide_page = true %}
+{% import "_macros.html" as m %}
+{% block title %}{{ project.name }} - Keys{% endblock %}
+{% block content %}
+<div class="documents-page">
+{#- T5 (a11y, WCAG 3.1.2): lang (and dir for RTL) on the base and locale values only,
+    never on the badges, plural categories or locale labels beside them. -#}
+{% set src_lang = project.source_locale|langattrs %}
+
+{#- SPEC-key-based-projects section 6: THE key-project detail page.
+
+    A key project NEVER shows a document list. Its per-namespace internal documents
+    are an implementation detail (the values live there as ordinary Segments so the
+    whole pipeline applies); everything a human touches is a KEY. -#}
+
+<section class="document-heading">
+  {% set page_title %}{{ project.name }} <span class="badge beta">Keys</span>{% endset %}
+  {{ m.page_header(page_title) }}
+  <p class="muted">Continuous localization: keys in, one file per locale out.
+    <a href="/projects/{{ project.id }}">Project settings</a> &middot;
+    {# SPEC-wave3 §4.2: the key-grid queries panel (project-scoped link; a per-key query
+       is key_id-scoped from the compose form). Gated on the kill switch (test 16f). #}
+    {% if feature_enabled('queries') %}<a href="/queries?project={{ project.id }}"><span aria-hidden="true">💬</span> Queries</a> &middot;{% endif %}
+    <a class="help-hint" href="/help/keys" title="Key-based projects guide">?</a></p>
+  <p class="muted small data-mono">{{ project.source_locale }} &rarr;
+    {{ locales|join(', ') or 'no target locales yet' }} &middot; showing {{ shown }} of {% if total > 10000 %}10,000+{% else %}{{ '{:,}'.format(total) }}{% endif %}{% if has_more %}, more available{% endif %}; namespaces grouped within this page; pages follow key id.</p>
+  {% if next_url %}<a href="{{ next_url }}" rel="next">Next page</a>{% endif %}
+</section>
+
+{% if ok %}<p class="ok">{{ ok }}</p>{% endif %}
+{# a11y T7: a ?err= error renders once, as a sentence, in the summary at the top of
+   main (base.html + _form_errors.html), never as a raw code here. #}
+{#- The one-shot notice from the last EXPORT (a download response is the file itself,
+    so it has no page to warn on) or the last IMPORT (whose per-key notes are a
+    sentence each and do not fit a flash). The label rides inside the payload. -#}
+{% if export_notice %}<p class="warn-text">{{ export_notice }}</p>{% endif %}
+
+{% if not locales %}
+<p class="error">This project has no target locales, so keys have nowhere to store a
+  value. Add one on the <a href="/projects/{{ project.id }}">project page</a> first.</p>
+{% endif %}
+
+{# --- two-column shell -----------------------------------------------------
+     Left rail: controls (Filter, Translate, Add a Key, Export, Import, Key
+     settings, Ask about this page) in that fixed order, sticky on wide
+     viewports so they stay reachable while the key list scrolls. Right
+     column: the keys themselves, one card per key, replacing the former
+     matrix table (issue #48: the matrix packed every plural category's form
+     into one table cell as inline siblings, which wrapped mid-form; the
+     per-key card layout gives each category its own block line instead).
+     Every can_write / assist_enabled gate below is relocated verbatim from
+     the single-column layout, never re-decided. -#}
+<div class="keys-layout">
+<div class="keys-rail">
+
+{# --- filters ------------------------------------------------------------- #}
+{% call m.card() %}
+  <h2>Filter</h2>
+  <form method="get" action="/projects/{{ project.id }}/keys" class="form">
+    <label>Namespace
+      <select name="namespace">
+        <option value="">- all -</option>
+        {% for ns in namespaces %}
+        <option value="{{ ns }}" {% if filters.namespace == ns %}selected{% endif %}>{{ ns or '(default)' }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Status
+      <select name="status">
+        <option value="">- any -</option>
+        {% for s in statuses %}
+        <option value="{{ s }}" {% if filters.status == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Untranslated in
+      <select name="untranslated_in">
+        <option value="">- any locale -</option>
+        {% for loc in locales %}
+        <option value="{{ loc }}" {% if filters.untranslated_in == loc %}selected{% endif %}>{{ loc }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Tag <input type="text" name="tag" value="{{ filters.tag or '' }}" /></label>
+    <label>Search <input type="text" name="q" value="{{ filters.q or '' }}"
+                         placeholder="name, description, context" /></label>
+    <label class="checkbox"><input type="checkbox" name="archived" value="1"
+      {% if filters.include_archived %}checked{% endif %} /> include archived</label>
+    <label class="checkbox"><input type="checkbox" name="deleted" value="1"
+      {% if filters.include_deleted %}checked{% endif %} /> include deleted
+      (restorable)</label>
+    <button type="submit">Apply</button>
+    <a class="btnlink small" href="/projects/{{ project.id }}/keys">Clear</a>
+  </form>
+{% endcall %}
+
+{% if can_write %}
+{# --- translate ------------------------------------------------------------ #}
+{% call m.card() %}
+  <h2>Translate</h2>
+  {% if workflows and locales %}
+  <form method="post" action="/projects/{{ project.id }}/keys/translate" class="form">
+    {% include "_csrf.html" %}
+    <label>Workflow
+      <select name="workflow_id">
+        {% for w in workflows %}<option value="{{ w.id }}">{{ w.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Locale
+      <select name="locale">
+        {% for loc in locales %}<option value="{{ loc }}">{{ loc }}</option>{% endfor %}
+        {% if locales|length > 1 %}<option value="all">- all {{ locales|length }} languages -</option>{% endif %}
+      </select>
+    </label>
+    <button type="submit" data-busy-label="{{ t(request, 'busy.starting_translation') }}">Translate</button>
+  </form>
+  <p class="help">Runs the workflow over this project's keys exactly as it would over
+    a document - same run view, same TM, glossary, QA and spend safety. Deleted
+    keys are not included.</p>
+  {% else %}
+  <p class="muted">Add a target locale and choose a workflow to translate keys here.
+    A workflow takes its languages from this project.</p>
+  {% endif %}
+{% endcall %}
+
+{# --- add a key ----------------------------------------------------------- #}
+{% call m.card() %}
+  <h2>Add a key</h2>
+  <form method="post" action="/projects/{{ project.id }}/keys/add" class="form">
+    {% include "_csrf.html" %}
+    <label>Namespace <input type="text" name="namespace" placeholder="(default)" /></label>
+    <label>Name <input type="text" name="name" required placeholder="error::generic" /></label>
+    <label>Context <input type="text" name="context" /></label>
+    <label>Base value <input type="text" name="base_value" /></label>
+    <label>Description <input type="text" name="description" /></label>
+    <label class="checkbox"><input type="checkbox" name="is_plural" value="1" /> plural</label>
+    <button type="submit">Add key</button>
+  </form>
+  <p class="help">A name may not repeat inside one namespace + context. Nested JSON
+    paths use <code>::</code>.</p>
+{% endcall %}
+{% endif %}
+
+{# --- export --------------------------------------------------------------
+     OUTSIDE the can_write gate on purpose (review B14): downloading a build file is
+     a READ, the route has always answered 200 for a viewer, and a reviewer or PM who
+     may not edit a string still needs the current file. Import and Translate stay
+     behind the gate -- those are writes. -#}
+{% call m.card() %}
+  {#- F9: the rail can run ~2500-3000px tall with every control open, pushing
+      Export/Import/Key settings/Ask past reach of a max-height scroll
+      container. Export/Import/Key settings default-CLOSED behind <details>;
+      Filter/Translate/Add a Key stay always-open (the controls used most). -#}
+  <details class="rail-collapse"{% if not can_write %} open{% endif %}>
+    <summary><h2>Export</h2></summary>
+    <form method="get" action="/projects/{{ project.id }}/keys/export" class="form" data-busy-release="3">
+      <label>Locale
+        <select name="locale">
+          <option value="">{{ project.source_locale }} (base values)</option>
+          {% for loc in locales %}<option value="{{ loc }}">{{ loc }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Format
+        <select name="fmt">
+          {% for f in formats %}<option value="{{ f }}">{{ f }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Namespace
+        <select name="namespace">
+          <option value="">- whole project (transport file) -</option>
+          {% for ns in namespaces %}<option value="{{ ns }}">{{ ns or '(default)' }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Empty values
+        <select name="empty_as">
+          {% for mode in empty_modes %}<option value="{{ mode }}">{{ mode }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Status
+        <select name="status">
+          <option value="">- any status -</option>
+          {% for s in statuses %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="checkbox"><input type="checkbox" name="archived" value="1" /> include archived keys</label>
+      {% if feature_enabled('key_images') %}
+      <label class="checkbox"><input type="checkbox" name="include_string_images" value="1" /> include string images (ZIP bundle)</label>
+      {% endif %}
+      <button type="submit" data-busy-label="{{ t(request, 'busy.preparing_download') }}">Download</button>
+    </form>
+    <p class="help">Pick a <strong>namespace</strong> for the BUILD file: bare key
+      names, exactly what your app looks up. Leave it on <em>whole project</em> for
+      the TRANSPORT file: every name qualified <code>namespace::name</code> and
+      stamped with a marker, so it can be imported straight back.</p>
+    <p class="help">A value whose inline tags are damaged never ships in a BUILD file -
+      its source text goes out instead, and you are told which keys. The TRANSPORT file
+      keeps what is actually stored, so re-importing it changes nothing.</p>
+    <p class="help">A resource format (.properties, .strings, YAML and the other
+      resource files) needs a namespace: the download is the source file that namespace
+      was imported from, with this locale's values filled in.</p>
+  </details>
+{% endcall %}
+
+{% if can_write %}
+{# --- import (a WRITE; Export lives above, outside the gate) --------------- #}
+{% call m.card() %}
+  <details class="rail-collapse">
+    <summary><h2>Import</h2></summary>
+    <form method="post" action="/projects/{{ project.id }}/keys/import"
+          enctype="multipart/form-data" class="form">
+      {% include "_csrf.html" %}
+      <label>File <input type="file" name="file" required /></label>
+      <label>Format
+        <select name="fmt">
+          <option value="">- from the file name -</option>
+          {% for f in formats %}<option value="{{ f }}">{{ f }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Locale
+        <select name="locale">
+          <option value="">{{ project.source_locale }} (base)</option>
+          {% for loc in locales %}<option value="{{ loc }}">{{ loc }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Namespace
+        <input type="text" name="namespace" placeholder="(from the file name)" />
+      </label>
+      <p class="help">Use <code>@from-key</code> as the namespace to re-import a
+        whole-project export - it reads each namespace off the front of the key
+        name, and is accepted only on a file that carries the qualification marker.</p>
+      <label class="checkbox"><input type="checkbox" name="cleanup" value="1" />
+        Cleanup: soft-delete keys this file does not mention</label>
+      <label>Type <code>DELETE</code> to confirm cleanup
+        <input type="text" name="confirm_cleanup" size="8" /></label>
+      <p class="help">Cleanup deletes KEYS, so it is accepted only for a
+        {{ project.source_locale }} (base) import - a translation file is a
+        partial view of the key set by nature. Archived keys are never swept.</p>
+      <button type="submit" data-busy-label="{{ t(request, 'busy.importing') }}">Import</button>
+    </form>
+  </details>
+{% endcall %}
+
+{# --- settings ------------------------------------------------------------- #}
+{% call m.card() %}
+  <details class="rail-collapse">
+    <summary><h2>Key settings</h2></summary>
+    <form method="post" action="/projects/{{ project.id }}/keys/autounverify" class="form">
+      {% include "_csrf.html" %}
+      <label>Auto-unverify on a base change
+        <select name="on">
+          <option value="1" {% if autounverify %}selected{% endif %}>on</option>
+          <option value="0" {% if not autounverify %}selected{% endif %}>off</option>
+          <option value="inherit">inherit the install default</option>
+        </select>
+      </label>
+      <button type="submit">Save</button>
+    </form>
+    <p class="help">When on, editing a base value flags every locale that already had a
+      translation for review, so a source edit can never silently ship a stale string.</p>
+  </details>
+{% endcall %}
+{% endif %}
+
+{% with assist_module = 'keys' %}{% include "_assist_panel.html" %}{% endwith %}
+
+</div>
+<div class="keys-main">
+
+{#- --- live progress for the runs the last Translate launched (issue #47) ----
+    The key grid used to show NOTHING while a run was in flight and, if the run
+    FAILED, nothing forever -- a 12-minute fr-FR run died at its fix step in prod
+    and no surface ever said so (issue #44). This strip renders one row per
+    launched run and tails the EXISTING read-only SSE observer
+    (/runs/stream?run_id=), the same channel run_view.html uses. Server-rendered
+    rows so the strip is honest with JS off (it just does not update); the widget
+    only fills in what it learns. Never rendered unless the one-shot cookie the
+    translate POST set has just been consumed. -#}
+{% if queued_runs %}
+{% if queued_runs|length > 6 %}<p class="muted">Showing the first 6 queued translations. Open a run to follow its status.</p>{% endif %}
+<div aria-label="Queued translations">
+  {% for r in queued_runs[:6] %}
+  <a class="pill" href="/runs/{{ r.id }}">{{ r.target_locale }}: queued #{{ r.id }}</a>
+  {% endfor %}
+</div>
+{% endif %}
+{% if live_runs %}
+<div class="runstrip" data-keysrun data-stream-url="/runs/stream"
+     data-grid-url="/projects/{{ project.id }}/keys">
+  <h3 class="runstrip-title">Translation runs</h3>
+  {% for r in live_runs %}
+  <div class="runstrip-row" data-run-id="{{ r.id }}">
+    <span class="runstrip-locale data-mono">{{ r.locale or '(locale)' }}</span>
+    <span class="runstrip-state" data-run-state>{{ r.status }}</span>
+    <span class="runstrip-steps muted small" data-run-steps></span>
+    <a class="small" href="/runs/{{ r.id }}">run #{{ r.id }}</a>
+    <div class="runstrip-error error" data-run-error hidden></div>
+  </div>
+  {% endfor %}
+  <p class="runstrip-foot muted small" data-run-foot></p>
+</div>
+<script src="/static/sse.js?v={{ static_v('sse.js') }}"></script>
+<script src="/static/keysrun.js?v={{ static_v('keysrun.js') }}"></script>
+{% endif %}
+
+{# --- the keys -------------------------------------------------------------
+     One card per key (issue #48 fix folded in): each plural category's form
+     (or read-only line) is wrapped in its own `.plural-line` block container,
+     so categories always stack on separate lines instead of flowing as inline
+     siblings of the shared `.rowform` rule (style.css .rowform stays
+     display:inline - 7 other templates rely on that; this page just never
+     puts more than one form per block container any more). -#}
+{% call m.card() %}
+  <h2>Keys</h2>
+  {# Batch 14: the static education callout (SPEC §7.2). NO em dashes (the maintainer's copy rule). #}
+  {% if feature_enabled('key_images') %}
+  <p class="help">Image context only works when this project's translation engine can see
+    images (a vision-capable model). Vision-capable engines include a local vision model
+    via LM Studio (when configured with a vision model on the chat path) and the cloud
+    models Claude, OpenAI, and Gemini. With a text-only engine (for example DeepL or an NMT
+    engine, or a local ChatML-adapter model like qwen3.5) the image is stored for reviewers
+    but is skipped at translation time. Attach images per key from its Edit panel below.</p>
+  {# Batch 14 T2 (SPEC §7.2): the DYNAMIC capability warning. When the project's currently
+     configured engine is NOT vision-capable, escalate the static note to a visible warning
+     at the attach surface, keyed on the SAME is_vision_capable predicate the machine uses,
+     so UI and machine agree on the capability question. NO em dashes (the maintainer's copy rule). #}
+  {% if not engine_vision_capable %}
+  <p class="help warn" role="alert">This project's translation engine ({{ engine_ref }})
+    cannot see images, so images you attach here will be stored for reviewers but skipped at
+    translation time. To send image context to the model, point this project at a
+    vision-capable engine (Claude, OpenAI, Gemini, or a local vision model on the chat path).</p>
+  {% endif %}
+  {% endif %}
+  {% if groups %}
+    {% for group in groups %}
+    <h3 class="data-mono">{{ group.namespace or '(default namespace)' }}</h3>
+    <div class="keycards">
+      {% for row in group.rows %}
+      <div class="keycard">
+        <div class="keycard-head">
+          <span class="data-mono">{{ row.name }}</span>
+          {% if row.context %}<span class="badge status" title="context">{{ row.context }}</span>{% endif %}
+          {% if row.is_plural %}<span class="badge run" title="plural key">plural</span>{% endif %}
+          {% if row.is_archived %}<span class="badge status">archived</span>{% endif %}
+          {% if row.deleted %}<span class="badge fuzzy" title="soft-deleted; a sync consumer has its tombstone">deleted</span>{% endif %}
+          {% if row.is_hidden %}<span class="badge status">hidden</span>{% endif %}
+          {% if row.char_limit %}<span class="badge status" title="character limit">&le;{{ row.char_limit }}</span>{% endif %}
+          {% for tg in row.tags %}<span class="badge">{{ tg }}</span>{% endfor %}
+          {# SPEC-wave3 §4.2 / M-9: a per-key queries link - a key query is key_id-scoped,
+             so this is the web entry point the card promises. Gated on the kill switch. #}
+          {% if feature_enabled('queries') %}<a class="small" href="/queries?key={{ row.id }}" title="Queries about this key"><span aria-hidden="true">💬</span></a>{% endif %}
+          {# Batch 14: an in-context image count badge - a vision-capable engine sees these
+             when translating this key. Gated on the key_images kill switch. #}
+          {% if feature_enabled('key_images') and row.images %}<span class="badge run" title="in-context images a vision-capable engine sees when translating this key">&#128247; {{ row.images|length }}</span>{% endif %}
+          {% if row.description %}<div class="muted small">{{ row.description }}</div>{% endif %}
+        </div>
+
+        <div class="keycard-locale keycard-source">
+          <div class="loc-label muted small data-mono">{{ project.source_locale }} <span class="badge status">base</span></div>
+          <div class="plural-values">
+            {% for cat, text in row.base.items() %}
+              {#- A DELETED key is read-only: its edit routes resolve it as missing
+                  (404), so an input here would be a control that always fails. -#}
+              {% if can_write and not row.deleted %}
+              <div class="plural-line">
+                <form method="post" action="/projects/{{ project.id }}/keys/{{ row.id }}/base" class="rowform">
+                  {% include "_csrf.html" %}
+                  <input type="hidden" name="plural_category" value="{{ cat }}" />
+                  {% if cat %}<span class="muted small data-mono">{{ cat }}</span>{% endif %}
+                  <input type="text" name="text" aria-label="Source text for key {{ row.name }}{% if cat %}, {{ cat }}{% endif %}"{{ src_lang }} value="{{ text }}" />
+                  <button type="submit" class="btn-small">Save</button>
+                </form>
+              </div>
+              {% else %}
+              <div class="plural-line">{% if cat %}<span class="muted small data-mono">{{ cat }}</span> {% endif %}<span{{ src_lang }}>{{ text }}</span></div>
+              {% endif %}
+            {% endfor %}
+          </div>
+        </div>
+
+        {% for loc in locales %}
+        {% set loc_lang = loc|langattrs %}
+        <div class="keycard-locale">
+          <div class="loc-label muted small data-mono">{{ loc }}</div>
+          <div class="plural-values">
+            {% for v in row['values'].get(loc, []) %}
+              {#- K8: `detail` was never set by ANY flag family, so every qa badge tooltip
+                  in this grid was empty -- read `message` (the human sentence every family
+                  carries). The DERIVED `over_limit` marker (from key_view, no write) shows a
+                  pre-existing violation nobody has re-saved; it is suppressed when a stored
+                  char_limit flag already says the same thing, to avoid a double badge. -#}
+              {% set has_cl = v.qa_flags | selectattr('type', 'equalto', 'char_limit') | list | length %}
+              {% if can_write and not row.deleted %}
+              <div class="plural-line">
+                <form method="post" action="/projects/{{ project.id }}/keys/{{ row.id }}/value" class="rowform">
+                  {% include "_csrf.html" %}
+                  <input type="hidden" name="locale" value="{{ loc }}" />
+                  <input type="hidden" name="plural_category" value="{{ v.plural_category }}" />
+                  {% if v.plural_category %}<span class="muted small data-mono">{{ v.plural_category }}</span>{% endif %}
+                  <input type="text" name="text" aria-label="{{ loc }} translation for key {{ row.name }}{% if v.plural_category %}, {{ v.plural_category }}{% endif %}"{{ loc_lang }} value="{{ v.text }}" />
+                  <button type="submit" class="btn-small">Save</button>
+                  {{ m.status_badge(v.status, m.status_label(v.status)) }}
+                  {% if v.lock_band %}{% set _vfuzzy = (v.lock_band|string|lower == 'fuzzy') %}<details class="lockinfo"><summary><span class="badge {% if v.lock_hard %}warn{% else %}exact{% endif %}">{% if v.lock_hard %}<span aria-hidden="true">&#128274;</span> TM locked{% elif _vfuzzy %}<span aria-hidden="true">&#128273;</span> TM {{ v.tm_match_pct }}%{% else %}<span aria-hidden="true">&#128273;</span> TM 100%{% endif %}</span></summary><span class="muted small">{% if v.lock_hard %}Hard TM lock: no automated step may change this.{% elif _vfuzzy %}Soft TM lock: filled from a {{ v.tm_match_pct }}% fuzzy TM match.{% else %}Soft TM lock: filled from a 100% TM match.{% endif %} Editing the value here clears it.</span></details>{% endif %}
+                </form>
+                {% for f in v.qa_flags %}<details class="qa-flag"><summary><span class="badge fuzzy" title="{{ f.get('message', '') }}">{{ f.get('type', 'flag') }}</span></summary><div class="muted small">{{ f.get('message', '') }}</div></details>{% endfor %}
+                {% if v.over_limit and not has_cl %}<span class="badge fuzzy" title="{{ v.over_limit.length }} characters, limit {{ v.over_limit.limit }}">over limit</span>{% endif %}
+              </div>
+              {% else %}
+              <div class="plural-line"><span{{ loc_lang }}>{{ v.text }}</span> {{ m.status_badge(v.status, m.status_label(v.status)) }}
+                {% if v.lock_band %}{% set _vfuzzy = (v.lock_band|string|lower == 'fuzzy') %}<details class="lockinfo"><summary><span class="badge {% if v.lock_hard %}warn{% else %}exact{% endif %}">{% if v.lock_hard %}<span aria-hidden="true">&#128274;</span> TM locked{% elif _vfuzzy %}<span aria-hidden="true">&#128273;</span> TM {{ v.tm_match_pct }}%{% else %}<span aria-hidden="true">&#128273;</span> TM 100%{% endif %}</span></summary><span class="muted small">{% if v.lock_hard %}Hard TM lock: no automated step may change this.{% elif _vfuzzy %}Soft TM lock: filled from a {{ v.tm_match_pct }}% fuzzy TM match.{% else %}Soft TM lock: filled from a 100% TM match.{% endif %}</span></details>{% endif %}
+                {% for f in v.qa_flags %}<details class="qa-flag"><summary><span class="badge fuzzy" title="{{ f.get('message', '') }}">{{ f.get('type', 'flag') }}</span></summary><div class="muted small">{{ f.get('message', '') }}</div></details>{% endfor %}
+                {% if v.over_limit and not has_cl %}<span class="badge fuzzy" title="{{ v.over_limit.length }} characters, limit {{ v.over_limit.limit }}">over limit</span>{% endif %}
+              </div>
+              {% endif %}
+            {% else %}
+              <div class="plural-line"><span class="muted small">-</span></div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+
+        <div class="keycard-actions">
+          {% if can_write and row.deleted %}
+          <form method="post" action="/projects/{{ project.id }}/keys/{{ row.id }}/restore" class="rowform">
+            {% include "_csrf.html" %}
+            <button type="submit" class="btn-small">Restore</button>
+          </form>
+          <p class="help">Its translations were kept. Restoring re-announces the key
+            and its values on the change feed.</p>
+          {% elif can_write %}
+          <details>
+            <summary class="small">Edit</summary>
+            <form method="post" action="/projects/{{ project.id }}/keys/{{ row.id }}/meta" class="form">
+              {% include "_csrf.html" %}
+              <label>Description <input type="text" name="description" value="{{ row.description }}" /></label>
+              <label>Context <input type="text" name="context" value="{{ row.context }}" /></label>
+              <label>Tags <input type="text" name="tags" value="{{ row.tags|join(', ') }}" placeholder="comma,separated" /></label>
+              <label>Char limit <input type="text" name="char_limit" value="{{ row.char_limit or '' }}" size="5" /></label>
+              <label class="checkbox"><input type="checkbox" name="is_hidden" value="1" {% if row.is_hidden %}checked{% endif %} /> hidden from translators</label>
+              <label class="checkbox"><input type="checkbox" name="is_archived" value="1" {% if row.is_archived %}checked{% endif %} /> archived (retired from the build)</label>
+              <button type="submit" class="btn-small">Save</button>
+            </form>
+            {# --- plural drawer: promote/demote + per-form editing above --- #}
+            <form method="post" action="/projects/{{ project.id }}/keys/{{ row.id }}/plural" class="form">
+              {% include "_csrf.html" %}
+              <input type="hidden" name="is_plural" value="{{ '0' if row.is_plural else '1' }}" />
+              <label>Plural argument <input type="text" name="plural_arg_name" value="{{ row.plural_arg_name or '' }}" size="8" /></label>
+              {% if row.is_plural %}
+              <label class="checkbox"><input type="checkbox" name="force" value="1" />
+                discard translated non-<code>other</code> forms</label>
+              <button type="submit" class="btn-small">Make single</button>
+              <p class="help">Demoting refuses while another form still holds a
+                translation, unless you tick the box.</p>
+              {% else %}
+              <button type="submit" class="btn-small">Make plural</button>
+              <p class="help">Each locale gets exactly the CLDR forms it needs.</p>
+              {% endif %}
+            </form>
+            {# --- Batch 14: in-context image gallery (for vision engines) --- #}
+            {% if feature_enabled('key_images') %}
+            <div class="key-images">
+              <div class="small muted">In-context images (a vision-capable engine sees these when translating this key)</div>
+              {% for img in row.images %}
+              <div class="key-image plural-line">
+                <a href="/projects/{{ project.id }}/keys/{{ row.id }}/images/{{ img.id }}/raw" target="_blank" rel="noopener">
+                  <img src="/projects/{{ project.id }}/keys/{{ row.id }}/images/{{ img.id }}/raw"
+                       alt="{{ img.caption or 'in-context image' }}" width="80" loading="lazy" />
+                </a>
+                {% if img.is_primary %}<span class="badge run" title="sent by default at translation time">primary</span>{% endif %}
+                {% if img.caption %}<span class="muted small">{{ img.caption }}</span>{% endif %}
+                {% if not img.is_primary %}
+                <form method="post" action="/projects/{{ project.id }}/keys/{{ row.id }}/images/{{ img.id }}/primary" class="rowform">
+                  {% include "_csrf.html" %}
+                  <button type="submit" class="btn-small">Make primary</button>
+                </form>
+                {% endif %}
+                <form method="post" action="/projects/{{ project.id }}/keys/{{ row.id }}/images/{{ img.id }}/delete" class="rowform">
+                  {% include "_csrf.html" %}
+                  <button type="submit" class="btn-small danger-btn">Remove</button>
+                </form>
+              </div>
+              {% endfor %}
+              <form method="post" action="/projects/{{ project.id }}/keys/{{ row.id }}/images" enctype="multipart/form-data" class="form">
+                {% include "_csrf.html" %}
+                <label>Add image <input type="file" name="file" accept="image/png,image/jpeg" /></label>
+                <label>Caption <input type="text" name="caption" placeholder="translator note (optional)" /></label>
+                <button type="submit" class="btn-small" data-busy-label="{{ t(request, 'busy.uploading') }}">Attach</button>
+              </form>
+            </div>
+            {% endif %}
+            <a class="btnlink small danger-btn" href="/projects/{{ project.id }}/keys/{{ row.id }}/delete">Delete</a>
+          </details>
+          {% else %}
+          <span class="muted small">-</span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  {% else %}
+    {% set empty_message %}No keys match. Add one from the controls panel, or import a file.{% endset %}
+{{ m.empty_state(empty_message) }}
+  {% endif %}
+{% endcall %}
+
+</div>
+</div>
+
+</div>
+{% endblock %}

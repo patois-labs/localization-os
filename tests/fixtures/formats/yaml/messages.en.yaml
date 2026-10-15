@@ -1,0 +1,10 @@
+# Symfony translation fixture (hand-written for verify_yaml_filter.py).
+symfony.great: Symfony is great
+'symfony.quoted': 'Quoted key, quoted value'
+user:
+    login:
+        title: Sign in
+        error: 'Invalid credentials for {username}.'
+    count: '{0} No users|{1} One user|]1,Inf[ %count% users'
+icu_plural: >-
+    {apples, plural, one {# apple} other {# apples}}

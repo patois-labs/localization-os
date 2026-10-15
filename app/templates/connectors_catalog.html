@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ t(request, 'page.connectors_catalog.title') }}{% endblock %}
+{% block content %}
+<div class="connections-page">
+
+{% set header_meta %}{{ tl(request, 'page.connectors_catalog.intro', brand=brand) }}{% endset %}
+{% set header_actions %}
+<button type="button" class="ghost layout-edit-btn" data-layout-edit hidden><span aria-hidden="true">&#9998;</span> {{ tl(request, 'js.layout_edit') }}</button>
+
+  <p class="toolbar">
+    <a class="btnlink" href="/connectors"><span aria-hidden="true">←</span> {{ tl(request, 'nav.connectors') }}</a>
+    {% if is_admin %}<a class="btnlink" href="/connectors/manage">{{ tl(request, 'page.connectors_manage.link') }}</a>{% endif %}
+  </p>{% endset %}
+{{ m.page_header(tl(request, 'page.connectors_catalog.title'), meta=header_meta, secondary=header_actions) }}
+
+{% macro catalog_tile(c) %}
+  <div class="tile">
+    <div class="tile-top"><span class="tile-icon" aria-hidden="true">{{ c.icon }}</span>
+      {% if c.enabled %}{{ m.status_badge('active', tl(request, 'page.connectors_catalog.badge_enabled')) }}
+      {% else %}{{ m.status_badge('paused', tl(request, 'page.connectors_catalog.badge_disabled')) }}{% endif %}</div>
+    <strong>{{ c.name }}</strong>
+    <div class="help">{{ c.cat }}</div>
+    <p class="help">{{ c.blurb }}</p>
+    <div class="tile-foot">
+      {% if c.enabled %}
+        <a class="btnlink small mt" href="/connectors/{{ c.kind }}">{{ tl(request, 'page.connectors_catalog.open') }}</a>
+      {% elif is_admin %}
+        <form method="post" action="/connectors/manage/{{ c.kind }}" class="rowform">
+          {% include "_csrf.html" %}
+          <input type="hidden" name="enabled" value="1" />
+          <button type="submit" class="small">{{ tl(request, 'page.connectors_catalog.enable') }}</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+{% endmacro %}
+
+<div id="page-layout" class="page-layout" data-layout-page="connectors_catalog">
+{% call m.card(layout_key='available', flat=true) %}
+  <h2>{{ tl(request, 'page.connectors_catalog.available') }}</h2>
+  <div class="tilegrid">
+    {% for c in active %}{{ catalog_tile(c) }}{% endfor %}
+  </div>
+{% endcall %}
+
+{% if archived %}
+{% call m.card(layout_key='archived', flat=true) %}
+  <h2>{{ tl(request, 'page.connectors_catalog.archived') }}</h2>
+  <p class="muted">{{ tl(request, 'page.connectors_catalog.archived_note') }}</p>
+  <div class="tilegrid">
+    {% for c in archived %}
+      <div class="tile">
+        <div class="tile-top"><span class="tile-icon" aria-hidden="true">{{ c.icon }}</span>
+          {{ m.status_badge('new', tl(request, 'page.connectors_catalog.badge_archived')) }}
+          {% if not c.enabled %}{{ m.status_badge('paused', tl(request, 'page.connectors_catalog.badge_disabled')) }}{% endif %}</div>
+        <strong>{{ c.name }}</strong>
+        <div class="help">{{ c.cat }}</div>
+        <p class="help">{{ c.blurb }}</p>
+        <div class="tile-foot">
+          {% if c.enabled %}
+            <a class="btnlink small mt" href="/connectors/{{ c.kind }}">{{ tl(request, 'page.connectors_catalog.open') }}</a>
+          {% elif is_admin %}
+            <form method="post" action="/connectors/manage/{{ c.kind }}" class="rowform">
+              {% include "_csrf.html" %}
+              <input type="hidden" name="enabled" value="1" />
+              <button type="submit" class="small">{{ tl(request, 'page.connectors_catalog.enable') }}</button>
+            </form>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% endcall %}
+{% endif %}
+
+{% call m.card(layout_key='roadmap', flat=true) %}
+  <h2>{{ tl(request, 'page.connectors_catalog.roadmap') }}</h2>
+  <div class="tilegrid tilegrid-static">
+    {% for c in planned %}
+      <div class="tile tile-inert">
+        <div class="tile-top"><span class="tile-icon" aria-hidden="true">{{ c.icon }}</span>
+          {{ m.status_badge('new', tl(request, 'page.connectors_catalog.badge_planned')) }}</div>
+        <strong>{{ c.name }}</strong>
+        <div class="help">{{ c.cat }}</div>
+        <p class="help">{{ c.desc }}</p>
+        <button class="small ghost" disabled>{{ tl(request, 'page.connectors_catalog.connect') }}</button>
+      </div>
+    {% endfor %}
+  </div>
+{% endcall %}
+</div>
+{% with layout_page = 'connectors_catalog' %}{% include "_page_layout.html" %}{% endwith %}
+
+</div>
+{% endblock %}

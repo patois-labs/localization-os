@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Export {{ run.run_uuid[:8] }}{% endblock %}
+{% block content %}
+<div class="documents-page">
+
+<section class="document-heading">
+  {% set page_title %}Export #{{ run.id }}{% endset %}
+  {{ m.page_header(page_title) }}
+  <p class="muted">Scope <strong>{{ run.scope_kind }}{% if run.scope_ref %}:{{ run.scope_ref }}{% endif %}</strong>,
+  history <strong>{{ run.history }}</strong>. <a href="/exports"><span aria-hidden="true">&larr;</span> all exports</a></p>
+  {% if started %}<p class="ok">Job started - this page refreshes its status automatically.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Status</h2>
+  <p>State: <strong id="status">{{ run.status }}</strong></p>
+  <p class="muted">Rows: <span id="rows">{{ run.counts.values() | sum }}</span>
+     &middot; Size: <span id="bytes">{{ run.artifact_bytes or 0 }}</span> bytes</p>
+  <p id="download-wrap"{% if run.status not in ("ok", "partial") %} style="display:none"{% endif %}>
+    <a class="btn" id="download" href="/exports/{{ run.run_uuid }}/download">Download the ZIP</a>
+  </p>
+</section>
+
+<script nonce="{{ csp_nonce() }}">
+(function () {
+  var uuid = {{ run.run_uuid | tojson }};
+  var terminal = {ok: 1, partial: 1, failed: 1};
+  function tick() {
+    fetch("/exports/" + uuid + "/status", {
+      headers: { 'Accept': 'application/json', 'X-Loc-Background': '1' }
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d) { return; }
+        document.getElementById("status").textContent = d.status;
+        var rows = 0;
+        for (var k in (d.counts || {})) { rows += d.counts[k]; }
+        document.getElementById("rows").textContent = rows;
+        document.getElementById("bytes").textContent = d.artifact_bytes || 0;
+        if (d.status === "ok" || d.status === "partial") {
+          document.getElementById("download-wrap").style.display = "";
+        }
+        if (!terminal[d.status]) { setTimeout(tick, 1500); }
+      })
+      .catch(function () { setTimeout(tick, 3000); });
+  }
+  if (!terminal[{{ run.status | tojson }}]) { setTimeout(tick, 1500); }
+})();
+</script>
+
+</div>
+{% endblock %}

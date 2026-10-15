@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Notifications{% endblock %}
+{% block content %}
+<div class="guidance-page">
+
+{% set guidance_title %}Notifications{% endset %}
+{% set guidance_meta %}<p>Post project updates to Slack, Microsoft Teams, a signed webhook or email. Messages carry the project name, a few counts and a link to sign in. They never carry source or target text.
+  {% if not outbound_enabled %}<br><span class="badge warn">Switched off</span> Outbound notifications are off on this install (setting notify_outbound_enabled), so nothing is sent.{% endif %}</p>{% endset %}
+{{ m.page_header(guidance_title, meta=guidance_meta) }}
+<nav class="guidance-sections" aria-label="Notifications">
+<a href="#notify-channels">Channels</a>
+<a href="#notify-routes">Routes</a>
+<a href="#notify-log">Delivery log</a>
+</nav>
+
+{% if saved %}<p class="ok">Saved.</p>{% endif %}
+{% if tested == '1' %}<p class="ok">{{ test_message }}</p>{% elif tested == '0' %}<p class="warn" role="alert">Test failed: {{ test_message }}</p>{% endif %}
+{% if new_secret %}
+<section class="card" id="notify-new-secret" role="status">
+  <h2>Signing secret (shown once)</h2>
+  <p>Copy it now; it cannot be shown again. Each delivery carries <code>X-LocOS-Signature: t=&lt;unix&gt;,v1=&lt;hex&gt;</code>, an HMAC-SHA256 of <code>t + "." + body</code> with this secret. Reject a timestamp more than 5 minutes old.</p>
+  <p><code id="notify-secret-value">{{ new_secret }}</code></p>
+</section>
+{% endif %}
+
+{% call m.card(flat=true) %}
+  <h2 id="notify-channels">Channels</h2>
+  {% if channels %}
+  {% call m.data_table('Notification channels', [{'label': 'Name'}, {'label': 'Kind'}, {'label': 'Destination'}, {'label': 'Last test'}, {'label': 'State'}, {'label': 'Actions', 'actions': true}]) %}
+    {% for c in channels %}
+    <tr>
+      <td><span class="cell-primary">{{ c.name }}</span></td>
+      <td>{{ c.kind }}</td>
+      <td class="muted small">{% if c.kind == 'email' %}{{ c.recipients | join(', ') }}{% else %}{{ c.destination }}{% if c.has_signing_secret %} (signed){% endif %}{% endif %}</td>
+      <td class="muted small">{% if c.last_test_at %}{{ 'ok' if c.last_test_ok else 'failed' }}: {{ c.last_test_message }}{% else %}never{% endif %}</td>
+      <td>{% if c.enabled %}<span class="badge ok">On</span>{% else %}<span class="badge warn">Off</span>{% endif %}{% if c.failed_deliveries %} <span class="badge warn">{{ c.failed_deliveries }} failed</span>{% endif %}</td>
+      <td class="row-actions">
+        <form method="post" action="/settings/notifications/channels/{{ c.id }}/test" class="form inline-form">
+          {% include "_csrf.html" %}
+          <button type="submit" class="small">Send test</button>
+        </form>
+        {% call m.row_menu('nch-' ~ c.id, 'More actions for ' ~ c.name) %}
+        <form method="post" action="/settings/notifications/channels/{{ c.id }}/update" class="form inline-form">
+          {% include "_csrf.html" %}
+          <input type="hidden" name="enabled" value="{{ '0' if c.enabled else '1' }}" />
+          <button type="submit" role="menuitem">{{ 'Turn off' if c.enabled else 'Turn on' }}</button>
+        </form>
+        {% if c.has_signing_secret %}
+        <form method="post" action="/settings/notifications/channels/{{ c.id }}/update" class="form inline-form">
+          {% include "_csrf.html" %}
+          <input type="hidden" name="rotate" value="1" />
+          <button type="submit" role="menuitem">Rotate signing secret</button>
+        </form>
+        {% endif %}
+        {% if c.failed_deliveries %}
+        <form method="post" action="/settings/notifications/channels/{{ c.id }}/retry" class="form inline-form">
+          {% include "_csrf.html" %}
+          <button type="submit" role="menuitem">Retry failed</button>
+        </form>
+        {% endif %}
+        <form method="post" action="/settings/notifications/channels/{{ c.id }}/delete" class="form inline-form" data-confirm-delete data-nch-name="{{ c.name }}">
+          {% include "_csrf.html" %}
+          <button type="submit" role="menuitem" class="rm-danger">Delete</button>
+        </form>
+        {% endcall %}
+      </td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+  {% else %}
+    {{ m.empty_state('No channels yet. Add one below.') }}
+  {% endif %}
+
+  <form method="post" action="/settings/notifications/channels" class="form">
+  {% call m.form_section('notify-new-channel', 'Add a channel', 'A Slack channel needs an incoming-webhook URL (hooks.slack.com). Teams needs a Workflows (Power Automate) webhook URL. The URL is stored encrypted and never shown again.') %}
+    {% include "_csrf.html" %}
+    <label>Kind
+      <select name="kind" id="notify-kind">
+        {% for k in kinds %}<option value="{{ k }}">{{ {'slack': 'Slack', 'teams': 'Microsoft Teams', 'webhook': 'Signed webhook', 'email': 'Email'}[k] }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Name <input type="text" name="name" maxlength="80" required placeholder="Localization updates" /></label>
+    <label>Webhook URL (Slack, Teams, webhook) <input type="url" name="url" autocomplete="off" placeholder="https://..." /></label>
+    <label>Recipients (email, separated by commas) <input type="text" name="recipients" placeholder="team@example.com" /></label>
+    <button type="submit">Add channel</button>
+  {% endcall %}
+  </form>
+{% endcall %}
+
+{% call m.card(flat=true) %}
+  <h2 id="notify-routes">Routes</h2>
+  <p class="muted">A project posts to the most specific route that covers an event: its own, then its content type, project type, customer, and finally the org default. With no events chosen, a route posts the defaults ({{ default_on | join(', ') }}).</p>
+  {% if routes %}
+  {% call m.data_table('Notification routes', [{'label': 'Scope'}, {'label': 'Channel'}, {'label': 'Events'}, {'label': 'Actions', 'actions': true}]) %}
+    {% for r in routes %}
+    <tr>
+      <td>{{ r.scope_label }}</td>
+      <td>{{ r.channel }} <span class="muted small">({{ r.kind }})</span></td>
+      <td class="muted small">{{ r.events | join(', ') if r.events else 'defaults' }}</td>
+      <td class="row-actions">
+        <form method="post" action="/settings/notifications/routes/{{ r.id }}/delete" class="form inline-form">
+          {% include "_csrf.html" %}
+          <button type="submit" class="small ghost">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+  {% else %}
+    {{ m.empty_state('No routes yet. Attach a channel to the org default, a customer, a content type or a project type.') }}
+  {% endif %}
+  {% if channels %}
+  <form method="post" action="/settings/notifications/routes" class="form">
+  {% call m.form_section('notify-new-route', 'Attach a channel') %}
+    {% include "_csrf.html" %}
+    <label>Channel
+      <select name="channel_id">{% for c in channels %}<option value="{{ c.id }}">{{ c.name }} ({{ c.kind }})</option>{% endfor %}</select>
+    </label>
+    <label>Applies to
+      <select name="scope">
+        <option value="org">Everything (org default)</option>
+        <option value="project_type">All projects of a type</option>
+        <option value="customer">One customer (id)</option>
+        <option value="content_type">One content type (id)</option>
+        <option value="project">One project (id)</option>
+      </select>
+    </label>
+    <label>Id or type <input type="text" name="ref" placeholder="document, key_based, or an id" /></label>
+    <fieldset class="checks"><legend>Events (none = defaults)</legend>
+      {% for e in events %}<label class="check"><input type="checkbox" name="events" value="{{ e }}" /> {{ event_labels[e] }}</label>{% endfor %}
+    </fieldset>
+    <button type="submit">Attach</button>
+  {% endcall %}
+  </form>
+  {% endif %}
+{% endcall %}
+
+{% call m.card(flat=true) %}
+  <h2 id="notify-log">Delivery log</h2>
+  {% if deliveries %}
+  {% call m.data_table('Recent notification deliveries', [{'label': 'When'}, {'label': 'Channel'}, {'label': 'Event'}, {'label': 'Status'}, {'label': 'Detail'}]) %}
+    {% for d in deliveries %}
+    <tr>
+      <td class="muted small">{{ d.created_at }}</td>
+      <td>{{ d.channel }}</td>
+      <td>{{ d.event }}</td>
+      <td>{{ d.status }}{% if d.attempts > 1 %} ({{ d.attempts }} tries){% endif %}</td>
+      <td class="muted small">{{ d.error or '-' }}</td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+  {% else %}
+    {{ m.empty_state('Nothing has been sent yet.') }}
+  {% endif %}
+{% endcall %}
+
+<script nonce="{{ csp_nonce() }}">
+(function () {
+  document.querySelectorAll('form[data-confirm-delete]').forEach(function (f) {
+    f.addEventListener('submit', function (e) {
+      var name = f.getAttribute('data-nch-name') || 'this channel';
+      if (window.LocAsk && window.LocAsk.guard) { window.LocAsk.guard(e, 'Delete channel "' + name + '"? Its routes and delivery log go with it.'); }
+      else { e.preventDefault(); }
+    });
+  });
+})();
+</script>
+
+</div>
+{% endblock %}

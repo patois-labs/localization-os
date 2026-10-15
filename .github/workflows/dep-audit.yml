@@ -1,0 +1,113 @@
+# Dependency audit of the exact base/container locks and optional runtime profiles.
+# Ledger owner/expiry checks run on dependency changes and the weekly schedule.
+# Fail-fast profile matrix, at most two runners concurrently. No package resolution
+# or installation occurs during the audit; missing optional closure locks fail closed.
+# pytest and ruff are development tools. python3-saml is optional RUNTIME software.
+name: dep-audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "requirements*.txt"
+      - "requirements*.lock"
+      - "scripts/locks/**"
+      - "scripts/hash_locks.py"
+      - "scripts/lock_inventory.py"
+      - "tools/vendor_studio/requirements*"
+      - "tools/vendor_studio/Dockerfile"
+      - "Dockerfile"
+      - "scripts/release_lock.py"
+      - "scripts/audit_runtime_profiles.py"
+      - "tests/verify_release_lock.py"
+      - ".github/runtime-profiles.json"
+      - ".github/locked-profile-metadata.json"
+      - "pyproject.toml"
+      - ".github/workflows/dep-audit.yml"
+      - ".github/pip-audit-ignores.txt"
+      - "scripts/native_wheel_audit.py"
+      - "scripts/wheel_native_inventory.py"
+      - "scripts/native_advisories.json"
+  pull_request:
+    branches: [main]
+    paths:
+      - "requirements*.txt"
+      - "requirements*.lock"
+      - "scripts/locks/**"
+      - "scripts/hash_locks.py"
+      - "scripts/lock_inventory.py"
+      - "tools/vendor_studio/requirements*"
+      - "tools/vendor_studio/Dockerfile"
+      - "Dockerfile"
+      - "scripts/release_lock.py"
+      - "scripts/audit_runtime_profiles.py"
+      - "tests/verify_release_lock.py"
+      - ".github/runtime-profiles.json"
+      - ".github/locked-profile-metadata.json"
+      - "pyproject.toml"
+      - ".github/workflows/dep-audit.yml"
+      - ".github/pip-audit-ignores.txt"
+      - "scripts/native_wheel_audit.py"
+      - "scripts/wheel_native_inventory.py"
+      - "scripts/native_advisories.json"
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch: {}
+
+# Least-privilege: this workflow only reads the repo.
+permissions:
+  contents: read
+
+# Cancel a still-running audit when a newer commit supersedes it on the same ref,
+# so a slow run never stacks behind a fresh one. Scheduled runs get a stable
+# per-ref group too; workflow_dispatch/push/PR on the same ref coalesce.
+concurrency:
+  group: dep-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pip-audit:
+    name: pip-audit (${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    # Per-profile advisory-service ceiling; fail-fast cancels sibling jobs.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: true
+      max-parallel: 2
+      matrix:
+        profile: [base, postgres, ldap, saml, vendor-studio, pii, ocr, sqlcipher, saml-lxml-fallback, aux-build, aux-ci-check-tools]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install pip-audit
+        # Pinned for reproducibility: an unpinned pip-audit could change its exit
+        # semantics, advisory sources, or CLI flags under us and silently flip the
+        # gate. Bump deliberately (re-check --strict / --ignore-vuln behaviour).
+        run: pip install --require-hashes --no-deps -r requirements-dev.lock
+
+      - name: Check advisory owners and expiry
+        run: python scripts/release_lock.py --ledger .github/pip-audit-ignores.txt
+
+      - name: Audit locked release and optional runtime profiles
+        run: python scripts/audit_runtime_profiles.py --profile ${{ matrix.profile }}
+
+      - name: Scan native libraries bundled in the locked wheels
+        # pip-audit sees Python dists only; this downloads the hash-locked
+        # wheels (no dependency resolution, no builds) and matches their vendored
+        # libraries (libxml2, libxslt, ...) to scripts/native_advisories.json. Exit 1 is
+        # a known-vulnerable bundled library, exit 2 fails closed.
+        run: python scripts/native_wheel_audit.py --profile ${{ matrix.profile }}
+
+      - name: Retain scanned inventories and advisory results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-dependency-audits-${{ matrix.profile }}
+          path: _audit-results/

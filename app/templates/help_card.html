@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ card.title }} - Guide{% endblock %}
+{% block content %}
+
+{#- The rendered capability card (SPEC-ask-draft section 6). This is the SAME text
+    the Ask assistant is grounded on -- one source of truth, so a help page and an
+    answer can never disagree. -#}
+<div class="module-help-page">
+{% set guide_back %}<a href="/help"><span aria-hidden="true">&larr;</span> All module guides</a>{% endset %}
+{{ m.page_header(card.title, meta=card.summary, secondary=guide_back) }}
+
+{% if card.verbs %}
+{% call m.card() %}
+  <h2>How to do things</h2>
+  <dl class="help-card-dl">
+    {% for task, how in card.verbs.items() %}
+    <dt>{{ task }}</dt><dd>{{ how }}</dd>
+    {% endfor %}
+  </dl>
+{% endcall %}
+{% endif %}
+
+{% if card.needs %}
+{% call m.card() %}
+  <h2>What you need first</h2>
+  <ul>{% for item in card.needs %}<li>{{ item }}</li>{% endfor %}</ul>
+{% endcall %}
+{% endif %}
+
+{% if card.nouns %}
+{% call m.card() %}
+  <h2>Words used here</h2>
+  <dl class="help-card-dl">
+    {% for term, meaning in card.nouns.items() %}
+    <dt>{{ term }}</dt><dd>{{ meaning }}</dd>
+    {% endfor %}
+  </dl>
+{% endcall %}
+{% endif %}
+
+{% if edges %}
+{% call m.card() %}
+  <h2>How this fits together</h2>
+  <dl class="help-card-dl">
+    {% for e in edges %}
+    <dt><a href="/help/{{ e.module }}">{{ e.title }}</a></dt><dd>{{ e.how }}</dd>
+    {% endfor %}
+  </dl>
+{% endcall %}
+{% endif %}
+
+{% if card.limits %}
+{% call m.card() %}
+  <h2>Limits and known warts</h2>
+  <ul>{% for item in card.limits %}<li>{{ item }}</li>{% endfor %}</ul>
+{% endcall %}
+{% endif %}
+
+{% if card.body %}
+{% call m.card() %}
+  <div class="help-card-body">
+    {% for para in card.body.split('\n\n') %}
+      {% if para.strip().startswith('### ') %}
+        {#- h3 support: no shipped card used '### ' before /help/llm, so this is
+            inert for every other card and only gives the long LLM guide a second
+            heading level. '### ' does not match the '## ' test below (its third
+            character is '#', not a space), so ordering here is belt-and-braces.
+
+            CARD AUTHORS, THE WHOLE HEADING CONTRACT: this is a deliberately tiny
+            markdown subset, not a markdown parser. '## ' and '### ' are the ONLY
+            headings, so h3 is the deepest level a card has. Anything else falls to
+            the <p> branch at the bottom and renders its markers AS LITERAL TEXT --
+            '#### Foo' prints "#### Foo", and so does '###Foo' (no space after the
+            hashes). Both are silent: the page still renders, it just shows the
+            hashes. tests/verify_ask_draft.py fails a card containing either, so
+            this is caught rather than shipped. Paragraphs split on a BLANK LINE,
+            so a heading needs one above and below it. -#}
+        <h3>{{ para.strip()[4:] }}</h3>
+      {% elif para.strip().startswith('## ') %}
+        <h2>{{ para.strip()[3:] }}</h2>
+      {% elif para.strip().startswith('- ') or para.strip().startswith('1. ') %}
+        <ul>{% for line in para.strip().split('\n') %}<li>{{ line.lstrip('-0123456789. ') }}</li>{% endfor %}</ul>
+      {% else %}
+        <p>{{ para.strip() }}</p>
+      {% endif %}
+    {% endfor %}
+  </div>
+{% endcall %}
+{% endif %}
+
+{% call m.card() %}
+  <h2>Other module guides</h2>
+  <ul class="help-card-index">
+    {% for c in cards %}
+    <li><a href="/help/{{ c.module }}"><strong>{{ c.title }}</strong></a> -
+      <span class="muted">{{ c.summary }}</span></li>
+    {% endfor %}
+  </ul>
+{% endcall %}
+
+</div>
+{% endblock %}

@@ -1,0 +1,1204 @@
+{% extends "base.html" %}
+{# Work surface: full width, not the centered list column (Console). #}
+{% set wide_page = true %}
+{% import "_macros.html" as m with context %}
+{% import "_prompt_lock.html" as pl with context %}
+{% block title %}{{ wf.name }} - Workflow builder{% endblock %}
+{% block content %}
+<div class="ux-workflows">
+<link rel="stylesheet" href="/static/wfprompts.css?v={{ static_v('wfprompts.css') }}">
+
+<p><a href="/workflows" class="back"><span aria-hidden="true">←</span> Workflows</a></p>
+
+{{ m.page_header(wf.name) }}
+  {% if wf.archived_at %}
+    <div class="notice notice-warn">This workflow is <strong>archived</strong> - hidden from
+    the default list, pickers and dispatch, and blocked from launching new runs. Unarchive it
+    to use it again.</div>
+  {% endif %}
+  {% if steps|selectattr('needs_review')|list %}
+    <div class="notice notice-warn">Some steps were LLM-adapted from another language pair -
+    review the flagged prompts below before activating this variant.</div>
+  {% endif %}
+  {# SPEC-workflows-redesign 4b: one-shot banner after a base-step edit (what it swept /
+     protected / skipped) or a pin/unpin. Plain info notice (reuses .notice). #}
+  {% if notice %}
+    <div class="notice">{{ notice }}</div>
+  {% endif %}
+<div class="wf-steptabs wf-pagetabs" data-wf-pagetabs{% if draft %} data-initial="wfp-tab-add"{% elif wsp_notice or wsp_draft %} data-initial="wfp-tab-system"{% endif %}>
+{# #630: the workflow page's TOP-LEVEL tabs. The System prompt is its own tab here and is never
+   one of the step tabs inside Steps. The panels live next to this bar in workflow_builder.html
+   (wfp-panel-*); /static/wfpagetabs.js switches them (progressive enhancement: with no JS the bar
+   stays hidden and every panel shows stacked, in this same order). The tab is kept in the URL
+   hash (#wf-steps, #system-prompt, #wf-add-step, #wf-author), so links and reload keep it. #}
+<div class="tabs wf-tabbar" role="tablist" aria-label="{{ t(request, 'page.workflow_builder.tabs_label') }}">
+  <button type="button" class="tab" role="tab" id="wfp-tab-steps" aria-controls="wfp-panel-steps" aria-selected="true" tabindex="0" data-hash="wf-steps">{{ tl(request, 'page.workflow_builder.tab_steps') }}</button>
+  {% if wsp_can_read %}<button type="button" class="tab" role="tab" id="wfp-tab-system" aria-controls="wfp-panel-system" aria-selected="false" tabindex="-1" data-hash="system-prompt">{{ tl(request, 'page.workflow_builder.tab_system_prompt') }}</button>{% endif %}
+  <button type="button" class="tab" role="tab" id="wfp-tab-add" aria-controls="wfp-panel-add" aria-selected="false" tabindex="-1" data-hash="wf-add-step">{{ tl(request, 'page.workflow_builder.tab_add_step') }}</button>
+  <button type="button" class="tab" role="tab" id="wfp-tab-author" aria-controls="wfp-panel-author" aria-selected="false" tabindex="-1" data-hash="wf-author">{{ tl(request, 'page.workflow_builder.tab_author') }}</button>
+</div>
+<div class="wf-pagepanel" role="tabpanel" id="wfp-panel-steps" aria-labelledby="wfp-tab-steps" tabindex="0">
+<section class="card">
+  <h2 id="wf-steps">Steps <span class="muted">(run top to bottom; each step's output feeds the next)</span></h2>
+  {# Prompt-tap link (only when capturing is on). ADMIN-ONLY, matching the /prompt-tap
+     page gate (the tap is a raw-content firehose). Points at the viewer filtered to THIS
+     workflow so an admin can jump from the package/verify panels to the exact payloads. #}
+  {% if prompt_tap_enabled and ((not app_meta().auth_on) or is_admin(current_user(request))) %}
+    <p class="small muted"><a href="/prompt-tap?workflow_id={{ wf.id }}"><span aria-hidden="true">🔎</span> {{ names.ledger }}</a>
+      - {{ prompt_tap_count }} capture{{ '' if prompt_tap_count == 1 else 's' }} for this workflow</p>
+  {% endif %}
+  {# Keyed steps are the legal branch targets (an edit form's on_pass/on_fail pickers
+     offer them, same as the add-step form below). Computed here so the step loop can
+     reuse it in each per-step edit form. #}
+  {% set keyed_steps = steps | selectattr('key') | list %}
+  {# #594: one tab per step. The tab bar and every panel are server-rendered; wftabs.js
+     only hides the unselected panels (progressive enhancement: with no JS the bar stays
+     hidden and each panel shows as its own stacked card). Tab ids are keyed on the step
+     id, so they survive a reorder; the visible number is the step's position. #}
+  {% set _tl = {'tm_match': 'TM match', 'lqa': 'LQA', 'human_review': 'Review', 'external': 'External'} %}
+  <div class="wf-steptabs" data-wf-tabs>
+  <div class="tabs wf-tabbar" role="tablist" aria-label="Workflow settings and steps">
+    <button type="button" class="tab" role="tab" id="wftab-settings" aria-controls="wftabpanel-settings" aria-selected="true" tabindex="0">Workflow</button>
+    {% for s in steps %}
+      {% set _lab = (s.name or 'Agent') if s.step_type == 'llm_agent' else _tl.get(s.step_type, s.step_type) %}
+      {% if s.step_type == 'lqa' and s.lqa_threshold is not none %}{% set _lab = _lab ~ ' ' ~ s.lqa_threshold %}{% endif %}
+      <button type="button" class="tab" role="tab" id="wftab-step-{{ s.id }}" aria-controls="wftabpanel-step-{{ s.id }}" aria-selected="false" tabindex="-1" title="Step {{ loop.index }}: {{ _lab }}"><span class="wf-tab-num">{{ loop.index }}</span> <span class="wf-tab-type">{{ _lab }}</span></button>
+    {% endfor %}
+  </div>
+  <div class="wf-tabpanel wf-settings-panel" role="tabpanel" id="wftabpanel-settings" aria-labelledby="wftab-settings" tabindex="0">
+    <h3 class="wf-panel-title">Workflow settings</h3>
+  <p><a href="/workflows/{{ wf.id }}/plan">Preview spend for a document and locale</a></p>
+  <p class="muted">Scope: <span class="chip">{{ wf.scope }}</span>
+    {% if group %}
+      · in group <a href="/workflow-groups/{{ group.id }}">{{ group.name }}</a>
+      {% if wf.is_default %}<span class="badge">group default</span>{% endif %}
+    {% endif %}
+  </p>
+  {% if (not app_meta().auth_on) or can_tune_ai(current_user(request)) %}
+    <div class="row-actions">
+      <form method="post" action="/workflows/{{ wf.id }}/rename" class="form inline-form">
+        {% include "_csrf.html" %}
+        <input type="text" name="name" value="{{ wf.name }}" aria-label="Workflow name" required />
+        <button type="submit" class="small">Rename</button>
+      </form>
+      {% if (not app_meta().auth_on) or is_admin(current_user(request)) %}
+        {# Archive / unarchive (residual sweep: archive verbs). Retires the workflow from
+           the default list + pickers + dispatch and blocks new runs; reversible. #}
+        {% if wf.archived_at %}
+          <form method="post" action="/workflows/{{ wf.id }}/unarchive" class="inline-del">
+            {% include "_csrf.html" %}
+            <button type="submit" class="small">Unarchive workflow</button>
+          </form>
+        {% else %}
+          <form method="post" action="/workflows/{{ wf.id }}/archive" class="inline-del"
+                data-action-confirm="Archive workflow &quot;{{ wf.name }}&quot;? It is hidden from the default list, pickers and dispatch and blocked from new runs, but its steps and history are preserved and it is reversible.">
+            {% include "_csrf.html" %}
+            <button type="submit" class="small">Archive workflow</button>
+          </form>
+        {% endif %}
+        <form method="post" action="/workflows/{{ wf.id }}/delete" class="inline-del"
+              data-action-confirm="Delete workflow &quot;{{ wf.name }}&quot;? This also removes its steps, run history and fan-out batches. It fails if a routing rule, customer default, group default, or an in-flight run still uses it. A workflow any {{ names.llmemory }} suggestion targets cannot be deleted at all (those suggestions are permanent audit records); archive it instead.">
+          {% include "_csrf.html" %}
+          <button type="submit" class="small danger-btn">Delete workflow</button>
+        </form>
+      {% endif %}
+    </div>
+  {% endif %}
+  {# SPEC-workflows-redesign Phase 3: the workflow's SHAPE (primary + additive chips)
+     and a one-line headline of how it runs, introducing the graph below. Origin chip
+     ("drafted"/"manual") when stamped. Calm - plain neutral chips, semantic tokens. #}
+  {% if shape_chips %}
+  <div class="wf-shape-line">
+    <span class="muted small">Shape:</span>
+    {% for c in shape_chips %}<span class="chip" title="{{ c.hint }}">{{ c.label }}</span> {% endfor %}
+    {% if origin_label %}<span class="chip">{{ origin_label }}</span>{% endif %}
+    {% if shape_headline %}<p class="muted small wf-shape-headline">{{ shape_headline }}</p>{% endif %}
+  </div>
+  {% endif %}
+
+  {# Workflow diagram (Phase 3.1): every step's role, model & packaged assets, plus
+     branch/loop-back edges. Server-rendered (re-renders on every GET).
+
+     SPEC-workflow-canvas Phase 1: for a user with edit rights the graph is also the
+     EDITOR for step ORDER - drag a step by its grip to reorder it, drop a check onto a
+     group outline to run those checks together, or drag a member out to leave its group.
+     Every drop POSTs to the same /steps/{id}/move seam the "move up / move down" buttons
+     above use, and the page re-renders from the server; nothing is applied client-side.
+
+     HONESTY ABOUT JS: the drag needs JavaScript, the buttons never do. So the copy below
+     leads with the buttons and names the drag as the addition - an earlier version
+     claimed the graph degraded gracefully "without JS", which was false: a JS-off editor
+     was shown drag instructions that did nothing. A viewer without edit rights gets the
+     plain read-only graph. The wrapper carries the endpoint + CSRF token so the macro
+     needs no new parameters. #}
+  {% if (not app_meta().auth_on) or can_tune_ai(current_user(request)) %}
+  <div class="wf-canvas" data-move-url="/workflows/{{ wf.id }}/steps" data-csrf="{{ csrf_token(request) }}">
+    <div class="wf-graph-region" role="region" aria-label="Workflow" tabindex="0">{{ m.wf_graph(steps, editable=true, text_id='wfStepList') }}</div>
+    <p class="wf-canvas-notice" role="status" aria-live="polite" hidden></p>
+    <p class="muted small">Use <strong>move up</strong> / <strong>move down</strong> in the
+      step list to reorder the workflow - those always work. With JavaScript on you can
+      also drag a step by its grip here: drop a check onto a dashed group outline to run
+      it together with that group, or drag a member onto a plain gap to take it out of its
+      group. Order matters: a translate step in first place can answer from translation
+      memory alone when a segment matches 100%; moved anywhere else it always calls the
+      model.</p>
+  </div>
+  {% else %}
+  <div class="wf-graph-region" role="region" aria-label="Workflow" tabindex="0">{{ m.wf_graph(steps, text_id='wfStepList') }}</div>
+  {% endif %}
+
+  {# Track B, B2 style-guide availability note. HONEST: resolution is per DOCUMENT at
+     run time (it needs the doc's content type + language pair), so this never claims a
+     specific guide resolves - it only flags that one is AVAILABLE in scope. Muted,
+     rendered only when non-empty. #}
+  {% if style_guide_note %}<p class="muted small"><span aria-hidden="true">📐</span> {{ style_guide_note }}</p>{% endif %}
+  </div>
+  {% if steps %}
+    <ol class="steplist" id="wfStepList">
+      {% for s in steps %}
+        {# The <li> is a plain list row; the tabpanel is the card inside it. #}
+        <li class="step-item" data-wf-panel-wrap>
+        <div class="step wf-tabpanel" role="tabpanel" id="wftabpanel-step-{{ s.id }}" aria-labelledby="wftab-step-{{ s.id }}" tabindex="0">
+          <div class="step-head">
+            <span class="wf-step-num">Step {{ loop.index }}</span>
+            <strong>{{ s.name or s.step_type }}</strong>
+            <span class="chip">{{ s.step_type }}</span>
+            {% if s.step_type != 'human_review' %}
+              <span class="chip">{{ s.provider or 'default' }}{% if s.model %} · {{ s.model }}{% endif %}</span>
+              {% if s.fallback_provider %}<span class="badge warn"><span aria-hidden="true">↳</span> failover: {{ s.fallback_provider }}{% if s.fallback_model %}/{{ s.fallback_model }}{% endif %}</span>{% endif %}
+              <span class="chip">chunk: {{ s.chunk_policy }}</span>
+              {% if s.redact_pii %}<span class="badge">PII redacted</span>{% endif %}
+              {% if s.adaptive_feedback %}<span class="badge" title="Earlier segments feed later prompts">adaptive feedback (n={{ s.adaptive_feedback_window }})</span>{% endif %}
+              {% if s.doc_context_prepass %}<span class="badge" title="Doc-level brief prepended to every segment">doc pre-pass</span>{% endif %}
+              {% if s.qe_gate %}<span class="badge warn" title="Score each segment; route below-threshold to review">QE gate (>={{ s.qe_threshold }}{% if s.qe_provider %} · {{ s.qe_provider }}{% endif %})</span>{% endif %}
+              {% if s.qe_gate and s.qe_autofix %}<span class="badge" title="A segment that fails a Jev QE gate is rewritten by an LLM post-editor and re-scored before it goes to review">auto-fix (up to {{ s.qe_autofix_max_rounds }} rounds{% if s.qe_autofix_provider %} · {{ s.qe_autofix_provider }}{% endif %})</span>{% endif %}
+              {% if s.step_type == 'llm_agent' and s.tm_examples and s.tm_examples_window > 0 %}<span class="badge" title="Top-N fuzzy TM matches injected as example pairs">TM few-shot (n={{ s.tm_examples_window }})</span>{% endif %}
+              {# Batch 14 T2 (SPEC §7.2/§25.9, M-4): the mandatory human-layer signal. An
+                 opted-out llm_agent step shows "image context off" so the author who set
+                 the toggle sees, per step, that this step will NOT receive the string's
+                 images (the always-available truth the design leans on - no project/engine
+                 resolution needed). Default TRUE renders nothing, so every existing step's
+                 badge row is byte-identical. #}
+              {% if s.step_type == 'llm_agent' and not s.use_image_context %}<span class="badge warn" title="This agent step will not receive the string's attached images (turned off for this step)">image context off</span>{% endif %}
+              {# Terminology T3 (SPEC §9-T3): only a DELIBERATE ON toggle earns a badge; the
+                 default (OFF = prompts.glossary_line verbatim) renders nothing, so every
+                 existing step's badge row is byte-identical. #}
+              {% if s.step_type == 'llm_agent' and s.concept_glossary_render %}<span class="badge" title="This step renders matched glossary concepts (audience-gated, capped) into the prompt instead of the plain term list">concept glossary</span>{% endif %}
+              {# LQA safety floor D1: only a DELIBERATE always/never override earns a badge -
+                 the default (None = protect correction-loop steps only) is the quiet norm. #}
+              {% if s.step_type == 'llm_agent' and s.tm_protect is true %}<span class="badge" title="100% TM-match segments are excluded from this step">TM protected</span>{% endif %}
+              {% if s.step_type == 'llm_agent' and s.tm_protect is false %}<span class="badge warn" title="This step may rewrite 100% TM matches even in a correction loop">TM protection off</span>{% endif %}
+            {% endif %}
+            {% if s.step_type == 'human_review' and s.assignee_email %}
+              <span class="badge" title="Emailed when the run pauses here">assignee: {{ s.assignee_email }}</span>
+            {% endif %}
+            {% if s.needs_review %}{{ m.status_badge('needs_review', 'review adapted prompt') }}{% endif %}
+            {# SPEC-workflows-redesign 4b: a PINNED (overridden) variant step is frozen against
+               base-edit propagation. Only meaningful on a variant step (adapted_from_id set). #}
+            {% if s.overridden %}<span class="chip" title="Pinned - deliberately diverged from the base; base edits skip this step">pinned</span>{% endif %}
+            {% if s.run_condition %}<span class="badge warn" title="Runs only when the prior LQA/QE outcome matches">guard: {{ s.run_condition.ref }} {{ s.run_condition.op }}{% if s.run_condition.value is not none %} {{ s.run_condition.value }}{% endif %}</span>{% endif %}
+            {% if s.key %}<span class="chip" title="Stable key - branch targets name this step">key: {{ s.key }}</span>{% endif %}
+            {% if s.branch %}<span class="badge warn" title="Branches after this step by its pass/fail gate">branch:{% if s.branch.on_pass is defined %} pass&rarr;{% if s.branch.on_pass.step is defined %}{{ s.branch.on_pass.step }}{% else %}{{ s.branch.on_pass }}{% endif %}{% endif %}{% if s.branch.on_fail is defined %} fail&rarr;{% if s.branch.on_fail.step is defined %}{{ s.branch.on_fail.step }}{% else %}{{ s.branch.on_fail }}{% endif %}{% endif %}</span>{% endif %}
+            {% if s.max_visits %}<span class="badge" title="Per-run visit ceiling for loop safety">max visits: {{ s.max_visits }}</span>{% endif %}
+            {# SPEC-parallel-routing §6: the parallel-steps chip. Rendered for EVERY
+               step that carries a slug, including a lone one -- a mistyped slug that
+               quietly left a step running on its own is exactly what an author needs
+               to see here. #}
+            {% if s.parallel_group %}{# The title must not CLAIM concurrency a lone member will not get: a group needs a CONSECUTIVE neighbour sharing the slug (the engine's own `_group_at` rule), so a singleton renders the chip with an honest "not active" title instead. Computed inline from the ordered step list; packed onto one line to keep the badge row's markup stable. #}{% set _i = loop.index0 %}{% set _act = (_i > 0 and steps[_i - 1].parallel_group == s.parallel_group) or (_i + 1 < steps|length and steps[_i + 1].parallel_group == s.parallel_group) %}<span class="chip" title="{% if _act %}Runs at the same time as the neighbouring steps in this group; the next step waits for all of them{% else %}Not active: no adjacent step shares this group, so this step runs on its own, in order. Give the same group name to the step next to it.{% endif %}">&#8741; group: {{ s.parallel_group }}</span>{% endif %}
+            <div class="wf-step-actions" role="group" aria-label="Reorder or remove this step">
+            {# SPEC-workflows-redesign 4b: pin/unpin control - ONLY on a VARIANT step (one
+               with a live provenance link). Pinning freezes it against base-edit
+               propagation; unpinning rejoins from the next base edit (no retro-sync).
+               Same edit rights (can_tune_ai) + CSRF as the rest of the builder. #}
+            {% if s.adapted_from_id and ((not app_meta().auth_on) or can_tune_ai(current_user(request))) %}
+              <form method="post" action="/workflows/{{ wf.id }}/steps/{{ s.id }}/override" class="inline-del">
+                {% include "_csrf.html" %}
+                {% if s.overridden %}
+                  <input type="hidden" name="pinned" value="" />
+                  <button type="submit" class="small ghost" title="Rejoin base-edit propagation (does not retro-sync)">unpin<span class="sr-only">: {{ s.name or s.key or s.step_type }}</span></button>
+                {% else %}
+                  <input type="hidden" name="pinned" value="1" />
+                  <button type="submit" class="small ghost" title="Freeze this step against base edits">pin<span class="sr-only">: {{ s.name or s.key or s.step_type }}</span></button>
+                {% endif %}
+              </form>
+            {% endif %}
+            {# SPEC-workflow-canvas §4.2: the KEYBOARD / no-pointer path to the same
+               reorder seam the graph's drag uses. Not optional polish - a drag-only
+               affordance would put reordering out of reach for keyboard and screen-reader
+               users entirely. Position is 0-based; the button at either end of the list is
+               omitted rather than rendered dead. #}
+            {% if (not app_meta().auth_on) or can_tune_ai(current_user(request)) %}
+              {% if not loop.first %}
+              <form method="post" action="/workflows/{{ wf.id }}/steps/{{ s.id }}/move" class="inline-del">
+                {% include "_csrf.html" %}
+                <input type="hidden" name="position" value="{{ loop.index0 - 1 }}" />
+                {# The accessible name names the STEP: a screen-reader user tabbing the
+                   list otherwise hears "move up" N times with nothing to tell them apart.
+                   a11y T8 (2.5.3 label in name): the name STARTS with the visible words
+                   ("move up: <step>"), the arrow is aria-hidden and the step name is an
+                   sr-only suffix, so no aria-label can diverge from what is on screen. #}
+                <button type="submit" class="small ghost" title="Move this step one place earlier"><span aria-hidden="true">&uarr;</span> move up<span class="sr-only">: {{ s.name or s.key or s.step_type }}</span></button>
+              </form>
+              {% endif %}
+              {% if not loop.last %}
+              <form method="post" action="/workflows/{{ wf.id }}/steps/{{ s.id }}/move" class="inline-del">
+                {% include "_csrf.html" %}
+                <input type="hidden" name="position" value="{{ loop.index0 + 1 }}" />
+                <button type="submit" class="small ghost" title="Move this step one place later"><span aria-hidden="true">&darr;</span> move down<span class="sr-only">: {{ s.name or s.key or s.step_type }}</span></button>
+              </form>
+              {% endif %}
+            {% endif %}
+            <form method="post" action="/workflows/{{ wf.id }}/steps/{{ s.id }}/delete" class="inline-del">
+              {% include "_csrf.html" %}
+              <button type="submit" class="small ghost">remove<span class="sr-only">: {{ s.name or s.key or s.step_type }}</span></button>
+            </form>
+            </div>
+          </div>
+          {% if s.prompt_text %}<pre class="prompt">{{ s.prompt_text }}</pre>{% endif %}
+          {# B0 package panel (SPEC-workflows-redesign Track B). A read-only, per-step
+             two-column PACKAGE / VERIFY readout single-sourced from package_view.py (the
+             SAME facts the CLI `workflow show` block + --json and /api render). Collapsed
+             by default - the calm fit next to the head chips + the Edit disclosure; the
+             step list stays scannable, the full detail is one click away. Visible to any
+             builder viewer (read-only), NOT gated on edit rights. HONESTY: a fact resolved
+             per document / per language pair carries a muted scope tag; anything off is
+             simply absent (package_view omits it) - never a wall of "no". #}
+          {% set pvw = package_views[loop.index0] if package_views else None %}
+          {% if pvw %}
+          <details class="adv wf-pkg">
+            <summary>Package &amp; verification</summary>
+            <div class="wf-pkg-cols">
+              <section class="wf-pkg-col">
+                <h4 class="wf-pkg-h">Package <span class="muted small">- sent to the model</span></h4>
+                <dl class="wf-pkg-list">
+                  {% for f in pvw.package %}
+                    <div class="wf-pkg-row">
+                      <dt class="wf-pkg-k">{{ f.label }}</dt>
+                      <dd class="wf-pkg-v">{{ f.value }}{% if f.scope %} <span class="wf-pkg-scope" title="Resolved at run time, not fixed at build time">· {{ scope_note[f.scope] }}</span>{% endif %}</dd>
+                    </div>
+                  {% endfor %}
+                </dl>
+              </section>
+              <section class="wf-pkg-col">
+                <h4 class="wf-pkg-h">Verify <span class="muted small">- checked on the return</span></h4>
+                <dl class="wf-pkg-list">
+                  {% for f in pvw.verify %}
+                    <div class="wf-pkg-row">
+                      <dt class="wf-pkg-k">{{ f.label }}</dt>
+                      <dd class="wf-pkg-v">{{ f.value }}{% if f.scope %} <span class="wf-pkg-scope" title="Resolved at run time, not fixed at build time">· {{ scope_note[f.scope] }}</span>{% endif %}</dd>
+                    </div>
+                  {% endfor %}
+                </dl>
+              </section>
+            </div>
+          </details>
+          {% endif %}
+          {# Per-step EDIT form (collapsed). PRE-FILLED with the step's CURRENT values and
+             POSTs the full field set to /steps/{id}/edit -> wf_service.update_step. The
+             whole-graph re-validation there fails closed with a clean 400. Provider/model
+             use the SAME .wfmodel select+manual+fetch+toggle picker as the add-step form
+             (shared JS below), each wired to a PER-STEP-UNIQUE provider select id so the
+             global querySelectorAll('.wfmodel') wiring resolves the right driving select
+             per step; blank model = provider default. #}
+          {% if (not app_meta().auth_on) or can_tune_ai(current_user(request)) %}
+          {% set rc = s.run_condition %}
+          {% set bp = (s.branch.on_pass if s.branch and s.branch.on_pass is defined else None) %}
+          {% set bf = (s.branch.on_fail if s.branch and s.branch.on_fail is defined else None) %}
+          {% set bp_val = ((bp.step if bp is mapping else bp) if bp is not none else "") %}
+          {% set bf_val = ((bf.step if bf is mapping else bf) if bf is not none else "") %}
+          <details class="adv step-edit">
+            <summary>Edit this step</summary>
+            <form method="post" action="/workflows/{{ wf.id }}/steps/{{ s.id }}/edit" class="form">
+              {% include "_csrf.html" %}
+              {% call m.form_section('workflow_builder-fields-1-' ~ s.id, 'Basics') %}
+                <label>Name <input type="text" name="name" value="{{ s.name or '' }}" /></label>
+                <label>Type
+                  <select name="step_type">
+                    {% for t in step_types %}<option value="{{ t }}"{% if s.step_type == t %} selected{% endif %}>{{ t }}</option>{% endfor %}
+                  </select>
+                </label>
+                <label data-types="human_review external">Assignee email
+                  <input type="email" name="assignee_email" value="{{ s.assignee_email or '' }}" placeholder="reviewer@yourfirm.com" />
+                </label>
+              {% endcall %}
+              {# External vendor dispatch (Wave A): only meaningful on an external step -
+                 shown/hidden by the honest-fields JS (data-types="external"). The server
+                 (update_step) fail-closes on a vendor not linked to the document's customer,
+                 and refuses both fields on any non-external type.
+                 ffadmin Wave 3 (LOW-1): the live vendor picker is gated on
+                 feature_enabled('vendors') -- hidden when Vendors is off (authoring a
+                 vendor step is refused at the _validate_step_vendor seam anyway). #}
+              {% if feature_enabled('vendors') %}
+              <fieldset class="lp-fieldset" data-types="external">
+                <legend>External vendor</legend>
+                <label data-types="external">Vendor
+                  <select name="vendor_id"><option value="">- select a vendor -</option>
+                    {% for vo in vendor_options %}<option value="{{ vo.id }}"{% if s.vendor_id == vo.id %} selected{% endif %}>{{ vo.name }}</option>{% endfor %}
+                  </select>
+                  <span class="muted">Only vendors linked to the document's customer can run.</span>
+                </label>
+                <label data-types="external">Wait window (hours)
+                  <input type="number" name="external_wait_hours" min="0" value="{{ s.external_wait_hours if s.external_wait_hours is not none else '' }}" placeholder="(default)" style="width:8em" />
+                  <span class="muted">Blank = the install default before the wait times out.</span>
+                </label>
+              </fieldset>
+              {% endif %}
+              {# Engine & models: an lqa step keeps Provider + Model + Fallback provider/
+                 model (SPEC-lqa-step-honest-options; the maintainer's 2026-07-22 decision --
+                 feat/prompt-package-engine, which merges BEFORE this branch, makes the
+                 LQA judge honor step.model + the fallback chain via _spec_for_step).
+                 chunk_policy/glossary_id stay hidden -- lqa.score_text never chunks or
+                 reads a glossary for its OWN scoring (verified against orchestrator.py's
+                 LQA branches). A human_review step makes no provider call at all, so the
+                 whole fieldset is hidden for it. #}
+              <fieldset class="lp-fieldset" data-types="llm_agent lqa">
+                <legend>Engine &amp; models</legend>
+                <div class="grid2">
+                  <label data-types="llm_agent lqa">Provider
+                    {# A step can be pinned to engine:<id>. engine_options() only offers
+                       ENABLED engines, so a since-disabled (or otherwise unlisted) pin has
+                       no matching <option> and the browser would submit "" on save, silently
+                       clearing the pin on an unrelated edit (review finding, data loss). If
+                       the stored value isn't among the offered options, splice it in as an
+                       extra selected option so the form keeps representing real state. #}
+                    {% set _prov_opts = providers + (engine_options(request) | map('first') | list) %}
+                    <select name="provider" id="wfeProvider-{{ s.id }}"><option value=""{% if not s.provider %} selected{% endif %}>default</option>
+                      {% for p in providers %}<option value="{{ p }}"{% if s.provider == p %} selected{% endif %}>{{ p }}</option>{% endfor %}
+                      {% for value, label in engine_options(request) %}<option value="{{ value }}"{% if s.provider == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+                      {% if s.provider and s.provider not in _prov_opts %}<option value="{{ s.provider }}" selected>{{ s.provider }} (currently pinned{% if s.provider.startswith('engine:') %} - unavailable{% endif %})</option>{% endif %}
+                    </select>
+                  </label>
+                  <label class="wfmodel" data-types="llm_agent lqa" data-provider="wfeProvider-{{ s.id }}">Model
+                    <select name="model" class="wfmodel-select" disabled style="display:none"></select>
+                    <input aria-label="Model id" type="text" name="model" class="wfmodel-manual" value="{{ s.model or '' }}" placeholder="(default)" />
+                    <span class="row-actions">
+                      <button type="button" class="small ghost wfmodel-fetch" data-busy-label="{{ t(request, 'busy.fetching_models') }}"><span aria-hidden="true">↻</span> Fetch models</button>
+                      <button type="button" class="small ghost wfmodel-toggle"><span class="wfmodel-toggle-label"><span aria-hidden="true">✎</span> Type id manually</span></button>
+                    </span>
+                    <span class="wfmodel-out muted small"></span>
+                  </label>
+                </div>
+                <div class="grid2">
+                  <label data-types="llm_agent lqa">Fallback provider
+                    {% set _fbprov_opts = providers + (engine_options(request) | map('first') | list) %}
+                    <select name="fallback_provider" id="wfeFallbackProvider-{{ s.id }}"><option value=""{% if not s.fallback_provider %} selected{% endif %}>none</option>
+                      {% for p in providers %}<option value="{{ p }}"{% if s.fallback_provider == p %} selected{% endif %}>{{ p }}</option>{% endfor %}
+                      {% for value, label in engine_options(request) %}<option value="{{ value }}"{% if s.fallback_provider == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+                      {% if s.fallback_provider and s.fallback_provider not in _fbprov_opts %}<option value="{{ s.fallback_provider }}" selected>{{ s.fallback_provider }} (currently pinned{% if s.fallback_provider.startswith('engine:') %} - unavailable{% endif %})</option>{% endif %}
+                    </select>
+                  </label>
+                  <label class="wfmodel" data-types="llm_agent lqa" data-provider="wfeFallbackProvider-{{ s.id }}">Fallback model
+                    <select name="fallback_model" class="wfmodel-select" disabled style="display:none"></select>
+                    <input aria-label="Fallback model id" type="text" name="fallback_model" class="wfmodel-manual" value="{{ s.fallback_model or '' }}" placeholder="(optional)" />
+                    <span class="row-actions">
+                      <button type="button" class="small ghost wfmodel-fetch" data-busy-label="{{ t(request, 'busy.fetching_models') }}"><span aria-hidden="true">↻</span> Fetch models</button>
+                      <button type="button" class="small ghost wfmodel-toggle"><span class="wfmodel-toggle-label"><span aria-hidden="true">✎</span> Type id manually</span></button>
+                    </span>
+                    <span class="wfmodel-out muted small"></span>
+                  </label>
+                </div>
+                <label data-types="llm_agent">Chunking
+                  <select name="chunk_policy">
+                    <option value="auto"{% if s.chunk_policy == 'auto' %} selected{% endif %}>auto</option>
+                    <option value="none"{% if s.chunk_policy == 'none' %} selected{% endif %}>none</option>
+                  </select>
+                </label>
+                <label data-types="llm_agent">Glossary
+                  <select name="glossary_id"><option value="">project default</option>
+                    {% for g in glossary_options %}<option value="{{ g.id }}"{% if s.glossary_id == g.id %} selected{% endif %}>{{ g.label }}</option>{% endfor %}
+                  </select>
+                </label>
+              </fieldset>
+              {# Options: redact_pii is the ONLY one still functional on an lqa step
+                 (lqa honours the redact choice before scoring); the rest (adaptive
+                 feedback, doc pre-pass, TM few-shot, QE gate/threshold/engine) only ever
+                 run on an llm_agent step -- QE never runs on lqa, and lqa's own prompt is
+                 built internally, not from these knobs. None apply to human_review (no
+                 provider call at all), so the whole block is hidden for it. #}
+              <details class="adv" data-types="llm_agent lqa">
+                <summary>Options</summary>
+                <fieldset class="lp-fieldset">
+                  <label class="checkbox" data-types="llm_agent lqa"><input type="checkbox" name="redact_pii" value="1"{% if s.redact_pii %} checked{% endif %} /> Redact PII for this step</label>
+                  <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="adaptive_feedback" value="1"{% if s.adaptive_feedback %} checked{% endif %} /> In-run adaptive feedback</label>
+                  <label data-types="llm_agent">Adaptive feedback window <input type="number" name="adaptive_feedback_window" value="{{ s.adaptive_feedback_window }}" min="0" max="50" style="width:5em" /></label>
+                  <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="doc_context_prepass" value="1"{% if s.doc_context_prepass %} checked{% endif %} /> Document-context pre-pass</label>
+                  <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="tm_examples" value="1"{% if s.tm_examples %} checked{% endif %} /> TM few-shot examples</label>
+                  <label data-types="llm_agent">TM examples window <input type="number" name="tm_examples_window" value="{{ s.tm_examples_window }}" min="0" max="5" style="width:5em" /></label>
+                  {# Per-string image context (Batch 14 T2, SPEC §25): reflects the stored value; unchecking opts THIS step out. #}
+                  <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="use_image_context" value="1"{% if s.use_image_context %} checked{% endif %} title="On by default. Turn off to skip image context for this step only." /> Send this string's images to this step</label>
+                  {# Terminology T3 (SPEC §9-T3): the concept-glossary renderer toggle + caps reflect the stored values; default OFF renders prompts.glossary_line verbatim. #}
+                  <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="concept_glossary_render" value="1"{% if s.concept_glossary_render %} checked{% endif %} title="Off by default. When on, this step renders matched glossary concepts (audience-gated, ordered, capped) into the prompt instead of the plain term list." /> Render glossary concepts into this step's prompt</label>
+                  <label data-types="llm_agent">Glossary concept cap <input type="number" name="glossary_concept_cap" value="{{ s.glossary_concept_cap }}" min="0" style="width:5em" title="At most this many concepts in the rendered glossary block (0 = no concept cap)." /></label>
+                  <label data-types="llm_agent">Glossary token cap <input type="number" name="glossary_token_cap" value="{{ s.glossary_token_cap }}" min="0" style="width:6em" title="Token ceiling for the rendered glossary block (0 = inherit the install default)." /></label>
+                  <label data-types="llm_agent">TM protection
+                    <select name="tm_protect" style="width:min(16em,100%)"
+                            title="Exclude segments filled by a 100% TM match from this step.">
+                      <option value="auto"{% if s.tm_protect is none %} selected{% endif %}>Auto (correction-loop steps only)</option>
+                      <option value="on"{% if s.tm_protect is true %} selected{% endif %}>Always protect TM segments</option>
+                      <option value="off"{% if s.tm_protect is false %} selected{% endif %}>Never protect</option>
+                    </select>
+                  </label>
+                  {# run-190 Item D / M5: the over-translation (page-dump) guard opt-out, a
+                     tristate <select> mirroring TM protection. 'off' is for a legitimately
+                     EXPANDING rewrite / post-edit / summarize step. #}
+                  <label data-types="llm_agent">Over-translation guard
+                    <select name="over_translation_guard" style="width:min(16em,100%)"
+                            title="Reject a candidate that looks like a whole-page dump (far longer than the source) and withhold it to review. Turn off for a step whose output is legitimately much longer than its input.">
+                      <option value="auto"{% if s.over_translation_guard is none %} selected{% endif %}>Auto (use the install guard)</option>
+                      <option value="on"{% if s.over_translation_guard is true %} selected{% endif %}>Always on</option>
+                      <option value="off"{% if s.over_translation_guard is false %} selected{% endif %}>Off (allow long output)</option>
+                    </select>
+                  </label>
+                  <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="qe_gate" value="1"{% if s.qe_gate %} checked{% endif %} /> QE routing gate</label>
+                  <label data-types="llm_agent">QE threshold <input type="number" name="qe_threshold" value="{{ s.qe_threshold }}" min="0" max="100" style="width:5em" /></label>
+                  {# feat/lqa-configurable-threshold: an lqa step's numeric pass bar. Blank = the
+                     built-in default (score >= 90 AND no major/critical error); a value gates on it. #}
+                  <label data-types="lqa" title="An lqa step FAILS unless score is at or above this; the no-major-error rule is unchanged. Blank = default 90.">LQA pass threshold <input type="number" name="lqa_threshold" value="{{ s.lqa_threshold if s.lqa_threshold is not none else '' }}" min="0" max="100" placeholder="90" style="width:5em" /></label>
+                  <label data-types="llm_agent">QE judge engine
+                    {# role='judge': LLM engines plus the Jev quality judges (jev / jev_local);
+                       a legacy qe_provider="jev" pin shows via the pinned option below. #}
+                    {% set _qeprov_opts = providers + (engine_options(request, 'judge') | map('first') | list) %}
+                    <select name="qe_provider" style="width:min(16em,100%)"
+                            title="A provider name or engine:&lt;id&gt; (an LLM or a Jev quality judge); blank reuses this step's provider."><option value="">(reuse step provider)</option>
+                      {% for p in providers %}<option value="{{ p }}"{% if s.qe_provider == p %} selected{% endif %}>{{ p }}</option>{% endfor %}
+                      {% for value, label in engine_options(request, 'judge') %}<option value="{{ value }}"{% if s.qe_provider == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+                      {% if s.qe_provider and s.qe_provider not in _qeprov_opts %}<option value="{{ s.qe_provider }}" selected>{{ s.qe_provider }} (currently pinned{% if s.qe_provider.startswith('engine:') %} - unavailable{% endif %})</option>{% endif %}
+                    </select>
+                  </label>
+                  {# QE auto-fix (Train B): shown only while the QE judge is a Jev judge. #}
+                  {{ m.autofix_block('', s, providers, request) }}
+                </fieldset>
+              </details>
+              {# Batch 15 T1 (SPEC-tm-match-step-config §8.B): the tm_match step's per-step
+                 TM policy. LIVE only on a tm_match step (data-types="tm_match"). Tri-state
+                 selects ("inherit" = the stored NULL = follow the live global); blank
+                 numbers = inherit; the pool box is a comma-separated list of readable
+                 project ids (blank = all readable). #}
+              <details class="adv" data-types="tm_match">
+                <summary>TM match policy</summary>
+                <fieldset class="lp-fieldset" data-types="tm_match">
+                  <label data-types="tm_match" title="A TM hit at or above this score fills the segment. 100 = exact matches only.">Fill matches at or above this score
+                    <input type="number" name="tm_fill_threshold" value="{{ s.tm_fill_threshold if s.tm_fill_threshold is not none else '' }}" min="50" max="100" placeholder="inherit" style="width:6em" /></label>
+                  <label data-types="tm_match" title="How a below-100 fuzzy fill locks.">How to lock fuzzy fills
+                    <select name="tm_fuzzy_lock_mode" style="width:min(16em,100%)">
+                      <option value=""{% if s.tm_fuzzy_lock_mode is none %} selected{% endif %}>Inherit global</option>
+                      <option value="none"{% if s.tm_fuzzy_lock_mode == 'none' %} selected{% endif %}>None (suggestion, no lock)</option>
+                      <option value="soft"{% if s.tm_fuzzy_lock_mode == 'soft' %} selected{% endif %}>Soft (enter LQA)</option>
+                      <option value="policy"{% if s.tm_fuzzy_lock_mode == 'policy' %} selected{% endif %}>Policy (as the 100 band)</option>
+                    </select></label>
+                  <label data-types="tm_match" title="Lock in-context exact (ICE) matches.">Lock in-context exact matches
+                    <select name="tm_lock_ice" style="width:min(16em,100%)">
+                      <option value="auto"{% if s.tm_lock_ice is none %} selected{% endif %}>Inherit global</option>
+                      <option value="on"{% if s.tm_lock_ice is true %} selected{% endif %}>On</option>
+                      <option value="off"{% if s.tm_lock_ice is false %} selected{% endif %}>Off</option>
+                    </select></label>
+                  <label data-types="tm_match" title="Send 100% matches to LQA (soft lock) instead of hard-locking them.">Send 100% matches to LQA
+                    <select name="tm_hundreds_enter_lqa" style="width:min(16em,100%)">
+                      <option value="auto"{% if s.tm_hundreds_enter_lqa is none %} selected{% endif %}>Inherit global</option>
+                      <option value="on"{% if s.tm_hundreds_enter_lqa is true %} selected{% endif %}>On</option>
+                      <option value="off"{% if s.tm_hundreds_enter_lqa is false %} selected{% endif %}>Off</option>
+                    </select></label>
+                  <label data-types="tm_match" title="Attach near matches at or above this score as context (forward-compat until the ICE/context wave ships).">Attach near matches at or above this score as context
+                    <input type="number" name="tm_context_floor" value="{{ s.tm_context_floor if s.tm_context_floor is not none else '' }}" min="50" max="99" placeholder="inherit" style="width:6em" /></label>
+                  <label data-types="tm_match" title="Comma-separated readable project ids whose TM this step reads. Blank = all readable; type (none) to read NO pool.">Which translation memories this step reads (default: all readable)
+                    <input type="text" name="tm_pool_selection" value="{% if s.tm_pool_selection == [] %}(none){% elif s.tm_pool_selection %}{{ s.tm_pool_selection | join(', ') }}{% endif %}" placeholder="all readable" style="width:min(16em,100%)" /></label>
+                </fieldset>
+              </details>
+              <details class="adv">
+                <summary>Run condition</summary>
+                <fieldset class="lp-fieldset">
+                  <label>Source
+                    <select name="run_condition_ref">
+                      <option value="">always run (no guard)</option>
+                      <option value="prev_lqa"{% if rc and rc.ref == 'prev_lqa' %} selected{% endif %}>prev_lqa - most recent LQA step</option>
+                      <option value="prev_qe"{% if rc and rc.ref == 'prev_qe' %} selected{% endif %}>prev_qe - most recent QE-gate step</option>
+                    </select></label>
+                  <label>Condition
+                    <select name="run_condition_op">
+                      <option value="failed"{% if rc and rc.op == 'failed' %} selected{% endif %}>failed (did not pass)</option>
+                      <option value="passed"{% if rc and rc.op == 'passed' %} selected{% endif %}>passed</option>
+                      <option value="score_lt"{% if rc and rc.op == 'score_lt' %} selected{% endif %}>score below value</option>
+                      <option value="score_gte"{% if rc and rc.op == 'score_gte' %} selected{% endif %}>score at or above value</option>
+                    </select></label>
+                  <label>Value
+                    <input type="number" name="run_condition_value" min="0" max="100" style="width:5em"
+                           value="{{ rc.value if rc and rc.value is not none else '' }}" /></label>
+                </fieldset>
+              </details>
+              {# Step key + Max visits stay live for EVERY type (a human_review step is a
+                 legal loop-back TARGET for another step's branch; RunGuard.at_visit_cap
+                 enforces max_visits at that jump AND, since issue #94, before the step
+                 executes at all, so the ceiling bounds this step's own executions in
+                 every role it plays in the graph; a capped CHECK ends the run held, a
+                 capped producer is skipped so the check still judges the last text.
+                 Erratum E2: the HELD posture is not special to the ceiling -- ANY run
+                 that ends with a check's standing verdict FAILED, or with a check the
+                 judge never answered, is held and its export refused).
+                 The on_pass/on_fail pickers here route
+                 by THIS step's OWN outcome, which only an LQA (or QE-gated llm_agent)
+                 step ever produces -- a human_review step never reaches the branch seam
+                 (it always pauses; resume_workflow always advances cursor+1), so they're
+                 hidden for it (SPEC-lqa-step-honest-options). #}
+              <details class="adv">
+                <summary>Branching &amp; loops</summary>
+                <fieldset class="lp-fieldset">
+                  <label>Step key
+                    <input type="text" name="step_key" value="{{ s.key or '' }}" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" style="width:min(12em,100%)" placeholder="e.g. fix, lqa1" /></label>
+                  <label data-types="llm_agent lqa">On pass &rarr;
+                    <select name="branch_on_pass">
+                      <option value="">(no branch / fall through)</option>
+                      <option value="next"{% if bp_val == 'next' %} selected{% endif %}>next step</option>
+                      <option value="end"{% if bp_val == 'end' %} selected{% endif %}>end the run</option>
+                      {% for ks in keyed_steps %}<option value="{{ ks.key }}"{% if bp_val == ks.key %} selected{% endif %}>step: {{ ks.key }}{% if ks.name %} ({{ ks.name }}){% endif %}</option>{% endfor %}
+                    </select></label>
+                  <label data-types="llm_agent lqa">On fail &rarr;
+                    <select name="branch_on_fail">
+                      <option value="">(no branch / fall through)</option>
+                      <option value="next"{% if bf_val == 'next' %} selected{% endif %}>next step</option>
+                      <option value="end"{% if bf_val == 'end' %} selected{% endif %}>end the run</option>
+                      {% for ks in keyed_steps %}<option value="{{ ks.key }}"{% if bf_val == ks.key %} selected{% endif %}>step: {{ ks.key }}{% if ks.name %} ({{ ks.name }}){% endif %}</option>{% endfor %}
+                    </select></label>
+                  <label>Max visits
+                    <input type="number" name="max_visits" min="1" max="50" style="width:5em"
+                           value="{{ s.max_visits if s.max_visits is not none else '' }}" placeholder="5" /></label>
+                  {# SPEC-parallel-routing §6. lqa-only in Phase 1 (a check only READS
+                     the working text, so lanes need no merge rule) -- hidden by the
+                     honest-fields JS for other types, and REFUSED server-side if a
+                     non-browser caller sets it anyway. #}
+                  <label data-types="lqa">Parallel steps
+                    <input type="text" name="parallel_group" value="{{ s.parallel_group or '' }}"
+                           pattern="[A-Za-z0-9][A-Za-z0-9_-]*" style="width:min(12em,100%)" placeholder="e.g. checks"
+                           title="Give the same group name to CONSECUTIVE check steps and they run at the same time against the same text; the next step waits for all of them." /></label>
+                </fieldset>
+              </details>
+              <fieldset class="lp-fieldset" data-types="llm_agent">
+                <legend>Prompt</legend>
+                {# SPEC-prompt-template-runtime: the saved-template binding for this step,
+                   pre-selected. The form full-POSTs, so this select carries the current
+                   value through unchanged on an unrelated edit. Inline text wins. #}
+                {% if prompt_templates or s.prompt_template_id %}
+                <label>Saved template
+                  <select name="prompt_template_id">
+                    <option value="">none (inline prompt or default)</option>
+                    {% for t in prompt_templates %}<option value="{{ t.id }}"{% if s.prompt_template_id == t.id %} selected{% endif %}>{{ t.name }}</option>{% endfor %}
+                    {# A bound template that is no longer in the visible picker (deleted/out-of-scope)
+                       is spliced back so a full-POST edit does not silently drop the binding. #}
+                    {% if s.prompt_template_id and s.prompt_template_id not in prompt_templates|map(attribute='id')|list %}
+                    <option value="{{ s.prompt_template_id }}" selected>template #{{ s.prompt_template_id }} (out of scope)</option>
+                    {% endif %}
+                  </select>
+                  {% if s.prompt_template_id and (s.prompt_text or '').strip() %}
+                  <span class="muted small">This step also has an inline prompt below, which WINS at run time.</span>
+                  {% else %}
+                  <span class="muted small">If you also type an inline prompt below, the inline prompt wins.</span>
+                  {% endif %}
+                </label>
+                {% endif %}
+                {# #630: the step's prompt is shown locked; Unlock / Apply / Restore default per step. #}
+                <div class="wfl" data-prompt-lock id="plk-step-{{ s.id }}-box" data-lock-restore-step>
+                <label>Inline prompt
+                  {{ pl.lock_status('step-' ~ s.id, true) }}
+                  <textarea name="prompt_text" rows="6" spellcheck="false" readonly data-lock-field
+                            aria-describedby="plk-step-{{ s.id }}"{% if not (s.prompt_text or '').strip() and default_prompts.get(s.step_type) %} placeholder="{{ default_prompts.get(s.step_type) }}"{% endif %}>{{ s.prompt_text or '' }}</textarea>
+                </label>
+                {{ pl.lock_actions('step-' ~ s.id, true) }}
+                <button type="button" class="small ghost" data-lock-restore-default data-busy-label="{{ t(request, 'busy.restoring_prompt') }}" data-restore-action="/workflows/{{ wf.id }}/steps/{{ s.id }}/restore-prompt" data-restore-message="{{ t(request, 'page.workflow_builder.restore_step_confirm') }}">{{ tl(request, 'page.workflow_builder.restore_default') }}</button>
+                </div>
+                {{ m.placeholder_legend() }}
+              </fieldset>
+              <button type="submit">Save changes</button>
+            </form>
+          </details>
+          {% elif can_edit_step_prompt(current_user(request)) %}
+          {# 2026-10-08 (after #630): a manager may Unlock, Apply and Restore default on a
+             step's PROMPT only. This form posts nothing but prompt_text to /steps/{id}/prompt;
+             the full step edit form above stays can_tune_ai (admin or linguist). #}
+          <details class="adv step-edit">
+            <summary>Edit this step's prompt</summary>
+            <form method="post" action="/workflows/{{ wf.id }}/steps/{{ s.id }}/prompt" class="form">
+              {% include "_csrf.html" %}
+              <div class="wfl" data-prompt-lock id="plk-step-{{ s.id }}-box" data-lock-restore-step>
+              <label>Inline prompt
+                {{ pl.lock_status('step-' ~ s.id, true) }}
+                <textarea name="prompt_text" rows="6" spellcheck="false" readonly data-lock-field
+                          aria-describedby="plk-step-{{ s.id }}"{% if not (s.prompt_text or '').strip() and default_prompts.get(s.step_type) %} placeholder="{{ default_prompts.get(s.step_type) }}"{% endif %}>{{ s.prompt_text or '' }}</textarea>
+              </label>
+              {{ pl.lock_actions('step-' ~ s.id, true) }}
+              <button type="button" class="small ghost" data-lock-restore-default data-busy-label="{{ t(request, 'busy.restoring_prompt') }}" data-restore-action="/workflows/{{ wf.id }}/steps/{{ s.id }}/restore-prompt" data-restore-message="{{ t(request, 'page.workflow_builder.restore_step_confirm') }}">{{ tl(request, 'page.workflow_builder.restore_default') }}</button>
+              </div>
+              {{ m.placeholder_legend() }}
+            </form>
+          </details>
+          {% endif %}
+        </div>
+        </li>
+      {% endfor %}
+    </ol>
+  {% else %}
+    {% set workflow_empty %}No steps yet. Add the first one in the Add a step tab.{% endset %}{{ m.empty_state(workflow_empty) }}
+  {% endif %}
+  </div>
+</section>
+<section class="card">
+  <details class="adv">
+    <summary>Advanced: per-language variants</summary>
+    <p class="help">Most workflows work for every language as they are. Use per-language variants only when one language needs a different prompt.</p>
+    <p class="help">Clone this workflow's steps onto other target languages in a
+    multilingual group. Tick <em>Adapt instructions</em> to have an LLM rewrite each
+    step's language-specific guidance for the new language (e.g. Spanish formal
+    <em>usted</em> → French formal <em>vous</em>) - adapted prompts are flagged for
+    linguist post-edit. The matching pair variant runs automatically.</p>
+    <form method="post" action="/workflows/{{ wf.id }}/copy-to-pairs" class="form">
+    {% include "_csrf.html" %}
+    <label>Source locale
+      <select name="source_locale">
+        <option value="">{{ ("this workflow's: " ~ wf.source_locale) if wf.source_locale else "(inherit)" }}</option>
+        {% for loc in locales %}<option value="{{ loc }}">{{ label_for(loc) }}</option>{% endfor %}
+      </select>
+    </label>
+    {# Searchable checkbox picker replacing the raw <select multiple>. Every checkbox
+       shares name="target_locales" - identical repeated-key POST the route reads as
+       list[str]=Form(). Rows are built in-template from `locales` + label_for() so no
+       route/context change is needed. enabled == all_rows -> only the enabled locales
+       are offered (same set the old select showed). #}
+    {% set loc_rows = [] %}
+    {% for loc in locales %}{% set _ = loc_rows.append({'code': loc, 'name': label_for(loc), 'native': ''}) %}{% endfor %}
+    {% call m.form_section('workflow_builder-fields-2', 'Target languages') %}
+      <p class="help">Pick one or more - one workflow variant is created per selected language.</p>
+      {% if copy_pairs_confined %}
+      <p class="help">Showing {{ copy_pairs_customer.name }}'s active language pairs.
+        Use <em>Show all languages</em> for the full catalog.</p>
+      {% endif %}
+      {{ m.langpicker('target_locales', copy_target_rows, loc_rows) }}
+    {% endcall %}
+    <label class="checkbox"><input type="checkbox" name="adapt" value="1" />
+      Adapt instructions with LLM <span class="muted">(rewrite each step's prompt for
+      the new language - linguist post-edit required)</span></label>
+      <button type="submit" data-busy-label="{{ t(request, 'busy.copying_workflow') }}">Copy to pairs</button>
+    </form>
+  </details>
+</section>
+</div>
+{% if wsp_can_read %}
+<div class="wf-pagepanel" role="tabpanel" id="wfp-panel-system" aria-labelledby="wfp-tab-system" tabindex="0">
+{% include "_workflow_system_prompts.html" %}
+</div>
+{% endif %}
+<div class="wf-pagepanel" role="tabpanel" id="wfp-panel-add" aria-labelledby="wfp-tab-add" tabindex="0">
+  <div class="wf-tabpanel wf-add-panel">
+    <h2 id="wf-add-step">Add a step</h2>
+    <form method="post" action="/workflows/{{ wf.id }}/steps" class="form" id="wf-add-step-form" data-wf-tab-store="last">
+      {% include "_csrf.html" %}
+
+      {% call m.form_section('workflow_builder-fields-3', 'Basics') %}
+        <label>Name <input type="text" name="name" placeholder="Translator / ICR / Tech QA" /></label>
+        <label>Type
+          <select name="step_type" id="step-type-select">
+            {% for t in step_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+          </select>
+        </label>
+        {# Feature B + M3: assignee email - meaningful for a human_review step AND an
+           external step (emailed when the run parks on the vendor dispatch and when an
+           expired leg escalates to human review). Shown/hidden by the script. #}
+        <label id="assignee-field" data-types="human_review external">Assignee email
+          <input type="email" name="assignee_email" placeholder="reviewer@yourfirm.com" />
+          <span class="muted">Emailed when the run pauses here (human review, or a vendor dispatch/expiry); blank = no email.</span>
+        </label>
+      {% endcall %}
+
+      {# External vendor dispatch (Wave A): only meaningful for an external step (shown/
+         hidden by the honest-fields JS). add_step requires a vendor that is selectable +
+         linked to the workflow's customer (fail-closed), and refuses both fields on any
+         non-external step.
+         ffadmin Wave 3 (LOW-1): gated on feature_enabled('vendors') -- the live vendor
+         picker is hidden when Vendors is off (authoring is refused at the seam anyway). #}
+      {% if feature_enabled('vendors') %}
+      <fieldset class="lp-fieldset" data-types="external">
+        <legend>External vendor</legend>
+        <label data-types="external">Vendor
+          <select name="vendor_id"><option value="">- select a vendor -</option>
+            {% for vo in vendor_options %}<option value="{{ vo.id }}">{{ vo.name }}</option>{% endfor %}
+          </select>
+          <span class="muted">The vendor this step dispatches to; only vendors linked to the document's customer can run.</span>
+        </label>
+        <label data-types="external">Wait window (hours)
+          <input type="number" name="external_wait_hours" min="0" placeholder="(default)" style="width:8em" />
+          <span class="muted">Blank = the install default before the bounded wait times out.</span>
+        </label>
+      </fieldset>
+      {% endif %}
+
+      {# Engine & models: an lqa step keeps Provider + Model + Fallback provider/model
+         (SPEC-lqa-step-honest-options; the maintainer's 2026-07-22 decision -- feat/prompt-
+         package-engine, which merges BEFORE this branch, makes the LQA judge honor
+         step.model + the fallback chain via _spec_for_step). chunk_policy/glossary_id
+         stay hidden -- lqa.score_text never chunks or reads a glossary for its OWN
+         scoring (verified against orchestrator.py's LQA branches, ~1027-1093 /
+         ~1683-1750). A human_review step makes no provider call at all, so the whole
+         fieldset is hidden for it. #}
+      <fieldset class="lp-fieldset" data-types="llm_agent lqa">
+        <legend>Engine &amp; models</legend>
+        {# Provider + Model: each Model field is a select+manual pair (same name, only the
+           ENABLED one submits) driven by its adjacent Provider select - picking a provider
+           fetches that ref's models from /workflows/models and rebuilds the list; first
+           option is "(default)" (blank = the provider's own default). A keyless provider,
+           a non-listable engine kind, or the "(default)" provider returns [] -> the field
+           falls back to a free-text input. Options are built via createElement only. #}
+        <div class="grid2">
+          <label data-types="llm_agent lqa">Provider
+            <select name="provider" id="wfProvider"><option value="">default</option>
+              {% for p in providers %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+              {% for value, label in engine_options(request) %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+            </select>
+          </label>
+          <label class="wfmodel" data-types="llm_agent lqa" data-provider="wfProvider">Model
+            <select name="model" class="wfmodel-select" disabled style="display:none"></select>
+            <input aria-label="Model id" type="text" name="model" class="wfmodel-manual" placeholder="(default)" />
+            <span class="row-actions">
+              <button type="button" class="small ghost wfmodel-fetch" data-busy-label="{{ t(request, 'busy.fetching_models') }}"><span aria-hidden="true">↻</span> Fetch models</button>
+              <button type="button" class="small ghost wfmodel-toggle"><span class="wfmodel-toggle-label"><span aria-hidden="true">✎</span> Type id manually</span></button>
+            </span>
+            <span class="wfmodel-out muted small"></span>
+          </label>
+        </div>
+        <div class="grid2">
+          <label data-types="llm_agent lqa">Fallback provider
+            <select name="fallback_provider" id="wfFallbackProvider"><option value="">none</option>
+              {% for p in providers %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+              {% for value, label in engine_options(request) %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+            </select>
+          </label>
+          <label class="wfmodel" data-types="llm_agent lqa" data-provider="wfFallbackProvider">Fallback model
+            <select name="fallback_model" class="wfmodel-select" disabled style="display:none"></select>
+            <input aria-label="Fallback model id" type="text" name="fallback_model" class="wfmodel-manual" placeholder="(optional)" />
+            <span class="row-actions">
+              <button type="button" class="small ghost wfmodel-fetch" data-busy-label="{{ t(request, 'busy.fetching_models') }}"><span aria-hidden="true">↻</span> Fetch models</button>
+              <button type="button" class="small ghost wfmodel-toggle"><span class="wfmodel-toggle-label"><span aria-hidden="true">✎</span> Type id manually</span></button>
+            </span>
+            <span class="wfmodel-out muted small"></span>
+          </label>
+        </div>
+        <label data-types="llm_agent">Chunking
+          <select name="chunk_policy"><option value="auto">auto</option><option value="none">none</option></select>
+        </label>
+        {# Glossary dropdown: EVERY approved glossary, each labelled with its own
+           language pairs. A workflow is language-agnostic; a pinned glossary is applied
+           at run time only for runs whose languages it covers (else skipped with a note).
+           Blank = the project's own glossary. #}
+        <label data-types="llm_agent">Glossary
+          <select name="glossary_id"><option value="">project default</option>
+            {% for g in glossary_options %}<option value="{{ g.id }}">{{ g.label }}</option>{% endfor %}
+          </select>
+          <span class="muted">Approved glossaries (a glossary is used only for runs whose
+            languages it covers); blank = the project's own terms.</span>
+        </label>
+      </fieldset>
+
+      {# Options: redact_pii is the ONLY one still functional on an lqa step (lqa
+         honours the redact choice before scoring); the rest (adaptive feedback, doc
+         pre-pass, TM few-shot, QE gate/threshold/engine) only ever run on an
+         llm_agent step. None apply to human_review, so the whole block is hidden. #}
+      <details class="adv" data-types="llm_agent lqa">
+        <summary>Options</summary>
+        <fieldset class="lp-fieldset">
+        <label class="checkbox" data-types="llm_agent lqa"><input type="checkbox" name="redact_pii" value="1" />
+          Redact PII for this step <span class="muted">(scrub emails/SSNs before the engine sees them, restore after)</span></label>
+        {# F2 engine-layer upgrades (ModernMT/Lara). Both default OFF. #}
+        <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="adaptive_feedback" value="1"
+          title="Runs segments in order and self-propagates terminology and style; only confirmed earlier segments are fed forward." />
+          In-run adaptive feedback <span class="muted">(feed earlier segments into later prompts for consistent terms/style)</span></label>
+        <label data-types="llm_agent">Adaptive feedback window
+          <input type="number" name="adaptive_feedback_window" value="5" min="0" max="50" style="width:5em"
+                 title="Max prior segments injected into each prompt; 0 disables." /></label>
+        <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="doc_context_prepass" value="1" />
+          Document-context pre-pass <span class="muted">(one extra call builds a doc brief added to every segment; counts against spend cap)</span></label>
+        {# TM few-shot examples (SPEC-context-metadata phase 2B). Default ON - the
+           checkbox is pre-CHECKED so leaving it renders examples; unchecking submits
+           nothing -> OFF. #}
+        <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="tm_examples" value="1" checked
+          title="Relevance-gated: a poor or absent match injects nothing." />
+          TM few-shot examples <span class="muted">(inject top-N similar TM matches as examples - the biggest quality lever)</span></label>
+        <label data-types="llm_agent">TM examples window
+          <input type="number" name="tm_examples_window" value="3" min="0" max="5" style="width:5em"
+                 title="Top matches injected; clamped 0-5, 0 disables." /></label>
+        {# Per-string image context (Batch 14 T2, SPEC §25). Default ON - the checkbox is
+           pre-CHECKED so a new agent step sees the string's images (when the engine is
+           vision-capable); unchecking submits nothing -> OFF for this step only. #}
+        <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="use_image_context" value="1" checked
+          title="On by default. Turn off to skip image context for this step only (for example, keep it on the translator and off on a finalizer)." />
+          Send this string's images to this step <span class="muted">(needs a vision-capable engine to have any effect)</span></label>
+        {# Terminology T3 (SPEC §9-T3): default OFF (unchecked submits nothing -> OFF), so a
+           new agent step renders prompts.glossary_line verbatim (byte-identical). #}
+        <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="concept_glossary_render" value="1"
+          title="Off by default. When on, this step renders matched glossary concepts (audience-gated, ordered, capped) into the prompt instead of the plain term list." />
+          Render glossary concepts into this step's prompt</label>
+        <label data-types="llm_agent">Glossary concept cap <input type="number" name="glossary_concept_cap" value="10" min="0" style="width:5em" title="At most this many concepts in the rendered glossary block (0 = no concept cap)." /></label>
+        <label data-types="llm_agent">Glossary token cap <input type="number" name="glossary_token_cap" value="0" min="0" style="width:6em" title="Token ceiling for the rendered glossary block (0 = inherit the install default)." /></label>
+        {# LQA safety floor D1 (PROPOSAL-lqa-glossary-adjudication Phase 1): the TM
+           provenance guard. A <select>, not a checkbox, because the field is a TRISTATE
+           and an unchecked checkbox posts nothing (indistinguishable from "never sent"). #}
+        <label data-types="llm_agent">TM protection
+          <select name="tm_protect" style="width:min(16em,100%)"
+                  title="Exclude segments filled by a 100% TM match from this step, so a fix step cannot silently rewrite an approved match.">
+            <option value="auto" selected>Auto (correction-loop steps only)</option>
+            <option value="on">Always protect TM segments</option>
+            <option value="off">Never protect</option>
+          </select></label>
+        {# run-190 Item D / M5: the over-translation (page-dump) guard opt-out (tristate),
+           mirroring TM protection. 'off' for a legitimately expanding rewrite/summarize. #}
+        <label data-types="llm_agent">Over-translation guard
+          <select name="over_translation_guard" style="width:min(16em,100%)"
+                  title="Reject a candidate that looks like a whole-page dump (far longer than the source) and withhold it to review. Turn off for a step whose output is legitimately much longer than its input.">
+            <option value="auto" selected>Auto (use the install guard)</option>
+            <option value="on">Always on</option>
+            <option value="off">Off (allow long output)</option>
+          </select></label>
+        {# MQM-aligned QE score + routing gate (roadmap gap #1/#6). Default OFF. #}
+        <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="qe_gate" value="1" />
+          QE routing gate <span class="muted">(score each segment 0-100; low scores go to review. One judge call per segment: a paid judge counts against the spend cap, a local LLM or local Jev-compatible server is free)</span></label>
+        <label data-types="llm_agent">QE threshold
+          <input type="number" name="qe_threshold" value="70" min="0" max="100" style="width:5em"
+                 title="Score at or above the threshold proceeds; below routes to review." /></label>
+        {# feat/lqa-configurable-threshold: an lqa step's numeric pass bar. Blank = the built-in
+           default (score >= 90 AND no major/critical error); a value makes the step pass only at
+           score >= it. lqa-only (shown via data-types); refused elsewhere. #}
+        <label data-types="lqa">LQA pass threshold
+          <input type="number" name="lqa_threshold" value="" min="0" max="100" placeholder="90" style="width:5em"
+                 title="An lqa step FAILS unless score is at or above this; the no-major-error rule is unchanged. Blank = default 90." /></label>
+        {# QE judge engine is a PROVIDER ref (not a model), so it's a plain select with
+           the same option set as the step Provider picker - no model fetch. Blank =
+           reuse this step's provider. #}
+        <label data-types="llm_agent">QE judge engine
+          <select name="qe_provider" style="width:min(16em,100%)"
+                  title="A provider name or engine:&lt;id&gt; (an LLM or a Jev quality judge); blank reuses this step's provider."><option value="">(reuse step provider)</option>
+            {% for p in providers %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+            {% for value, label in engine_options(request, 'judge') %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+          </select></label>
+        {# QE auto-fix (Train B): shown only while the QE judge is a Jev judge. #}
+        {{ m.autofix_block('', none, providers, request) }}
+        </fieldset>
+      </details>
+
+      {# Batch 15 T1 (SPEC-tm-match-step-config §8.B): the tm_match step's per-step TM
+         policy (add form). LIVE only on a tm_match step. A NEW tm_match step SEEDS these
+         from the current globals when left at inherit/blank (a concrete snapshot). #}
+      <details class="adv" data-types="tm_match">
+        <summary>TM match policy</summary>
+        <fieldset class="lp-fieldset" data-types="tm_match">
+          <label data-types="tm_match" title="A TM hit at or above this score fills the segment. 100 = exact matches only.">Fill matches at or above this score
+            <input type="number" name="tm_fill_threshold" value="" min="50" max="100" placeholder="inherit (100)" style="width:6em" /></label>
+          <label data-types="tm_match" title="How a below-100 fuzzy fill locks.">How to lock fuzzy fills
+            <select name="tm_fuzzy_lock_mode" style="width:min(16em,100%)">
+              <option value="" selected>Inherit global</option>
+              <option value="none">None (suggestion, no lock)</option>
+              <option value="soft">Soft (enter LQA)</option>
+              <option value="policy">Policy (as the 100 band)</option>
+            </select></label>
+          <label data-types="tm_match" title="Lock in-context exact (ICE) matches.">Lock in-context exact matches
+            <select name="tm_lock_ice" style="width:min(16em,100%)">
+              <option value="auto" selected>Inherit global</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select></label>
+          <label data-types="tm_match" title="Send 100% matches to LQA (soft lock) instead of hard-locking them.">Send 100% matches to LQA
+            <select name="tm_hundreds_enter_lqa" style="width:min(16em,100%)">
+              <option value="auto" selected>Inherit global</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select></label>
+          <label data-types="tm_match" title="Attach near matches at or above this score as context (forward-compat until the ICE/context wave ships).">Attach near matches at or above this score as context
+            <input type="number" name="tm_context_floor" value="" min="50" max="99" placeholder="inherit (95)" style="width:6em" /></label>
+          <label data-types="tm_match" title="Comma-separated readable project ids whose TM this step reads. Blank = all readable.">Which translation memories this step reads (default: all readable)
+            <input type="text" name="tm_pool_selection" value="" placeholder="all readable" style="width:min(16em,100%)" /></label>
+        </fieldset>
+      </details>
+
+      {# Conditional-workflow PRE-STEP GUARD (SPEC-conditional-workflows §5, Phase 2).
+         Leave the source blank = the step ALWAYS runs (byte-identical to today). A guard
+         needs an EARLIER LQA (or QE-gate) step, else the add is rejected. #}
+      <details class="adv">
+        <summary>Run condition <span class="muted">(optional)</span></summary>
+        <fieldset class="lp-fieldset">
+        <label>Source
+          <select name="run_condition_ref">
+            <option value="">always run (no guard)</option>
+            <option value="prev_lqa">prev_lqa - most recent LQA step</option>
+            <option value="prev_qe">prev_qe - most recent QE-gate step</option>
+          </select></label>
+        <label>Condition
+          <select name="run_condition_op">
+            <option value="failed">failed (did not pass)</option>
+            <option value="passed">passed</option>
+            <option value="score_lt">score below value</option>
+            <option value="score_gte">score at or above value</option>
+          </select></label>
+        <label>Value
+          <input type="number" name="run_condition_value" min="0" max="100" style="width:5em" placeholder="90"
+                 title="Only for score below / at-or-above; ignored by passed/failed." /></label>
+        </fieldset>
+      </details>
+
+      {# Conditional-workflow BRANCHING + bounded loop-back (SPEC §5, Phase 3; D1/D3/D4).
+         `key` names this step so a branch can target it; `branch` routes AFTER a
+         gate-producing step (an LQA step, or an llm_agent step with the QE gate ON) by
+         its pass/fail outcome. A target that names an EARLIER step is a bounded loop-back
+         (fix -> re-check -> repeat until pass or max visits). Leaving everything blank =
+         a plain linear step (byte-identical to today). #}
+      {% set keyed_steps = steps | selectattr('key') | list %}
+      {# Step key + Max visits stay live for EVERY type (a human_review step is a legal
+         loop-back TARGET for another step's branch; RunGuard.at_visit_cap enforces
+         max_visits at that jump AND, since issue #94, before the step executes at all,
+         so the ceiling bounds this step's own executions in every role it plays in the
+         graph). On pass/On fail route by THIS step's OWN outcome,
+         which only an LQA (or QE-gated llm_agent) step ever produces -- a human_review
+         step never reaches the branch seam (it always pauses; resume_workflow always
+         advances cursor+1), so they're hidden for it (SPEC-lqa-step-honest-options). #}
+      <details class="adv">
+        <summary>Branching &amp; loops <span class="muted">(optional)</span></summary>
+        <fieldset class="lp-fieldset">
+        <label>Step key
+          <input type="text" name="step_key" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" style="width:min(12em,100%)"
+                 placeholder="e.g. fix, lqa1"
+                 title="A stable slug (unique in this workflow) so a branch can target this step." /></label>
+        <p class="help" data-types="llm_agent lqa">Branch after a gate step (an LQA, or an llm_agent with the QE
+          gate on) by its outcome; target an earlier step's key to loop back. Blank = no branch.</p>
+        <label data-types="llm_agent lqa">On pass &rarr;
+          <select name="branch_on_pass">
+            <option value="">(no branch / fall through)</option>
+            <option value="next">next step</option>
+            <option value="end">end the run</option>
+            {% for ks in keyed_steps %}<option value="{{ ks.key }}">step: {{ ks.key }}{% if ks.name %} ({{ ks.name }}){% endif %}</option>{% endfor %}
+          </select></label>
+        <label data-types="llm_agent lqa">On fail &rarr;
+          <select name="branch_on_fail">
+            <option value="">(no branch / fall through)</option>
+            <option value="next">next step</option>
+            <option value="end">end the run</option>
+            {% for ks in keyed_steps %}<option value="{{ ks.key }}">step: {{ ks.key }}{% if ks.name %} ({{ ks.name }}){% endif %}</option>{% endfor %}
+          </select></label>
+        <label>Max visits
+          <input type="number" name="max_visits" min="1" max="50" style="width:5em" placeholder="5"
+                 title="Loop ceiling for this step; blank inherits the run default (5)." /></label>
+        {# SPEC-parallel-routing §6: give CONSECUTIVE check steps the same group name and
+           they run at the same time against one frozen snapshot of the text; the next
+           step waits for all of them (the join). Phase 1 is CHECKS ONLY (lqa), so the
+           honest-fields JS hides this for other types and the server refuses it there. #}
+        <label data-types="lqa">Parallel steps
+          <input type="text" name="parallel_group" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" style="width:min(12em,100%)"
+                 placeholder="e.g. checks"
+                 title="Give the same group name to CONSECUTIVE check steps and they run at the same time against the same text; the next step waits for all of them." /></label>
+        </fieldset>
+      </details>
+
+      <fieldset class="lp-fieldset" data-types="llm_agent">
+        <legend>Prompt</legend>
+        {# SPEC-prompt-template-runtime: bind a SAVED prompt template. Inline prompt text
+           below WINS when both are set (the run resolves inline > template > default). #}
+        {% if prompt_templates %}
+        <label>Saved template
+          <select name="prompt_template_id">
+            <option value="">none (inline prompt or default)</option>
+            {% for t in prompt_templates %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}
+          </select>
+          <span class="muted small">If you ALSO type an inline prompt below, the inline prompt wins.</span>
+        </label>
+        {% endif %}
+        <label>Inline prompt
+          <textarea name="prompt_text" rows="6" spellcheck="false" placeholder="Leave blank to use the saved template, or the default for this type">{{ draft }}</textarea>
+        </label>
+        {{ m.placeholder_legend() }}
+        <p class="muted">Presets:
+          {% for name, body in presets.items() %}
+            <a href="#" class="preset" data-body="{{ body|e }}">{{ name }}</a>{% if not loop.last %} · {% endif %}
+          {% endfor %}
+        </p>
+      </fieldset>
+
+      <button type="submit">Add step</button>
+    </form>
+  </div>
+</div>
+<div class="wf-pagepanel" role="tabpanel" id="wfp-panel-author" aria-labelledby="wfp-tab-author" tabindex="0">
+  <section class="card">
+    <h2 id="wf-author">Prompt-authoring assistant</h2>
+    <p class="muted">Describe how a step should behave; an LLM drafts the prompt.
+    Offline (no key): a deterministic mock runs instead. The draft lands in the Prompt box of the Add a step tab.</p>
+    <form method="post" action="/workflows/{{ wf.id }}/author" class="form"
+          id="author-form" data-json-action="/workflows/{{ wf.id }}/author.json">
+      {% include "_csrf.html" %}
+      <label>Describe the step
+        <textarea name="description" rows="4" spellcheck="false" placeholder="a strict in-country reviewer who fixes tone for Quebec French"></textarea>
+      </label>
+      <label>Use provider
+        <select name="provider"><option value="">default</option>
+          {% for p in providers %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+          {# engine:<id> local models MUST be selectable here too, exactly like the
+             Add-a-step provider picker - otherwise a locally-hosted engine can never
+             be routed the authoring call. #}
+          {% for value, label in engine_options(request) %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+        </select>
+      </label>
+      <button type="submit" data-busy-label="{{ t(request, 'busy.drafting_prompt') }}">Draft prompt</button>
+      <p class="muted" id="author-status" role="status" aria-live="polite"></p>
+    </form>
+  </section>
+</div>
+</div>
+
+<!-- langpicker.js is already loaded on every page by _new_project_dialog.html
+     (included from base.html); its per-root idempotence guard makes the picker
+     init regardless of load order, so no page-local script tag is needed. -->
+<script src="/static/wfmodel.js?v={{ static_v('wfmodel.js') }}"></script>
+<script src="/static/wftabs.js?v={{ static_v('wftabs.js') }}"></script>
+<script src="/static/promptlock.js?v={{ static_v('promptlock.js') }}"></script>
+<script src="/static/wfpagetabs.js?v={{ static_v('wfpagetabs.js') }}"></script>
+{# SPEC-workflow-canvas §4.3: drag-to-reorder on the graph. Loaded ONLY on the builder
+   (the run-view and author-review graphs stay read-only) AND only for a caller who may
+   actually edit - gated on the same predicate that renders the .wf-canvas wrapper, so a
+   read-only viewer is not served an editor's script at all. #}
+{% if (not app_meta().auth_on) or can_tune_ai(current_user(request)) %}
+<script src="/static/wfcanvas.js?v={{ static_v('wfcanvas.js') }}"></script>
+{% endif %}
+<script nonce="{{ csp_nonce() }}">
+document.querySelectorAll('.preset').forEach(a => {
+  a.addEventListener('click', (e) => {
+    e.preventDefault();
+    document.querySelector('#wf-add-step-form textarea[name=prompt_text]').value = a.dataset.body;
+  });
+});
+// --- step model dropdowns (driven by the adjacent provider select) ----------
+// See /static/wfmodel.js for the shared implementation (also used by
+// workflow_author_review.html). lazyDetails: true preserves this page's
+// defer-until-<details>-opens optimization (per-step edit forms are inside a
+// collapsed <details>; fetching on load for every one would fire 2xN silent
+// POSTs to /workflows/models on every builder page view).
+initWfModels({ lazyDetails: true });
+// --- honest step-type options (SPEC-lqa-step-honest-options) -----------------
+// Show/hide every field the CURRENT step type has no effect on: an element with
+// data-types="llm_agent lqa" (etc.) is visible only when the nearest step_type
+// select's value is in that space-separated list; an element with no data-types
+// attribute (Name, Type, Run condition, Step key, Max visits, ...) is always
+// shown -- those apply uniformly to every step type. This covers Feature B's
+// assignee-email field too (data-types="human_review"), replacing its old
+// dedicated toggle. PROGRESSIVE ENHANCEMENT ONLY: this never removes a field's
+// name/value, so a no-JS submission still carries every field, and the server
+// (workflows.add_step/update_step) is the real authority -- it refuses a
+// dead-for-this-type field the caller actually set (see _refuse_dead_fields),
+// never silently drops one.
+(function () {
+  function sync(select) {
+    var form = select.closest('form');
+    if (!form) return;
+    var type = select.value;
+    form.querySelectorAll('[data-types]').forEach(function (el) {
+      var types = el.getAttribute('data-types').split(/\s+/);
+      el.style.display = types.indexOf(type) === -1 ? 'none' : '';
+    });
+  }
+  document.querySelectorAll('select[name="step_type"]').forEach(function (sel) {
+    sel.addEventListener('change', function () { sync(sel); });
+    sync(sel);
+  });
+})();
+// Prompt-authoring: submit via fetch so the draft lands in the Prompt box IN PLACE
+// without a full-page reload - the rest of the Add-a-step form (name, provider,
+// glossary, ...) is left untouched. With JS disabled the form falls back to a normal
+// POST to /author (full-page render). No user content is ever put into innerHTML.
+(function () {
+  var form = document.getElementById('author-form');
+  if (!form || !window.fetch) return;  // no-JS / old browser -> plain form POST
+  var statusEl = document.getElementById('author-status');
+  var target = document.querySelector('#wf-add-step-form textarea[name=prompt_text]');
+  function setStatus(msg, isError) {
+    if (!statusEl) return;
+    statusEl.textContent = msg;               // textContent, never innerHTML
+    statusEl.style.color = isError ? 'var(--danger)' : '';
+  }
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var btn = form.querySelector('button[type=submit]');
+    var descEl = form.querySelector('textarea[name=description]');
+    var provEl = form.querySelector('select[name=provider]');
+    var body = new URLSearchParams({
+      description: descEl ? descEl.value : '',
+      provider: provEl ? provEl.value : ''
+    });
+    // Busy indicators: the shared spinner/label/elapsed counter + top bar (the
+    // button carries its translated data-busy-label); done() runs in finally.
+    if (window.LocBusy && window.LocBusy.isBusy(btn)) return;
+    var done = window.LocBusy ? window.LocBusy.start(btn)
+                              : function () { btn.disabled = false; };
+    if (!window.LocBusy) btn.disabled = true;
+    setStatus('Drafting the prompt...', false);
+    fetch(form.dataset.jsonAction, {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': window.CSRF_TOKEN },
+      body: body
+    }).then(function (r) {
+      return r.json().then(function (d) { return { ok: r.ok, data: d }; });
+    }).then(function (res) {
+      // A slow engine answers 202 + a handle (app/web/author_jobs.py): poll it until the
+      // draft is ready. A repeat click while it runs joins the same draft server-side.
+      if (!(res.data && res.data.pending)) return res;
+      var announced = !!res.data.notice;
+      if (res.data.notice) setStatus(res.data.notice, false);
+      var fails = 0;
+      return new Promise(function (resolve) {
+        function poll() {
+          fetch(res.data.poll_url).then(function (r) {
+            return r.json().then(function (d) { return { ok: r.ok, data: d }; });
+          }).then(function (p) {
+            fails = 0;
+            if (p.data && p.data.status === 'running') {
+              if (p.data.timed_out) {
+                resolve({ ok: false, data: { error: 'The draft is still running after ' +
+                  Math.round(p.data.elapsed_s / 60) + ' minutes, much longer than expected. ' +
+                  'The AI engine may be overloaded; try again later or pick a faster model.' } });
+                return;
+              }
+              // Said once (a live region): the button's busy counter shows the seconds.
+              if (!announced) {
+                setStatus('Drafting the prompt on the server (a local model can take a few ' +
+                  'minutes).', false);
+                announced = true;
+              }
+              setTimeout(poll, 3000);
+            } else {
+              resolve({ ok: p.ok && p.data && p.data.ok !== false, data: p.data });
+            }
+          }).catch(function () {
+            // A network blip retries; five in a row (or a signed-out session answering with
+            // a login page) stops with a clear message instead of spinning forever.
+            if (++fails >= 5) {
+              resolve({ ok: false, data: { error: 'Lost contact with the server while the ' +
+                'draft was running. Reload the page; if you were signed out, sign in again.' } });
+              return;
+            }
+            setTimeout(poll, 6000);
+          });
+        }
+        setTimeout(poll, 3000);
+      });
+    }).then(function (res) {
+      if (res.ok && res.data && res.data.ok) {
+        if (target) {
+          var land = function () { target.value = res.data.draft; target.focus(); };
+          if (window.WfPageTabs) { window.WfPageTabs.select('wf-add-step').then(land); } else { land(); }
+        }
+        setStatus('Draft inserted into the Prompt box of the Add a step tab.', false);
+      } else {
+        var msg = (res.data && res.data.error) || 'Could not draft the prompt.';
+        setStatus(msg, true);
+      }
+    }).catch(function () {
+      setStatus('Network error - please try again.', true);
+    }).finally(function () {
+      done();
+    });
+  });
+})();
+</script>
+{{ m.autofix_block_script() }}
+
+</div>
+{% endblock %}

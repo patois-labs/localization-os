@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Glossaries{% endblock %}
+{% block content %}
+
+{% set header_meta %}
+  <p>Termbases belong to a customer. Pick a customer to manage its glossaries.
+  {% if not can_edit %}<br>{{ m.status_badge('review', 'Read-only') }} Editing glossaries is limited to admins and linguists.{% endif %}</p>
+  {% endset %}
+{% set header_status %}<a class="help-hint" href="/help/glossary" title="Glossaries guide" aria-label="Glossaries guide">?</a>{% endset %}
+{% set header_primary %}{% if can_edit and selected_customer %}<a class="btn-primary" href="#new-glossary">New glossary</a>{% endif %}{% endset %}
+{{ m.page_header('Glossaries', meta=header_meta, status=header_status, primary=(header_primary if header_primary|trim else none)) }}
+{% if not customer_bound and customers %}
+<div class="asset-customer-picker">
+  <form method="get" action="/glossaries" class="form inline-form">
+    <label>Customer
+      <select name="customer">
+        <option value="">- pick a customer -</option>
+        {% for c in customers %}<option value="{{ c.id }}"{% if c.id == selected_customer_id %} selected{% endif %}>{{ customer_label(c) }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="submit">Go</button>
+  </form>
+</div>
+  {% endif %}
+
+
+{# a11y T6: a ?err= error renders once, as a sentence, in the summary at the top of
+   main (base.html + _form_errors.html). #}
+
+{% if selected_customer %}
+{% call m.card(flat=true) %}
+  <h2>{{ selected_customer.name }} - glossaries</h2>
+  {% if rows %}
+  {% call m.data_table('Glossaries', [{'label': 'Name'}, {'label': 'Status'}, {'label': 'Language pairs'}, {'label': 'Terms'}, {'label': 'Approved by'}]) %}
+      {% for row in rows %}
+      {% set g = row.g %}
+      <tr>
+        <td><span class="cell-primary"><a class="trunc" href="/glossaries/{{ g.id }}" style="max-width:28ch">{{ g.name }}</a></span></td>
+        <td>
+          {% if g.status == 'approved' %}{{ m.status_badge('approved', 'Approved') }}
+          {% else %}{{ m.status_badge('draft', 'Draft') }}{% endif %}
+        </td>
+        <td class="muted small data-mono">
+          {% for p in row.summary.pairs %}{{ p.source_locale }}→{{ p.target_locale }}{% if not loop.last %}, {% endif %}{% else %}-{% endfor %}
+        </td>
+        <td class="data-mono">{{ row.summary.entry_count }}</td>
+        <td class="muted small">{{ g.approved_by or '-' }}</td>
+      </tr>
+      {% endfor %}
+    {% endcall %}
+  {% else %}
+  {% if can_edit %}
+  <div id="glossaries-empty-write">{{ m.empty_state('No glossaries for this customer yet. Create one below.') }}</div>
+  {% else %}
+  <div id="glossaries-empty-readonly">{{ m.empty_state('No glossaries for this customer yet. An admin or linguist can create one.') }}</div>
+  {% endif %}
+  {% endif %}
+{% endcall %}
+
+{% if can_edit %}
+{% call m.card() %}
+  <h2>New glossary</h2>
+  {% call m.form_section('new-glossary', 'New glossary') %}
+  <form method="post" action="/glossaries" class="form">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="customer_id" value="{{ selected_customer_id }}" />
+    <label>Name <input type="text" name="name" placeholder="Marketing terms / Product names" required /></label>
+    <p class="help">This glossary will belong to <strong>{{ selected_customer.name }}</strong>.</p>
+    {% if content_types %}
+    <label>Content type
+      <select name="content_type_id" data-gl-content-type data-customer="{{ selected_customer_id }}"><option value="" data-customer="">(none / General)</option>
+        {% for t in content_types %}<option value="{{ t.id }}" data-customer="{{ t.customer_id if t.customer_id is not none else '' }}">{{ t.name }}{% if t.customer_id is none %} (global){% endif %}</option>{% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    <button type="submit">Create glossary</button>
+  </form>
+  {% endcall %}
+{% endcall %}
+{% endif %}
+{% elif not customer_bound %}
+{% call m.card() %}
+  {% set customer_empty %}{% if customers %}Pick a customer above to see its glossaries.{% else %}No customers yet - create a customer first, then add its glossaries.{% endif %}{% endset %}
+  <div class="empty">{{ m.empty_state(customer_empty) }}</div>
+{% endcall %}
+{% endif %}
+
+{% if unassigned %}
+{% call m.card() %}
+  <h2>Unassigned (needs a customer)</h2>
+  <p class="help">Legacy glossaries with no customer. Every glossary now belongs to a customer -
+  assign each of these once (assignment is permanent; it can't be moved between customers).</p>
+  {% call m.data_table('Unassigned (needs a customer)', [{'label': 'Name'}, {'label': 'Status'}, {'label': 'Language pairs'}, {'label': 'Terms'}, {'label': 'Assign to customer'}]) %}
+      {% for row in unassigned %}
+      {% set g = row.g %}
+      <tr>
+        <td><a class="trunc" href="/glossaries/{{ g.id }}" style="max-width:24ch"><strong>{{ g.name }}</strong></a>
+          <span class="badge warn">No customer</span></td>
+        <td>{% if g.status == 'approved' %}{{ m.status_badge('approved', 'Approved') }}{% else %}{{ m.status_badge('draft', 'Draft') }}{% endif %}</td>
+        <td class="muted small data-mono">{% for p in row.summary.pairs %}{{ p.source_locale }}→{{ p.target_locale }}{% if not loop.last %}, {% endif %}{% else %}-{% endfor %}</td>
+        <td class="data-mono">{{ row.summary.entry_count }}</td>
+        <td>
+          {% if can_manage %}
+          <form method="post" action="/glossaries/{{ g.id }}/assign-customer" class="form inline-form">
+            {% include "_csrf.html" %}
+            <select name="customer_id" aria-label="Customer for {{ g.name }}" required><option value="">(customer)</option>
+              {% for c in customers %}<option value="{{ c.id }}">{{ customer_label(c) }}</option>{% endfor %}
+            </select>
+            <button type="submit">Assign</button>
+          </form>
+          {% else %}<span class="muted small">managers only</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    {% endcall %}
+{% endcall %}
+{% endif %}
+
+<script nonce="{{ csp_nonce() }}">
+// Content-type filter (SPEC-content-types): the customer is FIXED (the customer-first
+// page's selected customer, carried on the content-type select's data-customer). Show
+// only that customer's content types + globals (data-customer=""); a foreign-customer
+// type is hidden and, if somehow selected, falls back to General.
+(function () {
+  var ctSel = document.querySelector('[data-gl-content-type]');
+  if (!ctSel) return;
+  var chosen = ctSel.getAttribute('data-customer') || '';
+  Array.prototype.forEach.call(ctSel.options, function (opt) {
+    var owner = opt.getAttribute('data-customer') || '';
+    var ok = (owner === '' || owner === chosen);
+    opt.hidden = !ok;
+    opt.disabled = !ok;
+  });
+  var sel = ctSel.options[ctSel.selectedIndex];
+  if (sel && sel.disabled) ctSel.value = '';
+})();
+</script>
+
+{# SPEC-ask-draft section 4: the grounded "Ask about this page" panel. Hidden (and
+   its route 404s) when the assist_enabled kill switch is off. #}
+{% with assist_module = 'glossary' %}{% include "_assist_panel.html" %}{% endwith %}
+
+{% endblock %}

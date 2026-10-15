@@ -1,0 +1,288 @@
+{% extends "base.html" %}
+{# Work surface: full width, not the centered list column (Console). #}
+{% set wide_page = true %}
+{% import "_macros.html" as m %}
+{% block title %}{{ doc.filename }} - LQA{% endblock %}
+{% block content %}
+{#- T5 (a11y, WCAG 3.1.2): lang on the source / target text cells only; the MQM notes,
+    badges and findings are English and stay untagged. -#}
+{% set src_lang = project.source_locale|langattrs %}{% set tgt_lang = selected|langattrs %}
+
+<p><a href="/documents/{{ doc.id }}" class="back"><span aria-hidden="true">←</span> {{ doc.filename }}</a></p>
+
+<section class="review-intro">
+  {{ m.page_header('LQA scorecard - ' ~ selected) }}
+  <p class="muted">MQM/DQF scoring. Score = 100 − Σ penalties (minor 1, major 5, critical 10).
+  The LLM judge (fluency/accuracy/style/terminology findings guided by the rulebook) runs on
+  <strong>Re-score &amp; save</strong>, never on a page view, so opening the scorecard is
+  free and instant. The headline below is the <strong>last saved scoring</strong>; the
+  live structural checks for this view are listed further down.</p>
+
+  {# F1: a dead-judge re-score preserved the prior scoring - say so where the GET can render it. #}
+  {% if judge_unavailable %}
+    <p class="muted"><span class="badge warn">LLM judge unavailable</span> The last
+    <strong>Re-score &amp; save</strong> could not reach the configured LLM judge, so the
+    <strong>previous scoring was preserved</strong> (nothing was overwritten). Try again when
+    the judge is back.</p>
+  {% endif %}
+
+  {# F3: the AUTHORITATIVE headline is the STORED scoring, not the structural recompute.
+     'run' regime shows the DURABLE, threshold-correct gate from the latest LQA StepRun;
+     'adhoc' shows the last Re-score's score with NO derived gate; neither -> nothing. #}
+  {% if has_scoring and stored_regime == 'run' %}
+    <p id="lqa-stored-headline" data-regime="run" data-score="{{ stored_score if stored_score is not none else '' }}" data-gate="{{ stored_gate }}">
+      Last workflow LQA scoring:
+      <span class="bigscore {% if stored_gate == 'auto_approved' %}good{% else %}bad{% endif %}">{{ stored_score if stored_score is not none else '-' }}</span>/100
+      · Gate: {{ m.status_badge('approved' if stored_gate == 'auto_approved' else 'in_review', m.status_label(stored_gate)) }}
+    </p>
+    <p class="muted">The score and gate are the durable outcome of the workflow run that
+    scored this document (gated against that step's own threshold). This is what the
+    <code>qa</code> report and the lakehouse count.</p>
+  {% elif has_scoring and stored_regime == 'adhoc' %}
+    <p>
+      Last ad-hoc scoring (worst segment):
+      <span class="bigscore {% if stored_score is not none and stored_score >= 90 %}good{% else %}bad{% endif %}">{{ stored_score if stored_score is not none else '-' }}</span>/100
+    </p>
+    <p class="muted">From a manual <strong>Re-score &amp; save</strong>. An ad-hoc per-segment
+    scoring has no single pass/fail gate, so only the worst-segment score is shown; see the
+    per-segment findings below.</p>
+  {% else %}
+    <p><span class="badge">no findings on record</span> - run <strong>Re-score &amp; save</strong>
+    for an LLM scoring (a clean scoring records no findings).</p>
+  {% endif %}
+
+  <p class="muted">
+    Live structural checks (this view):
+    <strong>{{ card.overall }}</strong>/100 across {{ card.segments_scored }} segment(s).
+    <span class="badge fuzzy">structural + rulebook only</span> - the LLM judge did not run on
+    this page view, so this is not the gate; see the saved scoring above.</p>
+
+  <p class="muted">This is the <strong>machine score</strong> - reviewer findings are recorded
+  separately below and do not change it.</p>
+  {% if locales|length > 1 %}
+    <div class="tabs">
+      {% for l in locales %}<a class="tab {% if l == selected %}active{% endif %}" href="/documents/{{ doc.id }}/lqa?locale={{ l }}">{{ l }}</a>{% endfor %}
+    </div>
+  {% endif %}
+  <form method="post" action="/documents/{{ doc.id }}/lqa/run" style="margin-top:10px">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="locale" value="{{ selected }}" />
+    <button type="submit" class="small" data-busy-label="{{ t(request, 'busy.scoring') }}">Re-score &amp; save</button>
+  </form>
+</section>
+
+<nav class="review-section-nav" aria-label="LQA scorecard"><a href="#lqa-findings">Findings</a><a href="#lqa-machine">Stored machine findings</a><a href="#lqa-reviewer">Reviewer findings</a><a href="#lqa-rulebook">Language-pair rulebook</a></nav>
+<section class="card" id="lqa-findings">
+  <h2>Findings <span class="muted">(structural + rulebook, this view)</span></h2>
+  {% if total_rows > per_page %}
+    <p class="muted small">Showing {{ row_lo + 1 }}–{{ row_lo + rows_page|length }} of {{ total_rows }} segments.</p>
+  {% endif %}
+  {% if rows_page %}
+    {% call m.data_table('Findings', [{'label': '#', 'numeric': true}, {'label': 'Source'}, {'label': 'Target'}, {'label': 'Score', 'numeric': true}, {'label': 'MQM errors'}]) %}
+        {% for r in rows_page %}
+          <tr>
+            <td class="num">{{ r.seg.order_index + 1 }}</td>
+            <td class="src"{{ src_lang }}>{{ r.seg.source_text }}</td>
+            <td class="tgt"{{ tgt_lang }}>{{ r.seg.target_text }}</td>
+            <td><span class="badge {% if r.card.score >= 90 %}exact{% else %}warn{% endif %}">{{ r.card.score }}</span></td>
+            <td>
+              {% for e in r.card.errors %}
+                <div class="lqaerr">
+                  <span class="badge {% if e.severity in ['major','critical'] %}warn{% else %}fuzzy{% endif %}">{{ e.severity }}</span>
+                  <strong>{{ e.dimension }}</strong> - <span class="muted">{{ e.note }}</span>
+                </div>
+              {% else %}<span class="ok">clean</span>{% endfor %}
+              {# WAVE 3 §6.5: persisted reviewer-authored findings for THIS segment, in
+                 their own visually-distinct block (the `human` badge + actor), never
+                 folded into the machine card above. #}
+              {% for f in human_by_seg.get(r.seg.id, []) %}
+                <div class="lqaerr">
+                  <span class="badge exact">human</span>
+                  <span class="badge {% if f.severity in ['major','critical'] %}warn{% else %}fuzzy{% endif %}">{{ f.severity }}</span>
+                  <strong>{{ f.dimension }}</strong> - <span class="muted">{{ f.note }}</span>
+                  <span class="muted">- {{ f.actor or 'reviewer' }}, {{ f.created_at | utcdt }}</span>
+                </div>
+              {% endfor %}
+              {# §5.2 kill switch: the per-segment query thread link is a QUERIES-feature
+                 affordance, gated on queries_enabled; the findings above are unaffected. #}
+              {% if feature_enabled('queries') %}
+                <div><a class="mini" href="/queries?segment={{ r.seg.id }}" title="Ask or read a query about this segment">query</a></div>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+    {% if total_pages > 1 %}
+      <nav class="tabs" aria-label="Scorecard pages" style="margin-top:8px">
+        {% if page > 1 %}<a class="tab" href="/documents/{{ doc.id }}/lqa?locale={{ selected }}&amp;page={{ page - 1 }}"><span aria-hidden="true">←</span> Prev</a>{% endif %}
+        <span class="tab active">Page {{ page }} of {{ total_pages }}</span>
+        {% if page < total_pages %}<a class="tab" href="/documents/{{ doc.id }}/lqa?locale={{ selected }}&amp;page={{ page + 1 }}">Next <span aria-hidden="true">→</span></a>{% endif %}
+      </nav>
+    {% endif %}
+  {% else %}
+    {% set empty_copy %}No translated segments to score yet. Translate or post-edit first.{% endset %}{{ m.empty_state(empty_copy) }}
+  {% endif %}
+</section>
+
+{# #52 point 2 - STORED MACHINE findings. The scorecard above is a fresh structural-only
+   recompute; the run that actually GATED this document persisted LLM findings that the qa
+   report and the Databricks export count. Surfacing them here stops the page from showing a
+   clean 100 while the run-gate reality was lower. Two regimes, kept apart (§3.1.5):
+   workflow-run history (segment_id NULL, incl. cross-segment findings) and the last ad-hoc
+   Re-score. Read-only - reviewer findings are logged in their own section below. #}
+<section class="card" id="lqa-machine">
+  <h2>Stored machine findings <span class="muted">(from the last scoring / workflow run)</span></h2>
+  <p class="muted">Persisted LLM/structural findings for {{ selected }}. These are what the
+  <code>qa</code> report and the lakehouse count - the score at the top is a fresh
+  structural-only recompute and can differ (e.g. cross-segment consistency the run judge saw
+  is not re-derived on a page view). Run <strong>Re-score &amp; save</strong> to refresh the
+  ad-hoc rows.</p>
+
+  <h3>Workflow-run findings <span class="muted">(the gate that scored this document)</span></h3>
+  {% if machine.run %}
+    {% call m.data_table('Workflow-run findings', [{'label': 'Severity'}, {'label': 'Dimension'}, {'label': 'Note'}, {'label': 'Judge'}, {'label': 'Score', 'numeric': true}, {'label': 'When'}]) %}
+        {% for f in machine.run %}
+          <tr>
+            <td><span class="badge {% if f.severity in ['major','critical'] %}warn{% else %}fuzzy{% endif %}">{{ f.severity }}</span></td>
+            <td><strong>{{ f.dimension }}</strong></td>
+            <td class="muted">{{ f.note }}</td>
+            <td class="muted">{{ f.judge or '-' }}</td>
+            <td class="muted">{% if f.score is not none %}{{ f.score }}{% else %}-{% endif %}</td>
+            <td class="muted">{{ f.created_at }}</td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+    {% if machine.run_total > machine.run|length %}
+      <p class="muted small">Showing {{ machine.run|length }} of {{ machine.run_total }}.</p>
+    {% endif %}
+  {% else %}
+    {% set empty_copy %}No workflow-run LQA findings stored for {{ selected }} yet.{% endset %}{{ m.empty_state(empty_copy) }}
+  {% endif %}
+
+  <h3>Last ad-hoc scoring <span class="muted">(segment-level, from Re-score &amp; save)</span></h3>
+  {% if machine.adhoc %}
+    {% call m.data_table('Last ad-hoc scoring', [{'label': 'Seg', 'numeric': true}, {'label': 'Severity'}, {'label': 'Dimension'}, {'label': 'Note'}, {'label': 'Judge'}]) %}
+        {% for f in machine.adhoc %}
+          <tr>
+            <td class="num">{{ f.segment_id }}</td>
+            <td><span class="badge {% if f.severity in ['major','critical'] %}warn{% else %}fuzzy{% endif %}">{{ f.severity }}</span></td>
+            <td><strong>{{ f.dimension }}</strong></td>
+            <td class="muted">{{ f.note }}</td>
+            <td class="muted">{{ f.judge or '-' }}</td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+    {% if machine.adhoc_total > machine.adhoc|length %}
+      <p class="muted small">Showing {{ machine.adhoc|length }} of {{ machine.adhoc_total }}.</p>
+    {% endif %}
+  {% else %}
+    {% set empty_copy %}No ad-hoc LQA findings stored for {{ selected }} yet.{% endset %}{{ m.empty_state(empty_copy) }}
+  {% endif %}
+</section>
+
+{# WAVE 3 §6.5 - reviewer-authored MQM findings. CORE surface (no feature flag, §5.3):
+   turning queries off must not hide a single finding. RBAC: reviewer+ to log/edit/withdraw
+   (own-only, or a manager for any). Findings persist and feed the qa report + the lakehouse
+   but NEVER change the machine score or a workflow gate (§6.4). #}
+<section class="card" id="lqa-reviewer">
+  <h2>Reviewer findings <span class="muted">(logged by hand)</span></h2>
+  <p class="muted">MQM findings a reviewer records directly. They are counted in the
+  <code>qa</code> report and exported to the lakehouse, but they do <strong>not</strong>
+  change the machine score above or any workflow gate. Running a scoring is web-only; the
+  <code>lqa</code> CLI/API group manages these findings.</p>
+
+  {% if human_findings %}
+    {% call m.data_table('Reviewer findings', [{'label': 'Seg', 'numeric': true}, {'label': 'Severity'}, {'label': 'Dimension'}, {'label': 'Note'}, {'label': 'By'}, {'label': ''}]) %}
+        {% for f in human_findings %}
+          <tr>
+            <td class="num">{{ f.segment_id }}</td>
+            <td><span class="badge {% if f.severity in ['major','critical'] %}warn{% else %}fuzzy{% endif %}">{{ f.severity }}</span></td>
+            <td><strong>{{ f.dimension }}</strong></td>
+            <td class="muted">{{ f.note }}</td>
+            <td class="muted">{{ f.actor or 'reviewer' }}<br>{{ f.created_at | utcdt }}</td>
+            <td>
+              {% if can_log and (can_manage or f.actor == me_actor) %}
+                <details>
+                  <summary class="mini">edit</summary>
+                  <form method="post" action="/lqa/findings/{{ f.id }}" class="form">
+                    {% include "_csrf.html" %}
+                    <select name="dimension" aria-label="Dimension">
+                      {% for d in dimensions %}<option value="{{ d }}" {% if d == f.dimension %}selected{% endif %}>{{ d }}</option>{% endfor %}
+                    </select>
+                    <select name="severity" aria-label="Severity">
+                      {% for s in severities %}<option value="{{ s }}" {% if s == f.severity %}selected{% endif %}>{{ s }}</option>{% endfor %}
+                    </select>
+                    <textarea name="note" rows="2" aria-label="Note">{{ f.note }}</textarea>
+                    <button type="submit" class="small">Save</button>
+                  </form>
+                </details>
+                <form method="post" action="/lqa/findings/{{ f.id }}/withdraw" data-action-confirm="Withdraw this finding?">
+                  {% include "_csrf.html" %}
+                  <button type="submit" class="small">Withdraw</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      {% endcall %}
+  {% else %}
+    {% set empty_copy %}No reviewer findings logged for {{ selected }} yet.{% endset %}{{ m.empty_state(empty_copy) }}
+  {% endif %}
+
+  {% if can_log and rows_page %}
+    {% call m.form_section('lqa-log', 'Log a finding') %}
+    {% if total_rows > per_page %}
+      <p class="muted small">Segment list shows this page's segments ({{ row_lo + 1 }}–{{ row_lo + rows_page|length }} of {{ total_rows }}); page through the scorecard above to log on others.</p>
+    {% endif %}
+    <form method="post" action="/documents/{{ doc.id }}/lqa/findings" class="form">
+      {% include "_csrf.html" %}
+      <input type="hidden" name="locale" value="{{ selected }}" />
+      <label>Segment
+        <select name="segment_id" aria-label="Segment" required>
+          {% for r in rows_page %}<option value="{{ r.seg.id }}">#{{ r.seg.order_index + 1 }} - {{ r.seg.source_text[:60] }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Dimension
+        <select name="dimension" aria-label="Dimension" required>
+          {% for d in dimensions %}<option value="{{ d }}">{{ d }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Severity
+        <select name="severity" aria-label="Severity" required>
+          {% for s in severities %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+        </select>
+      </label>
+      <textarea name="note" rows="3" aria-label="Finding note" placeholder="What is wrong with this segment?" required></textarea>
+      <button type="submit">Log finding</button>
+    </form>
+    {% endcall %}
+  {% elif not can_log %}
+    <p class="muted">Logging a finding requires a reviewer role or higher.</p>
+  {% endif %}
+</section>
+
+<section class="card" id="lqa-rulebook">
+  <h2>Language-pair rulebook <span class="muted">({{ project.source_locale }} → {{ selected }})</span></h2>
+  <p class="muted">Bespoke standards for this pair. <code>FORBID &lt;text&gt;</code> (flag if the target
+  contains it) and <code>REQUIRE &lt;term&gt;</code> (flag if the target is missing it - a major error that
+  fails the gate, so it can drive a fix step) are enforced deterministically offline; all lines are
+  passed to the LLM reviewer as guidance.</p>
+  {% if can_edit_rulebook %}
+  <form method="post" action="/documents/{{ doc.id }}/rulebook" class="form">
+    {% include "_csrf.html" %}
+    <input type="hidden" name="locale" value="{{ selected }}" />
+    <textarea name="text" rows="8" aria-label="LQA rulebook" placeholder="e.g.&#10;FORBID utilisez&#10;Prefer formal 'vous' over 'tu'.&#10;Keep product names in English.">{{ rulebook }}</textarea>
+    <button type="submit">Save rulebook</button>
+  </form>
+  {% else %}
+  {% if rulebook_host_only %}
+  <p class="muted small">The rulebook applies to every organization on this install, so only the host operator can read or change it.</p>
+  {% else %}
+  <pre class="muted" aria-label="LQA rulebook">{{ rulebook or "No rulebook for this pair yet." }}</pre>
+  <p class="muted small">The rulebook applies to the whole install, so only an administrator can change it.</p>
+  {% endif %}
+  {% endif %}
+  <p class="muted">MQM dimensions: {{ dimensions|join(', ') }}</p>
+</section>
+
+{% endblock %}

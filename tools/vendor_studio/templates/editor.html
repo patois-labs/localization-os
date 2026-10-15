@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Editor - Project {{ proj.id }}{% endblock %}
+{% block body %}
+<a href="/projects/{{ proj.id }}" class="back">&larr; Project {{ proj.id }}</a>
+<h1>CAT editor <span class="muted">({{ session.role }})</span></h1>
+<p class="meta">{{ proj.source_locale }} &rarr; {{ proj.target_locale }} &middot;
+  {{ progress.done }}/{{ progress.total }} confirmed</p>
+
+<div class="editor-toolbar">
+  <span id="gate" class="gate {{ 'ok' if gate.open == 0 else 'bad' }}" data-open="{{ gate.open }}">
+    QA (advisory): {{ "no open findings" if gate.open == 0 else gate.open ~ " open finding(s)" }}</span>
+  <button data-qa-run data-project="{{ proj.id }}">Run QA</button>
+  <button data-advice-job data-project="{{ proj.id }}">Get advice (job)</button>
+  <button class="btn" data-deliver="full" data-project="{{ proj.id }}">Deliver all</button>
+  <span id="deliver-result" class="muted"></span>
+</div>
+
+{% if glossary %}
+<details class="glossary"><summary>Glossary ({{ glossary|length }})</summary>
+  <ul>
+  {% for g in glossary %}
+    <li><b>{{ g.get("term") }}</b> &rarr; {{ g.get("target") or g.get("target_term") }}
+      {% if g.get("forbidden") %}<span class="flag">forbidden</span>{% endif %}
+      {% if g.get("dnt") %}<span class="flag">DNT</span>{% endif %}</li>
+  {% endfor %}
+  </ul>
+</details>
+{% endif %}
+
+<table class="cat" data-project="{{ proj.id }}">
+  <thead><tr><th>#</th><th>Source</th><th>Target</th><th>Status / origin</th><th>QA</th></tr></thead>
+  <tbody>
+  {% for v in segs %}
+    {% set seg = v.seg %}
+    <tr data-seg="{{ seg.id }}" class="{{ 'locked' if seg.locked else '' }} st-{{ seg.status }}">
+      <td class="ix">{{ seg.order_index + 1 }}</td>
+      <td class="src">{{ seg.source }}</td>
+      <td class="tgt">
+        {% if seg.locked %}
+          <div class="locked-target">&#128274; {{ seg.target }}</div>
+          <div class="muted small">{{ seg.locked_reason or "locked - returned as dispatched" }}</div>
+        {% else %}
+          <textarea data-target rows="2">
+{{ seg.target }}</textarea>
+          <div class="rowtools">
+            <button data-confirm title="Confirm (Ctrl+Enter)">Confirm</button>
+            <button data-copy title="Copy source (Ctrl+Insert)">Copy src</button>
+            {% if session.role == "Reviewer" %}
+            <button data-approve>Approve</button>
+            <button data-reject>Reject</button>
+            {% endif %}
+            <button data-advice>Advice</button>
+          </div>
+        {% endif %}
+        {# Wave 3 Train E (HIGH-5): comments are CONVERSATION, not content, so the comment
+           control + list live OUTSIDE the locked/else branch -- a LOCKED 100% TM match is
+           exactly the segment a translator most needs to ask about. #}
+        {% if v.queries_in %}
+        <div class="buyer-queries">
+          {% for q in v.queries_in %}
+          <div class="cmt buyer" data-query-ref="{{ q.external_ref }}">
+            <b>Buyer query:</b> {{ q.body }}
+            <button class="link" data-reply-query data-ref="{{ q.external_ref }}">Reply &amp; share</button>
+          </div>
+          {% endfor %}
+        </div>{% endif %}
+        <div class="rowtools">
+          <button data-comment>Comment</button>
+        </div>
+        {% if v.comments %}
+        <div class="comments">
+          {% for c in v.comments %}<div class="cmt"><b>{{ c.role }}/{{ c.author }}:</b> {{ c.body }}{% if c.share %} <span class="flag shared">shared</span>{% endif %}</div>{% endfor %}
+        </div>{% endif %}
+      </td>
+      <td class="status-cell">
+        <span class="badge b-{{ v.badge.cls }}">{{ v.badge.label }}</span>
+        <span class="status s-seg-{{ seg.status }}" data-status>{{ seg.status }}</span>
+        {% if seg.issue_tag %}<span class="flag" data-issue>{{ seg.issue_tag }}</span>{% endif %}
+        {% if v.feedback %}
+        <div class="rework-feedback" data-feedback>
+          <span class="flag rework">REWORK</span>
+          {% for iss in v.feedback.get("issues") or [] %}<span class="flag issue">{{ iss }}</span>{% endfor %}
+          {% if v.feedback.get("note") %}<div class="muted small">{{ v.feedback.get("note") }}</div>{% endif %}
+        </div>
+        {% endif %}
+      </td>
+      <td class="qa-cell" data-qa>
+        {% for f in v.findings %}
+          <div class="finding sev-{{ f.severity }} {{ 'ignored' if f.ignored else '' }}">
+            {{ f.message }}
+            {% if not f.ignored %}
+              <button data-ignore data-check="{{ f.check }}" data-detail="{{ f.detail_sig }}">ignore</button>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<script src="/static/editor.js"></script>
+{% endblock %}

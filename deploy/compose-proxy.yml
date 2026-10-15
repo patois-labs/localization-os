@@ -1,0 +1,9 @@
+# Required companion for the proxy profile. Plain localhost HTTP keeps its own defaults.
+services:
+  app:
+    environment:
+      LOC_TMS_SECURE_COOKIES: "1"
+      LOC_TMS_TRUSTED_PROXY_IPS: "172.30.218.2"
+  proxy:
+    environment:
+      LOC_TMS_PROXY_CONFIGURED: "1"

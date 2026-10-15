@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/patois-labs/localization-os/security/advisories/new
+    about: Please report security problems privately, never in a public issue.
+  - name: Hosting, support and paid add-ons
+    url: https://patoislabs.com
+    about: Questions about Patois Labs services.

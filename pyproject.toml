@@ -1,0 +1,132 @@
+# Localization OS TMS - project tooling config.
+#
+# The runtime dependency lists live in requirements.txt / requirements.lock and
+# the dev/test deps in requirements-dev.txt (kept separate so the runtime install
+# stays lean). CI and the Docker image install from those files, NOT from this
+# file - the [project] table below is deliberately dependency-LESS so it can never
+# perturb that reproducible install story. Its only job is to make an editable
+# install (`pip install -e .`) expose a real `loc-tms` console command, as a
+# convenience on top of the always-supported `python -m app.cli` entry point.
+
+# --- packaging (Phase 8) ----------------------------------------------------
+# Minimal [project] table so `pip install -e .` yields a real `loc-tms` command.
+# It carries NO dependencies on purpose (see note above): the runtime deps stay
+# in requirements*.txt, which is what CI/Docker install. `python -m app.cli` and
+# the loc-tms.cmd / loc-tms.ps1 wrappers keep working with or without this install.
+[project]
+name = "localization-os"
+version = "1.0.0"
+description = "Localization OS: open source, self-hosted, MT-first translation management system."
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Patois Labs, LLC" }]
+
+[project.urls]
+Homepage = "https://patoislabs.com"
+Source = "https://github.com/patois-labs/localization-os"
+# Dependencies intentionally omitted - the runtime deps live in requirements.txt
+# / requirements.lock (what CI and Docker install). This table stays dependency-
+# LESS so it can never become a second, drifting source of truth.
+
+[project.scripts]
+# `pip install -e .` → a `loc-tms` command that calls app.cli.__main__:main.
+# (The repo-root loc-tms.cmd / loc-tms.ps1 wrappers cover the no-install case.)
+loc-tms = "app.cli.__main__:main"
+
+[build-system]
+requires = ["setuptools>=77"]  # 77+ reads the SPDX `license` string and `license-files`
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# Only package the app; keep tests/, scripts/, docs/ out of any built artifact.
+# Explicit so setuptools' auto-discovery never trips over the several top-level
+# directories (which would otherwise error the editable install).
+packages = ["app"]
+
+# pytest MUST NOT import the bespoke tests/verify_*.py scripts as test modules:
+# each sets os.environ["LOC_TMS_DATA_DIR"] and imports `app` at IMPORT time, so
+# collecting them into the pytest process would run that setup and collide. We
+# therefore keep pytest's default `python_files = test_*.py` (explicitly, so it
+# can't drift), which matches ONLY tests/test_verify_suites.py - the wrapper that
+# runs each verify_*.py as its own subprocess.
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+# Collect ONLY test_*.py - this deliberately excludes the verify_*.py scripts.
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+# Quiet, strict-ish defaults. --strict-markers catches typo'd @pytest.mark.*.
+addopts = "-ra --strict-markers"
+
+# --- code QA: Ruff (Phase 1, 2026-08-21) --------------------------------------
+# One tool for both linting and formatting (ruff format is Black-compatible).
+# line-length 100 matches the prevailing style (only ~1.3k of 400k lines exceed
+# it) rather than Black's 88 (which ~25k lines exceed) - minimizes reformat churn.
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+# Migrations are frozen historical artifacts: reformatting/modernizing them is
+# pure churn AND several verify suites assert their exact text (revision ids,
+# down_revision annotations). env.py rides along for consistency.
+extend-exclude = ["alembic"]
+
+[tool.ruff.lint]
+# Curated starter set:
+#   E/W  pycodestyle errors/warnings     F    pyflakes (real bugs: undefined names, unused)
+#   I    import sorting                  UP   pyupgrade (modern syntax for py310+)
+#   B    bugbear (likely bugs)           SIM  simplifications
+#   C4   comprehension cleanups          RUF  ruff-native checks
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "C4", "RUF", "S"]
+#   S    flake8-bandit security checks (2026-09-24, sec-tooling train). Enforced by the
+#        pregate "Ruff lint" step. In shipped code every exception is a per-line
+#        `# noqa: Sxxx -- <reason>`; only test and dev-tooling paths get the targeted
+#        per-file ignores below. Never blanket-ignore an S rule across app/.
+# RUF001/2/3 (ambiguous unicode): non-Latin sample text IS the product in a TMS -
+# the rule fights the domain.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom puts calls in default args by design (B008's
+# classic false positive). Real mutable-default bugs elsewhere still get caught.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Header",
+    "fastapi.Cookie",
+    "fastapi.Body",
+    "fastapi.Form",
+    "fastapi.File",
+    "fastapi.Security",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests/scripts set env (mock keys, DB paths) BEFORE `import app` - the import order
+# is the mechanism, not an accident. B011 `assert False` is the suites' loud-fail style.
+# Tests are not shipped and run against their own fixtures: asserts, exec of app
+# source snippets, fixture credentials (credential-shaped ones already carry the
+# pregate allow-secret pragma), temp paths, local binds, fixture SQL/XML/YAML and
+# test-harness subprocesses are the test style, not attack surface. Every other S
+# rule (pickle, TLS verify=False, weak hashes, ...) still applies to tests.
+"tests/*" = [
+    "E402", "B011",
+    "S101", "S102", "S104", "S105", "S106", "S107", "S108", "S110", "S112",
+    "S311", "S314", "S506", "S603", "S607", "S608", "S701",
+]
+"tools/*" = ["B011"]
+"tools/vendor_studio/tests/*" = ["S101", "S104", "S105", "S106", "S107", "S314"]
+# Dev tooling launches fixed argv lists (git, the venv python, ruff): no shell and no
+# request input, so bandit's generic subprocess warnings are noise here.
+"scripts/*" = ["E402", "S603", "S607"]
+# Factory-generated connectors append harvest/mapper imports at a fixed late anchor;
+# the generator navigates these files textually - do not restructure.
+"app/services/connectors/*" = ["E402"]
+# Deliberate mid-file imports: circular-import ordering (orchestrator), documented
+# single-seam layouts (prompts, workflows), wrap-don't-move re-export (deps).
+"app/services/orchestrator.py" = ["E402"]
+"app/services/prompts.py" = ["E402"]
+"app/services/workflows.py" = ["E402"]
+"app/web/deps.py" = ["E402"]
