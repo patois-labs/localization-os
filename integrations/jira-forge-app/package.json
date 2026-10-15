@@ -6,7 +6,7 @@
   "description": "A Jira issue panel that triggers Localization OS pull/push for a connection.",
   "dependencies": {
     "@forge/api": "4.0.0",
-    "@forge/bridge": "4.0.0",
+    "@forge/bridge": "7.2.0",
     "@forge/react": "10.0.0",
     "@forge/resolver": "1.6.0",
     "react": "18.2.0"
