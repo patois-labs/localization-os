@@ -6,7 +6,7 @@
   "description": "Send Airtable records to Localization OS for translation, and pull the results back.",
   "dependencies": {
     "@airtable/blocks": "1.19.0",
-    "react": "16.14.0",
+    "react": "17.0.2",
     "react-dom": "16.14.0"
   }
 }
