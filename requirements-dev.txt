@@ -37,7 +37,7 @@ packaging==26.3  # public PEP 440/508 API for release-lock validation
 # (0.16.0-0.16.3 vs 0.16.4 disagreed, causing format-check drift), and a new
 # minor can add rules/fixes. Both break the CI lint/format gate on unrelated PRs.
 # Bump deliberately: re-run `ruff format .` + repo-wide `ruff check .` when you do.
-ruff==0.16.10
+ruff==0.17.0
 # Accessibility browser suite (tests/verify_a11y_browser.py, opt-in): headless Chromium
 # driver for axe-core + reflow + Tab-walk checks. Apache-2.0 (deps greenlet, pyee: MIT).
 # The suite SKIPS cleanly without it or without a browser build; install the browser once
