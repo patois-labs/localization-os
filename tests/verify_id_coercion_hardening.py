@@ -278,6 +278,29 @@ def _load_head_function(relpath, fnname, extra_ns=None):
     raise AssertionError(("function not found at pre-fix SHA", _PREFIX_SHA, relpath, fnname))
 
 
+def _needs_history(sha):
+    """Run a fail-before proof only where its pinned pre-fix commit exists. The public
+    repository starts at the 1.0.0 commit, so the older history these proofs read with
+    `git show` is absent there; the proof still runs in a clone that has the history."""
+
+    def wrap(fn):
+        def inner(*args, **kwargs):
+            probe = _sp.run(
+                ["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=_ROOT, capture_output=True
+            )
+            if probe.returncode != 0:
+                print(f"  [skip] {fn.__name__}: pre-fix commit {sha} is not in this clone")
+                return None
+            return fn(*args, **kwargs)
+
+        inner.__name__ = fn.__name__
+        inner.__doc__ = fn.__doc__
+        return inner
+
+    return wrap
+
+
+@_needs_history(_PREFIX_SHA)
 def _prefix_proofs_from_head() -> None:
     """FAIL-PRE-FIX proof: the pre-fix coercers, loaded from the fork-point SHA, RAISE on
     U+00B2 (mode 1) and return an unbounded bigint on 40-nines (mode 2, which then

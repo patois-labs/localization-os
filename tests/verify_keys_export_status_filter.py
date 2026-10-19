@@ -395,6 +395,29 @@ def _build_parser_from_source(src: str):
 _PRE_K9_COMMIT = "f1c81c8"
 
 
+def _needs_history(sha):
+    """Run a fail-before proof only where its pinned pre-fix commit exists. The public
+    repository starts at the 1.0.0 commit, so the older history these proofs read with
+    `git show` is absent there; the proof still runs in a clone that has the history."""
+
+    def wrap(fn):
+        def inner(*args, **kwargs):
+            probe = subprocess.run(
+                ["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=_ROOT, capture_output=True
+            )
+            if probe.returncode != 0:
+                print(f"  [skip] {fn.__name__}: pre-fix commit {sha} is not in this clone")
+                return None
+            return fn(*args, **kwargs)
+
+        inner.__name__ = fn.__name__
+        inner.__doc__ = fn.__doc__
+        return inner
+
+    return wrap
+
+
+@_needs_history(_PRE_K9_COMMIT)
 def test_cli_status_flag_did_not_exist_pre_fix():
     """BEHAVIOURAL fail-pre-fix proof (no git stash): the parser built from the
     committed PRE-K9 source (`f1c81c8`) REJECTS `--status` on `keys export`; the

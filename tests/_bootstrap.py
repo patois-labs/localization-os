@@ -78,6 +78,10 @@ def init_env(prefix: str) -> str:
     # needs one sets it itself right after init_env (e.g. verify_sqlcipher).
     os.environ["SESSION_SECRET"] = ""
     os.environ["ENCRYPTION_KEY"] = ""
+    # Suites assume the built-in default engine. scripts/bootstrap.py writes a .env with
+    # DEFAULT_PROVIDER=mock for newcomers, and config loads .env without overriding a set
+    # variable, so pin the built-in value here or a contributor's .env changes results.
+    os.environ["DEFAULT_PROVIDER"] = "claude"
     # This suite is OFFLINE BY DESIGN (keys blanked above) yet many fixtures pin
     # default_provider="claude"/"local" and rely on the keyless built-in resolving to
     # MockProvider. That fallback is now REFUSED on a configured install

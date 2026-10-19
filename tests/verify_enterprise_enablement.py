@@ -21,6 +21,7 @@ ENTERPRISE ENABLEMENT OK.
 """
 
 import hashlib
+import importlib.util
 import os
 import sys
 
@@ -515,12 +516,13 @@ def test_config_fields_editable_while_on():
     )
     assert r.status_code == 303 and "error=" in r.headers["location"]
     assert settings.get("pii_ner_spacy_model") != "sneaky", "while-on save must obey the step-up"
-    r = c.post(
-        "/settings/enterprise/enable",
-        data={"feature": "pii_ner", "pii_ner_spacy_model": "en_core_web_sm", "operator_key": "opk"},
-        follow_redirects=False,
-    )
-    assert settings.get("pii_ner_spacy_model") == "en_core_web_sm"
+    good = {"feature": "pii_ner", "pii_ner_spacy_model": "en_core_web_sm", "operator_key": "opk"}
+    if importlib.util.find_spec("spacy") is None:
+        # Without spaCy (the default install) the boot-brick preflight is red; the form's
+        # 'force' box is how an operator saves anyway. The step-up check above is unchanged.
+        good["force"] = "1"
+    r = c.post("/settings/enterprise/enable", data=good, follow_redirects=False)
+    assert settings.get("pii_ner_spacy_model") == "en_core_web_sm", r.headers.get("location")
     assert settings.get("pii_ner_enabled") == "1", "a config save must not toggle the feature"
     assert "saved=" in r.headers["location"]
     _reset(["pii_ner_enabled", "pii_ner_spacy_model", "saml_enabled"])

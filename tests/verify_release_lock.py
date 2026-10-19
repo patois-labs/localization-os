@@ -721,7 +721,10 @@ def test_shadow_pip_audit_refused():
             30,
             shadow,
         )
-        assert result.returncode == 0 and str(shadow) not in result.stdout, result
+        # The real tool imports from its install, or (in the shipped image, which carries no
+        # pip_audit) the import fails: either way the shadow copy in cwd is never imported.
+        absent = result.returncode != 0 and "No module named 'pip_audit'" in result.stderr
+        assert (result.returncode == 0 or absent) and str(shadow) not in result.stdout, result
         assert not marker.exists(), "the shadow pip_audit package ran"
         # And the verdict logic alone refuses the shadow's report (count and names).
         report = json.dumps({"dependencies": [{"name": "x", "version": "1", "vulns": []}]})

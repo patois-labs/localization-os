@@ -165,12 +165,13 @@ def test_vendored_driver():
     readme = os.path.join(_VENDOR, "README.md")
     for f in (js, css, lic, readme):
         assert os.path.exists(f), ("vendored driver asset missing", f)
+    # Pinned on the committed (LF) bytes; a Windows checkout may carry CRLF, so normalize.
     for path, size, digest in (
-        (js, 25973, "3d09be0124f5500fd8e442ec1d7398aced537ed2e6fa3a30b0858ad4cea17c70"),
-        (css, 3324, "46d110dd1c9c8c25170f2867ce8e78c868833ca35f23a6008c158a4a5b570368"),
+        (js, 25967, "d9290c3123636994328724c8b2cab56c3733c3736c4e1dcfdfa79e746346c9c5"),
+        (css, 3320, "0feb5e902455ab26e0fad087150531d2e1ebf779977f7a39a43f7a3f37c1e6c4"),
     ):
         with open(path, "rb") as stream:
-            data = stream.read()
+            data = stream.read().replace(b"\r\n", b"\n")
         assert len(data) == size and hashlib.sha256(data).hexdigest() == digest
     lic_txt = open(lic, encoding="utf-8").read()  # noqa: SIM115
     assert "MIT License" in lic_txt and "Kamran Ahmed" in lic_txt, (

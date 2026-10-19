@@ -912,6 +912,29 @@ def test_n_editor_save_document_segment_is_byte_identical():
     print("  [N3] editor save on a document segment: no char_limit flag (byte-identical)")
 
 
+def _needs_history(sha):
+    """Run a fail-before proof only where its pinned pre-fix commit exists. The public
+    repository starts at the 1.0.0 commit, so the older history these proofs read with
+    `git show` is absent there; the proof still runs in a clone that has the history."""
+
+    def wrap(fn):
+        def inner(*args, **kwargs):
+            probe = subprocess.run(
+                ["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=_ROOT, capture_output=True
+            )
+            if probe.returncode != 0:
+                print(f"  [skip] {fn.__name__}: pre-fix commit {sha} is not in this clone")
+                return None
+            return fn(*args, **kwargs)
+
+        inner.__name__ = fn.__name__
+        inner.__doc__ = fn.__doc__
+        return inner
+
+    return wrap
+
+
+@_needs_history("6e6b727")
 def test_n_prefix_editor_save_reproduces_both_consequences():
     """FAIL-BEFORE via `git show 6e6b727:app/web/documents.py` (NEVER git stash -- shared
     stack). 6e6b727 is the last pre-F1 commit (permanently in main's history after the K8
@@ -973,6 +996,7 @@ def _load_prefix_module(rel_path, mod_name, commit=PREFIX_COMMIT):
     return mod
 
 
+@_needs_history(PREFIX_COMMIT)
 def test_z_prefix_quality_has_no_predicate_and_does_not_flag():
     pre = _load_prefix_module("app/services/quality.py", "_prefix_quality")
     assert not hasattr(pre, "char_limit_violation"), (
@@ -993,6 +1017,7 @@ def test_z_prefix_quality_has_no_predicate_and_does_not_flag():
     print("  [Z1] pre-fix quality.py: no predicate, seam does NOT flag an over-limit value")
 
 
+@_needs_history(PREFIX_COMMIT)
 def test_z_prefix_create_key_accepts_a_zero_limit():
     pre = _load_prefix_module("app/services/keys.py", "_prefix_keys")
     assert not hasattr(pre, "_coerce_char_limit"), (
