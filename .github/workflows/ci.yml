@@ -108,10 +108,12 @@ jobs:
       - name: Scan the working tree
         # The pinned scanner image runs against the checked-out tree with the repository
         # config, which allowlists only the test fixture files that carry fake credentials.
-        # --redact=100 keeps any finding's value out of the job log.
+        # --redact=100 keeps any finding's value out of the job log. It scans `.` from /repo
+        # so finding paths are repo-relative: the config's path allowlists are anchored
+        # (^tests/...) and match nothing when the scan reports /repo/tests/....
         run: |
-          docker run --rm -v "$PWD:/repo:ro" ghcr.io/gitleaks/gitleaks:v8.30.1 \
-            dir /repo --config /repo/.gitleaks.toml --redact=100 --no-banner
+          docker run --rm -v "$PWD:/repo:ro" -w /repo ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            dir . --config .gitleaks.toml --redact=100 --no-banner
 
   test-fast:
     if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')

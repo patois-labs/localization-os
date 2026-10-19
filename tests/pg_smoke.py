@@ -406,8 +406,21 @@ def _concept_store_fk_slice(engine) -> int:
                 print("FAIL(pg concept): expected 2 surviving pairs after the H1 delete")
                 return 1
             print("  pg: concept H1 shared-source delete (source + other pairs survive) OK")
+
             # idempotent backfill: this glossary already has a concept -> guard skips it.
-            if gc.backfill_glossary(s) != 0:
+            # Judged on THIS glossary only: backfill_glossary scans every glossary, and an
+            # earlier slice's glossary can persist (delete_project_tm commits its session),
+            # so a backfill of THAT glossary is correct and must not fail this check.
+            def _concepts(gid):
+                return len(
+                    s.exec(
+                        select(GlossaryConcept.id).where(GlossaryConcept.glossary_id == gid)
+                    ).all()
+                )
+
+            before = _concepts(gl.id)
+            gc.backfill_glossary(s)
+            if _concepts(gl.id) != before:
                 print("FAIL(pg concept): backfill_glossary was not idempotent (guard failed)")
                 return 1
             # cross-glossary deprecated_replacement clear (M11): a second glossary's term
