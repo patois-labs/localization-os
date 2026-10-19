@@ -761,6 +761,10 @@ def test_npm_supply_chain():
     commands = "\n".join(s.get("run", "") for s in job["steps"])
     assert "npm audit --package-lock-only --ignore-scripts" in commands
     assert "test -f package-lock.json" in commands
+    # Only the Jira Forge app may relax the audit level, and never below high.
+    relaxed = re.findall(r"matrix\.directory == '([^']+)' && '--audit-level=(\w+)'", commands)
+    assert relaxed == [("integrations/jira-forge-app", "high")], relaxed
+    assert commands.count("--audit-level") == 1, commands
     assert "continue-on-error" not in str(job)
     for directory in (ROOT / "integrations").glob("*/package.json"):
         relative = directory.parent.relative_to(ROOT).as_posix()

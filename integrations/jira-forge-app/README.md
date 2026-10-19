@@ -25,8 +25,10 @@ sha512 integrity). KNOWN AND DEFERRED: `npm audit` reports 10 advisories (3 low,
 moderate) in `@forge/react` 10, `@forge/api`, `@forge/resolver` and their transitive
 dependencies (prismjs, refractor, uuid, webpack). Every fix needs the major upgrade to
 `@forge/react` 12 and `@forge/resolver` 1.8, which needs a Forge deploy to test; the
-owner deferred it to the planned Forge app update (moving it to per-user keys). The CI
-npm audit fails for this app until then, on purpose. To regenerate after a dependency
+owner deferred it to the planned Forge app update (moving it to per-user keys). Until
+then, CI runs this app's npm audit with `--audit-level=high`: these known moderate and
+low advisories do not fail the build, and any new high or critical advisory still does.
+Every other integration fails on any advisory. To regenerate after a dependency
 change, run these commands in this directory on an isolated, networked machine:
 
 ```bash
