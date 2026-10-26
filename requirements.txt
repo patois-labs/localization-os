@@ -10,7 +10,7 @@
 # ; sys_platform marker re-adds; a bare pip freeze loses cross-platform pins.
 #
 # Web stack
-fastapi==0.142.2
+fastapi==0.161.1
 # Keep standard extras in refreshes, including httptools and watchfiles.
 # uvloop has a Linux-only marked lock line; see docs/DEPLOY.md.
 uvicorn[standard]==0.54.0
@@ -30,7 +30,7 @@ sqlmodel==0.0.44
 # Schema migrations. SQLite stays the zero-config default/test engine. alembic pulls
 # only Mako (1.19.1 dropped its tzdata dep) and does not move the fastapi/starlette
 # pins above (SQLAlchemy 2.0.52 already satisfies it).
-alembic==1.20.0
+alembic==1.20.1
 # OPTIONAL Postgres backend (Phase 4-A): the psycopg3 driver for
 # `postgresql+psycopg://` is an OPT-IN EXTRA - it is LGPL, so it is deliberately NOT
 # in the default (zero-copyleft) install. Set DATABASE_URL to opt into Postgres, then
@@ -88,7 +88,7 @@ regex==2026.9.29
 
 # MT/LLM providers (Chunk 4)
 anthropic==1.11.0
-google-genai==2.28.0     # coordinated with Pillow 12; core dependencies already locked
+google-genai==2.33.0     # coordinated with Pillow 12; core dependencies already locked
 # openai stays on 2.x: 3.x requires httpx2 (http_client typed httpx2.Client);
 # the httpx2 migration train comes first (BACKLOG 2026-09-13).
 openai==2.54.0
@@ -108,7 +108,7 @@ idna==3.20
 # pre-connect pinning and connected-peer check (#327). Re-run verify_egress_policy
 # before or when bumping it.
 httpcore==1.0.9
-tenacity==9.1.4
+tenacity==9.2.1
 
 # Security / compliance
 argon2-cffi==25.1.0      # Argon2id password hashing
