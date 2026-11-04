@@ -281,7 +281,17 @@ def _create_member(
     return run.id
 
 
-def _run_member(engine, run_id: int, workflow_id: int, doc_id: int, locale: str, slot=None) -> None:
+def _run_member(
+    engine,
+    run_id: int,
+    workflow_id: int,
+    doc_id: int,
+    locale: str,
+    slot=None,
+    *,
+    handoff: bool = False,
+    on_segment=None,
+) -> None:
     """Drain one member run to a terminal/paused state SYNCHRONOUSLY on the caller's
     thread, with its own Session (the repo ORM rule). Mirrors _run_in_background._work:
     the DB rows it writes are the source of truth; a crash marks the run FAILED so it
@@ -289,38 +299,47 @@ def _run_member(engine, run_id: int, workflow_id: int, doc_id: int, locale: str,
 
     The scheduler supplies one counted slot for this execution. Its thread wrapper
     releases the token on exit. Direct callers take and release their own token.
+
+    S2 (ADR 0092): the member executes as a `run_segments.RunSegment`. With `handoff` (only
+    the process admission scheduler passes it) the member may hand its slot back between
+    step visits; this call then returns early and the scheduler continues the run on a new
+    `loc-batch-member-<id>` thread. `on_segment(seg)` receives the segment before it runs
+    (the batch joins track it).
     """
     from app.services import orchestrator as _orch
+    from app.services import run_segments
     from app.services.orchestrator import RUN_SLOTS, run_workflow_stream
 
     token = slot if slot is not None else RUN_SLOTS.take()[0]
-    try:
-        with Session(engine) as s:
-            # is_resume=False (R1): a batch member run_id is a FRESH leg pre-created by
-            # _create_member, NOT a resume. Without this, `run_id is not None` would
-            # misclassify it as a resume and -- with SQLite rowid reuse on the same
-            # (doc, locale) -- the leg could adopt a deleted run's envelope.
-            for _ev in run_workflow_stream(
-                s,
-                workflow_id,
-                doc_id,
-                locale,
-                run_id=run_id,
-                is_resume=False,
-                capacity_slot=token,
-            ):
-                pass
-    except Exception as exc:
+
+    def _stream(s, capacity_slot):
+        # is_resume=False (R1): a batch member run_id is a FRESH leg pre-created by
+        # _create_member, NOT a resume. Without this, `run_id is not None` would
+        # misclassify it as a resume and -- with SQLite rowid reuse on the same
+        # (doc, locale) -- the leg could adopt a deleted run's envelope.
+        return run_workflow_stream(
+            s,
+            workflow_id,
+            doc_id,
+            locale,
+            run_id=run_id,
+            is_resume=False,
+            capacity_slot=capacity_slot,
+        )
+
+    def _on_crash(exc):
         log.exception("Batch member run (wf=%s doc=%s loc=%s) crashed", workflow_id, doc_id, locale)
         try:
             # _bookkeeping_session, not a second pooled Session: when the crash IS pool
             # exhaustion (#100), a pooled session here times out too and the member is left
             # RUNNING forever with the batch never finalizing — the same silence the plain
             # run path hit. The pool-less fallback makes the honest FAILED marking land.
+            from app.services import run_resume
             from app.services.orchestrator import _bookkeeping_session
 
             with _bookkeeping_session() as s:
-                run = s.get(WorkflowRun, run_id)
+                # S1 (ADR 0090): never fail a member a restart resume took over.
+                run = None if run_resume.taken_over(run_id) else s.get(WorkflowRun, run_id)
                 # CANCELLED joins COMPLETED/PAUSED here for the same reason it does in
                 # orchestrator._run_in_background: an operator cancel that raced a crashing
                 # member must stay cancelled, never be resurrected to FAILED.
@@ -356,12 +375,26 @@ def _run_member(engine, run_id: int, workflow_id: int, doc_id: int, locale: str,
                     s.commit()
         except Exception:
             log.exception("Failed to mark batch member run failed after crash")
-    finally:
-        if slot is None:
-            token.release()
+
+    def _on_end():
         # #101 hygiene (gate F round 1, L1): this executor has no ticker step-boundary of its
         # own on a hard crash, and the member runs on a long-lived dispatcher thread.
         _orch._progress_forget(run_id)
+
+    seg = run_segments.RunSegment(
+        run_id=run_id,
+        thread_name=f"loc-batch-member-{int(run_id)}",
+        make_stream=_stream,
+        on_crash=_on_crash,
+        on_end=_on_end,
+        slot=token,
+        handoff=handoff,
+        engine=engine,
+        owns_slot=slot is None,
+    )
+    if on_segment is not None:
+        on_segment(seg)
+    seg.drive()
 
 
 # --- the dispatcher core (shared by web daemon + CLI inline) ----------------------
@@ -546,17 +579,72 @@ _MEMBER_THREADS_LOCK = threading.Lock()
 #: past QUEUE_DRAIN_WAIT_S is cumulative (up to 3 x _SYNC_OWNER_WAIT_S). No pooled connection is
 #: held across the wait. See docs/architecture/configuration.md "Queue admission and emergency
 #: relief" and gate round 11 LOW-1/LOW-2.
-def run_queued_member(run_id, workflow_id, doc_id, locale, token):
+class _MemberHandle:
+    """What `_MEMBER_THREADS` holds for one admitted member: its first thread and, once it
+    runs, its `RunSegment`. A member that hands off between step visits (S2) continues on
+    a new thread, so joining means joining the run's execution, not one thread."""
+
+    __slots__ = ("seg", "thread")
+
+    def __init__(self, thread):
+        self.thread = thread
+        self.seg = None
+
+    @property
+    def name(self):
+        return self.thread.name
+
+    def is_alive(self):
+        if self.seg is not None and self.seg.thread is not None:
+            return not self.seg.done.is_set()
+        return self.thread.is_alive()
+
+    def join(self, timeout=None):
+        if self.seg is not None:
+            self.seg.join(timeout)
+        else:
+            self.thread.join(timeout)
+            if self.seg is not None and not self.seg.done.is_set():
+                self.seg.join(timeout)
+
+
+def track_member(run_id, seg):
+    """A parked member continues on a new thread: keep its handle current for the joins."""
+    with _MEMBER_THREADS_LOCK:
+        handle = _MEMBER_THREADS.get(run_id)
+        if handle is None:
+            handle = _MemberHandle(seg.thread)
+            _MEMBER_THREADS[run_id] = handle
+        handle.seg = seg
+
+
+def run_queued_member(run_id, workflow_id, doc_id, locale, token, *, handoff=False):
     """Start one admitted execution; the shared scheduler owns all waiting."""
     from app.db import engine
 
+    handle = None
+
+    def _attach(seg):
+        if handle is not None:
+            handle.seg = seg
+
     def work():
         try:
-            _run_member(engine, run_id, workflow_id, doc_id, locale, slot=token)
+            _run_member(
+                engine,
+                run_id,
+                workflow_id,
+                doc_id,
+                locale,
+                slot=token,
+                handoff=handoff,
+                on_segment=_attach,
+            )
         finally:
             token.release()
 
     thread = threading.Thread(target=work, name=f"loc-batch-member-{run_id}", daemon=True)
+    handle = _MemberHandle(thread)
     try:
         token.handed_off = True
         with _MEMBER_THREADS_LOCK:
@@ -564,7 +652,7 @@ def run_queued_member(run_id, workflow_id, doc_id, locale, token):
             for rid, previous in list(_MEMBER_THREADS.items()):
                 if not previous.is_alive():
                     _MEMBER_THREADS.pop(rid, None)
-            _MEMBER_THREADS[run_id] = thread
+            _MEMBER_THREADS[run_id] = handle
             thread.start()
     except BaseException:
         with _MEMBER_THREADS_LOCK:
@@ -688,6 +776,18 @@ def queue_member_allowed(session, run):
 
         from app.services import orchestrator as orch
 
+        # On Postgres the batch row first, the run rows after: the same lock order as the
+        # admission's gang claim (`_admit_gang`), so two workers cannot deadlock (gate R2 L3).
+        # Not on SQLite: one write lock serializes every writer there (no lock order to
+        # get wrong), and taking it here, before the reads, would block a cancel that lands
+        # during the stop until it gave up (verify_stress_liveness_pool round 4).
+        if session.get_bind().dialect.name == "postgresql":
+            session.exec(
+                update(WorkflowBatch)
+                .where(WorkflowBatch.id == batch.id)
+                .values(max_parallel=WorkflowBatch.max_parallel)
+                .execution_options(synchronize_session=False)
+            )
         note = _notes([], {}, [], stop)
         policy_note = (
             orch.SPEND_CAP_STOP_NOTE if stop["reason"] == "spend" else orch.FAIL_FAST_STOP_NOTE
@@ -699,6 +799,13 @@ def queue_member_allowed(session, run):
             )
         ).all():
             if stop["reason"] == "fail_fast" and (row.queue_group or "").startswith("batch-retry:"):
+                continue
+            if isinstance(row.context, dict) and (
+                orch.QUEUED_RESUME_KEY in row.context or "_resume_kind" in row.context
+            ):
+                # S3 (ADR 0095): a reviewer's resume queued by the web role, or a run S1 re-queued
+                # after a restart, is a run already in flight, which a stop never kills (it
+                # only stops launching).
                 continue
             result = session.exec(
                 update(WorkflowRun)
@@ -808,6 +915,8 @@ def recover_interrupted_batches(*, at_boot: bool = False, recover_orphaned: bool
     # Lazy, like every other orchestrator use here (import cycle): _stamp_note +
     # RESTART_NOTE are the shared "why did this run end" helpers (#106).
     from app.services import orchestrator as _orch
+    from app.services import orchestrator_part4 as _orch_part4
+    from app.services import run_resume
 
     touched = 0
     with _batch_session() as s:
@@ -824,8 +933,22 @@ def recover_interrupted_batches(*, at_boot: bool = False, recover_orphaned: bool
             members = list(members)
             members.sort(key=lambda m: m.id or 0)  # id-ascending for latest-per-locale
             failed_members = 0
+            live_members = 0
             for m in members:
                 if m.status in (RunStatus.RUNNING, RunStatus.PENDING):
+                    # S1 restart resume (ADR 0090): a member with a checkpoint for its step
+                    # goes back to QUEUED and resumes; a member whose owner is still alive
+                    # elsewhere is left running. Only the rest are failed as before.
+                    verdict, detail = run_resume.plan(s, m, alive_fn=_orch_part4._run_thread_alive)
+                    if verdict == "legacy":
+                        verdict = "fail"  # no owner record: pre-S1 code, no checkpoints
+                    if verdict == "skip":
+                        live_members += 1
+                        continue
+                    if verdict == "resume":
+                        run_resume.requeue(m, detail)
+                        s.add(m)
+                        continue
                     failed_members += 1
                     m.status = RunStatus.FAILED
                     m.finished_at = datetime.utcnow()
@@ -839,6 +962,8 @@ def recover_interrupted_batches(*, at_boot: bool = False, recover_orphaned: bool
                     # every surface without pretending that manual recovery restarted a server.
                     _orch._stamp_note(m, recovery_note)
                     s.add(m)
+            if live_members:
+                continue  # its live owner finishes it; never finalize a batch under it
             if any(m.status == RunStatus.QUEUED for m in members):
                 if at_boot:
                     # Durable members will resume in this process. Retaining the dead

@@ -203,11 +203,12 @@ __all__ = [
 
 # --- apply TM to a document --------------------------------------------------
 def apply_tm_to_document(session: Session, doc: Document, project: Project, locale: str) -> int:
-    """Fill in target text for every segment with a 100% TM match.
+    """Fill in target text for every segment with an exact (100%) or in-context (101%) TM match.
 
-    One batched fuzzy lookup for every segment's source instead of a per-segment
-    tm.lookup() query pair; apply-tm only ever wants exact (100%) hits, so the
-    plain (non-semantic) batch is enough here. QA still runs on the TM-applied
+    One batched EXACT lookup for every segment instead of a per-segment tm.lookup() query
+    (ADR 0102: fuzzy matching is gone, so there is no lower band to ignore); a key (software)
+    segment is matched in context by its string key, a document segment by its neighbours.
+    QA still runs on the TM-applied
     target (the 100% short-circuit must not bypass placeholder/tag integrity);
     a mismatch is logged so it isn't silently applied. Returns the count of
     segments filled.
@@ -237,16 +238,30 @@ def apply_tm_to_document(session: Session, doc: Document, project: Project, loca
 
     segment_review.refuse_if_awaiting_review(session, doc.id, locale)
     segments = session.exec(
-        select(Segment).where(Segment.document_id == doc.id, Segment.target_locale == locale)
+        select(Segment)
+        .where(Segment.document_id == doc.id, Segment.target_locale == locale)
+        .order_by(Segment.order_index)
     ).all()
     applied = 0
     applied_tm_ids: list[int] = []  # SegmentTM entries whose target we APPLIED
-    matches = tm.lookup_batch(
-        session, doc.project_id, [s.source_text for s in segments], project.source_locale, locale
+    from app.services import tm_context
+
+    # Positional (the same source can occur twice with different neighbours).
+    hits = tm.lookup_segments(
+        session,
+        doc.project_id,
+        list(
+            zip(
+                (s.source_text for s in segments),
+                tm_context.segment_context_keys(session, segments),
+                strict=True,
+            )
+        ),
+        project.source_locale,
+        locale,
     )
-    for s in segments:
-        match = matches.get(s.source_text)
-        if match and match["match_pct"] == 100 and not s.target_text:
+    for s, match in zip(segments, hits, strict=True):
+        if match and match["match_pct"] >= 100 and not s.target_text:
             # SEAM FIX (Phase 0). Route the manual apply-tm 100% fill through the SOLE
             # sanctioned write seam (quality.commit_mt_output), like the pretranslate
             # and workflow paths, so a poisoned TM entry cannot land here as clean
@@ -258,7 +273,7 @@ def apply_tm_to_document(session: Session, doc: Document, project: Project, loca
             if outcome.flagged:
                 # Refusal-shaped hit: withheld + routed to NEEDS_REVIEW, not an apply.
                 continue
-            s.tm_match_pct = 100
+            s.tm_match_pct = match["match_pct"]
             session.add(s)
             applied += 1
             if match.get("id") is not None:

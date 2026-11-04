@@ -146,7 +146,7 @@
       "step_workflow_desc": "Automatiza traducción, revisión y control de calidad como un grafo reutilizable.",
       "step_workflow_cta": "Crear un flujo",
       "step_provider_title": "Conecta un proveedor",
-      "step_provider_desc": "Añade una clave de API para pasar a producción. Hasta entonces la traducción está bloqueada; elige Mock en Configurar IA para una demo sin conexión.",
+      "step_provider_desc": "Añade una clave de API para traducir con un motor real. Hasta entonces traduce el motor sin conexión Mock, así que puedes probar cada paso.",
       "step_provider_cta": "Configurar IA",
       "showme": "Muéstrame",
       "spot_cta_hint": "Esto abre la pantalla donde lo harás. ¿Empezamos?",
@@ -249,7 +249,7 @@
     },
     "jobs": {
       "title": "Historial de ejecuciones",
-      "intro": "Un registro cronológico de cada tarea en segundo plano y ejecución de flujo de trabajo, como un registro de auditoría pero de ejecuciones. Las más recientes primero. Las tareas interrumpidas se marcan como fallidas al reiniciar.",
+      "intro": "Un registro cronológico de cada tarea en segundo plano y ejecución de flujo de trabajo, como un registro de auditoría pero de ejecuciones. Las más recientes primero. Las tareas y ejecuciones que interrumpe un reinicio se retoman y continúan.",
       "col_type": "Tipo",
       "col_id": "#",
       "col_kind": "Tipo / flujo",

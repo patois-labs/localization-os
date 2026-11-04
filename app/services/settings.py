@@ -635,22 +635,13 @@ DEFAULTS = {
     # info block.
     "utcp_manual_enabled": "1",
     # --- TM matching / locks (PROPOSAL-tm-matching-workflow-step §6) ---
-    # The three per-TM policy controls the `tm_match` step reads at run time
+    # The per-TM policy controls the `tm_match` step reads at run time
     # (tm_lock.resolve_policy). v1 = GLOBAL (this codebase has no TM container object;
     # per-project override is the documented next step). Defaults per §2 D2/D3/D11.
-    "tm_lock_ice": "1",  # ICE (101) matches hard-lock by default (inert until
-    # the ICE/context wave lands -- no context column yet)
+    "tm_lock_ice": "1",  # in-context (101) matches hard-lock by default (ADR 0102)
     "tm_hundreds_enter_lqa": "1",  # 100s SOFT-lock (enter LQA); "0" -> HARD lock
-    "tm_context_floor": "95",  # context-attach floor (deferred context wave)
-    # Batch 15 T1 (SPEC-tm-match-step-config §11): the DEFAULTS for a NEW tm_match step
-    # (seeded into the five scalar per-step columns at creation) AND the inherited value
-    # for an existing (NULL-override) step. tm_fill_threshold "100" = fill exactly the
-    # 100 band (byte-identical to pre-Batch-15). tm_fuzzy_lock_mode "soft" = a below-100
-    # fuzzy fill enters LQA (the SAFE default per LAW-TM-6; inert while the threshold is
-    # 100). NO count pin covers settings DEFAULTS keys (§2.7), so these add freely; the
-    # three existing tm_* keys above are NEVER removed or repurposed (doc/registry pins).
-    "tm_fill_threshold": "100",  # min match % to FILL for a new/inheriting tm_match step
-    "tm_fuzzy_lock_mode": "soft",  # how a below-100 fuzzy fill locks: none|soft|policy
+    # ADR 0102: TM fill is exact-only. The former tm_context_floor, tm_fill_threshold and
+    # tm_fuzzy_lock_mode keys are removed; stored rows for them are inert.
     # Batch 15 T2 (SPEC-tm-match-step-config §9/§11, D15-6): the TM-only delivery empty
     # gate. ON by default -- a deliverable produced by a tm_match workflow (the durable
     # WorkflowRun.used_tm_match marker) that still carries EMPTY targets is HELD from
@@ -996,13 +987,12 @@ DEFAULTS = {
     # Selects HOW background jobs are dispatched to the worker threads, wired at boot
     # behind the JobQueue port (app/ports/jobqueue.py) exactly like the S3 adapter
     # (flag-check-first, fail-loud, strict no-op when default).
-    #   "memory" (DEFAULT) = the in-memory queue.Queue the app has always used: jobs are
+    #   "memory" (opt-out) = the in-memory queue the app used before S2: jobs are
     #     enqueued to a per-process queue and lost on restart (recover_interrupted then
-    #     re-enqueues QUEUED rows + fails the RUNNING ones, visible not silent). This is
-    #     byte-identical to pre-Train-S behavior -- the InMemoryJobQueue adapter wraps the
-    #     same queue.Queue, so a default install dispatches jobs exactly as before.
-    #   "db" = a DURABLE, DB-backed queue (the `jobqueue` table). Jobs survive a process
-    #     restart, are CLAIMED via an atomic compare-and-swap UPDATE...WHERE state='pending'
+    #     re-enqueues QUEUED rows + fails the RUNNING ones, visible not silent).
+    #   "db" (DEFAULT since S2) = a DURABLE, DB-backed queue (the `jobqueue` table). Jobs
+    #     survive a process restart, are CLAIMED via an atomic compare-and-swap
+    #     UPDATE...WHERE state='pending'
     #     (so two workers -- even across nodes, the HA seam -- can never double-claim one
     #     job), and a RUNNING job whose worker died (its lease expired) returns to pending
     #     on recovery rather than being failed. On + the `jobqueue` table missing = a
@@ -1011,8 +1001,8 @@ DEFAULTS = {
     # HOST-ONLY (REMOTE_IMMUTABLE below): this is an install-TOPOLOGY switch -- it decides
     # how this install dispatches work (single-process ephemeral vs durable/HA) -- so like
     # blobstore_s3_enabled / metrics_enabled a leaked admin key must never flip it over
-    # /api. Set it on the host with `config set job_queue_backend db` or the Settings page.
-    "job_queue_backend": "memory",
+    # /api. Set it on the host with `config set job_queue_backend memory|db` or the Settings page.
+    "job_queue_backend": "db",
     # --- MCP OAuth authorization server (#753, docs/architecture/mcp-oauth.md) ----------
     # OFF by default. When on, this install is the OAuth 2.1 authorization server for its own
     # remote MCP server (integrations/mcp-server, the resource server): RFC 8414 metadata,

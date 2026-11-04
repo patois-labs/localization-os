@@ -109,6 +109,8 @@ def _execute_step(
     post_dispatch_persist_fn=None,
     external_glossary=None,
     lqa_scope=None,
+    visit_writer=None,
+    visit_resumable=None,
 ):
     """The shared per-step dispatch seam — the ONE place both run loops (FULL_TEXT and
     SEGMENTED) route the orchestration-only step types through, so a new such step type
@@ -651,7 +653,21 @@ def _execute_step(
                 _record_gate_hold(session, run, step=step, step_index=cursor, cause=_hold_cause)
         run.current_step_index = next_cur
         session.add(run)
-        session.commit()
+        if visit_writer is None:
+            session.commit()
+        else:
+            # S1 (ADR 0090): key + checkpoint this visit in its own commit; stop if taken over.
+            from app.services import run_resume
+
+            visit_writer.stamp(
+                run_resume.pending_step_run(session),
+                cursor,
+                next_cur,
+                resumable=visit_resumable() if visit_resumable is not None else True,
+            )
+            if not visit_writer.commit(session, session.commit):
+                yield run_resume.superseded_event(run.id)
+                return _StepDirective(stop=True)
         _lqa_shape = (card or {}).get("judge_shape") or {}
         yield {
             "type": "step",

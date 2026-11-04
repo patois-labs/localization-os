@@ -1879,7 +1879,7 @@ class Seeder:
         wid = self.api.jpost("/api/workflows", {"name": "Seed MT + TM", "scope": "global"})["id"]
         self.api.jpost(
             f"/api/workflows/{wid}/steps",
-            {"step_type": "tm_match", "name": "TM leverage", "fill_threshold": 95},
+            {"step_type": "tm_match", "name": "TM leverage"},
         )
         self.api.jpost(
             f"/api/workflows/{wid}/steps",

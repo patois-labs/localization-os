@@ -7,7 +7,7 @@ import hashlib
 import hmac
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -57,7 +57,7 @@ def reserve() -> None:
     per_minute = int(settings.get("assist_calls_per_minute", str(PER_MINUTE)))
     per_day = int(settings.get("assist_calls_per_day", str(PER_DAY)))
     now = time.time()
-    day = datetime.fromtimestamp(now, timezone.utc).date().isoformat()
+    day = datetime.fromtimestamp(now, UTC).date().isoformat()
     with _lock, Session(engine) as session:
         insert = pg_insert if engine.dialect.name == "postgresql" else sqlite_insert
         session.exec(

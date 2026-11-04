@@ -180,16 +180,14 @@ def _branch_label(branch) -> str:
 def _opts_label(s) -> str:
     """Compact ASCII summary of the engine-layer flags (F2/TM-examples) that deviate
     from the byte-identical default, for the `workflow show` human table. '-' when
-    every flag is at its default (adaptive off, doc-context off, tm-examples on at
-    the default window) — the common case for most steps."""
+    every flag is at its default (adaptive off, doc-context off, tm-examples off) — the
+    common case for most steps."""
     parts = []
     if s.get("adaptive_feedback"):
         parts.append(f"adaptive:{s.get('adaptive_feedback_window')}")
     if s.get("doc_context_prepass"):
         parts.append("doc-ctx")
-    if not s.get("tm_examples", True):
-        parts.append("no-tm-ex")
-    elif s.get("tm_examples_window") != 3:
+    if s.get("tm_examples"):
         parts.append(f"tm-ex:{s.get('tm_examples_window')}")
     # LQA safety floor D1: the TM provenance guard's per-step override. None (the
     # correction-loop-shaped default) prints nothing — only a deliberate always/never

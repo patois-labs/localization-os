@@ -229,7 +229,9 @@ def drill(bind, count, token):
                     assert len(payload["keys"]) == 100 and payload["has_more"]
                     assert [k["id"] for k in payload["keys"]] == [k.id for k in page["keys"]]
                     assert stats["key_rows"] == 101 and stats["value_rows"] == 400, stats
-                    assert stats["queries"] == 9, stats
+                    # 6 since S3c (ADR 0097): the API key and its owner are one joined read, not the
+                    # key and the user read twice (9 before). The page contract is unchanged.
+                    assert stats["queries"] == 6, stats
                     records.append(
                         dict(
                             dialect=bind.dialect.name,

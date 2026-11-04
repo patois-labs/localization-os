@@ -19,7 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 try:
@@ -392,7 +392,7 @@ def snapshots():
             "VolumeId": vid,
             "State": state,
             "Description": "",
-            "StartTime": (datetime.now(timezone.utc) - timedelta(hours=age)).isoformat(),
+            "StartTime": (datetime.now(UTC) - timedelta(hours=age)).isoformat(),
             "Tags": tags,
         }
 

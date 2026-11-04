@@ -5,12 +5,13 @@ summary: Every approved translation is remembered, so the same sentence never ha
 nouns:
   TM entry: "One stored source/target pair for one language pair, inside one project. Written automatically when a segment is approved, or imported from a TMX file."
   Exact match: "The stored source is byte-identical to the segment being translated. These can be applied straight into a document without a model call."
-  Fuzzy match: "The stored source is close but not identical, scored as a percentage. Shown to a translator as a suggestion; also usable as an example in a Translate step's prompt."
+  In-context match (101%): "An exact match whose surroundings are identical too: for a document, the previous and next segments match; for a software string, the key matches. It is locked like a 100% match (hard by default). Only exact matches are filled: there is no fuzzy (75-99%) matching, so a near-identical sentence goes to the engine."
   TMX: "The industry interchange format for translation memory. This is how memory gets in and out of the tool."
-  TM examples: "Similar past translations shown to the model inside a Translate step's prompt, so it matches your house style - three by default, up to five (per-step tm_examples_window, clamped 0-5), packed into a ~1200-character budgeted block. On by default for new steps."
+  TM examples: "Similar past translations shown to the model inside a Translate step's prompt, so it matches your house style - three by default, up to five (per-step tm_examples_window, clamped 0-5), packed into a ~1200-character budgeted block. On by default for new steps. Since fuzzy matching was removed (ADR 0102) the core has no example retriever, so the block stays empty unless an add-on supplies examples."
   TM match step: "A tm_match workflow step: before any engine runs it pre-fills segments that have a qualifying memory hit and locks them - soft-locked by default (still enters LQA), or hard-locked when the '100s enter LQA' policy is off. Add it in the workflow builder or with `workflow add-step ... --type tm_match`."
-  Configuring the match step: "Each tm_match step is tunable per step (Batch 15): a FILL THRESHOLD (fill matches at or above this score, 50-100; 100 = exact matches only), a FUZZY LOCK MODE for below-100 fills (none = a suggestion with no lock, soft = enters LQA, policy = the same lock the 100 band would give), tri-state overrides for lock_ice / hundreds_enter_lqa / context_floor, and a TM POOL SELECTION (which readable project TMs this step reads; blank = all readable). Each override left at INHERIT follows the matching global setting; a NEW step is seeded with a snapshot of the current globals. A fuzzy fill only lands when the segment source and the memory source carry IDENTICAL numbers/URLs/variables (a wrong number can never be filled), and it stamps its real match %. Set them in the builder's 'TM match policy' panel, the `workflow add-step` / `workflow edit-step` flags `--fill-threshold`, `--fuzzy-lock-mode`, `--lock-ice`, `--hundreds-enter-lqa`, `--context-floor`, `--tm-pools`, over /api, or through MCP create_workflow/edit_workflow. These fields are tm_match-only (refused on any other step type)."
+  Configuring the match step: "Each tm_match step is tunable per step (Batch 15): tri-state overrides for lock_ice / hundreds_enter_lqa, and a TM POOL SELECTION (which readable project TMs this step reads; blank = all readable). Each override left at INHERIT follows the matching global setting; a NEW step is seeded with a snapshot of the current globals. The step fills exact matches only (100%, or 101% in context): there is no fill threshold, fuzzy lock mode or context floor, and a call that still sends tm_fill_threshold (other than 100), tm_fuzzy_lock_mode or tm_context_floor, or passes --fill-threshold / --fuzzy-lock-mode / --context-floor, is refused with a message naming ADR 0102. Set them in the builder's 'TM match policy' panel, the `workflow add-step` / `workflow edit-step` flags `--lock-ice`, `--hundreds-enter-lqa`, `--tm-pools`, over /api, or through MCP create_workflow/edit_workflow. These fields are tm_match-only (refused on any other step type)."
   Concordance: "Free-text search across stored translations - 'how have we translated this phrase before?'"
+  Leverage report: "Source words per target language in four bands - 101 % in-context, repetitions (the same source seen earlier, so only its first occurrence is priced), 100 % exact, new - for a whole project or for the documents and languages one translate job covered. A segment already filled keeps the band it was filled with; an unfilled one is looked up in the memory now, so before translation it is a quote and after it the leverage actually used."
   TM source: "Another project whose memory this project also MATCHES against. It is a reference, not a copy: no entry is duplicated, and the source's entries stay the source's."
 verbs:
   Open from the navigation palette: "Web: Ctrl+K or Cmd+K outside text fields, type Translation Memory, then Enter. Escape closes and returns focus. The search row submits the existing top-bar search."
@@ -19,6 +20,7 @@ verbs:
   Fix a bad entry: "Web: edit it on its detail page. CLI: `tm edit <id> --target \"the corrected translation\"`. An edit that drops or adds a placeholder is refused unless you tick the box (web) or pass `--acknowledge-placeholder-loss` (CLI); damaged inline tags are never saved."
   Delete entries: "Web: the delete button, or select rows and bulk-delete. CLI: `tm delete <id>`, or `tm delete --customer <id> <filters>` for bulk. A bulk delete only ever touches the customer whose TM page you are on. Deleting a document with Privacy erasure also removes the TM rows whose source matches that document's segments (a row another document shares by identical source goes too); an ordinary document delete keeps all TM."
   Load an existing memory: "Web: import TMX or a Trados Studio .sdltm on the project page. CLI: `tm import <project_id> <file.tmx or file.sdltm> --source en-US --target de-DE`. An .sdltm is read without changing it; units it cannot read are counted and listed with a reason; units with Trados tags are held back like tagged TMX units. Units that drop or add a placeholder, or carry inline tags, are held back and listed; tick the box (web) or pass `--acknowledge-placeholder-loss` (CLI) to import placeholder losses anyway."
+  See the leverage: "Web: the Word-based leverage table on the project page (with a Download CSV link). CLI: `project leverage <id>` and `job leverage <id>`, each with `--csv` or `-o FILE` for the quoting CSV. API: GET /api/projects/{pid}/leverage and GET /api/jobs/{jid}/leverage, both with ?format=csv. MCP: list_projects view=leverage and job_status view=leverage."
   Take your memory with you: "CLI: `tm export <project_id> <file.tmx> --source en-US --target de-DE`."
   Fill a document from memory: "Web: the Apply 100% TM matches button on the document page - fills every segment that has a 100% match. CLI: `doc apply-tm <doc_id> <locale>`."
   Clean up hedged junk: "CLI: `tm scrub-hedges --customer <id>` (dry-run by default, `--apply` removes) finds stored entries whose target is model hedging rather than a translation; it only ever touches one customer's TM."
@@ -38,10 +40,10 @@ limits:
   - "A segment reverted to its source text is TM-ineligible for the same reason."
   - "Import is capped by the upload size limit, and a TMX declaring XML entities is refused outright (an amplification guard)."
   - "An .sdltm must be a Trados file-based memory whose language pair matches the requested one (either direction); another SQLite file or another pair is refused before anything is written."
-  - "Fuzzy matching covers text up to 10,000 characters (about 1,500 words). A longer segment or memory entry still gets an exact 100% match but is never fuzzy-scored, so one huge segment cannot stall the app."
+  - "TM fills exact matches only; there is no fuzzy matching, so lookup time stays flat as the memory grows."
 connects:
   - module: workflows
-    how: "A Translate step with TM examples on puts three similar past translations into the prompt by default (per-step tm_examples_window, up to five). Segments filled by a 100% TM match are soft-locked by default - skipped by a normal translate step but still editable by a correction-loop fix step (which clears the lock); only a hard lock resists every step."
+    how: "TM few-shot examples in a Translate step need a TM examples add-on (the core has no example retriever since fuzzy matching was removed), so without one a step gets no examples and the toggle is hidden; the setting is off by default. Segments filled by a 100% TM match are soft-locked by default - skipped by a normal translate step but still editable by a correction-loop fix step (which clears the lock); only a hard lock resists every step."
   - module: documents
     how: "Approving a segment in the editor is what writes to TM; Apply 100% TM matches on the document page is what reads back out of it in bulk."
   - module: glossary
@@ -67,8 +69,8 @@ to the model as an example so the new translation matches.
 ## Reading a match
 
 - **100% / exact** - safe to apply in bulk.
-- **Fuzzy (a percentage)** - a suggestion. The lower the number, the more of it you
-  will end up rewriting.
+- **101% / in context** - an exact match whose neighbouring segments (or string key) match
+  too; locked hard by default.
 
 ## Self-healing drift
 

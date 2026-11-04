@@ -40,13 +40,82 @@ from app.services.maintenance import accounted_work, admitted_work
 
 log = logging.getLogger("loc_tms.jobs")
 
-WORKER_COUNT = config.JOB_WORKERS
+WORKER_COUNT = config.JOB_WORKERS  # the LONG pool: LOC_TMS_JOB_WORKERS, default 2
+
+
+def _short_worker_count() -> int:
+    try:
+        return max(1, int(os.environ.get("LOC_TMS_SHORT_JOB_WORKERS", "2")))
+    except ValueError:
+        return 2
+
+
+# The SHORT pool (S2): LOC_TMS_SHORT_JOB_WORKERS, default 2, minimum 1. Short workers claim only
+# short kinds, so an export or a sweep never waits behind translate / workflow work. Long
+# workers claim ANY kind, long first (work-conserving: an idle long worker still drains the
+# short backlog, and a flood of short jobs can never starve translation: gate S2 M1).
+SHORT_WORKER_COUNT = _short_worker_count()
+
+# Kinds that run on the long pool. Every other kind (today: data_export) is short. A mutable
+# set read LIVE at claim / enqueue time, so a kind added at runtime changes its pool at once.
+LONG_KINDS: set[str] = {
+    "translate_document",
+    "connector_translate",
+    "backfill_embeddings",
+    "tm_import",
+}
+
+
+def pool_for(kind: str) -> str:
+    """The pool a job of this kind runs on: "long" if the kind is in LONG_KINDS, else "short"."""
+    return "long" if kind in LONG_KINDS else "short"
+
+
+# True only inside a one-shot CLI process that armed the durable queue: its daemon workers would
+# claim jobs the server owns and die with the process mid-run. See ensure_workers().
+_cli_no_workers = False
+
+
+def set_cli_no_workers(on: bool) -> None:
+    global _cli_no_workers
+    _cli_no_workers = bool(on)
+
+
 _INSTANCE_ID = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+# When this process imported the job engine: adopt_unqueued_rows only touches rows written before.
+_PROCESS_STARTED = datetime.utcnow()
 
 
 def instance_id() -> str:
     """Identity of this process incarnation, shared by all its job workers."""
     return _INSTANCE_ID
+
+
+def web_owner_stamp() -> dict:
+    """S3c (ADR 0097): payload keys that record which web process runs a row executed IN the
+    request process (a live translate stream, a background /api call), so a peer web process's
+    boot cleanup leaves it alone while that process lives. Empty in the `all` role, whose
+    single process owns every such row (its payloads stay byte-identical)."""
+    return {"owner": _INSTANCE_ID} if config.ROLE == "web" else {}
+
+
+def owner_gone_fn():
+    """A boot-cleanup predicate over a row payload: True when the web process that ran the row
+    is gone. Rows without an owner (the `all` role, or older rows) count as gone, the rule from
+    before S3c. Owners are checked once per call of the returned function's closure."""
+    from app.services import leader
+
+    seen: dict[str, bool] = {}
+
+    def gone(payload) -> bool:
+        owner = (payload or {}).get("owner")
+        if not owner or config.ROLE != "web":
+            return True
+        if owner not in seen:
+            seen[owner] = owner != _INSTANCE_ID and not leader.present(owner)
+        return seen[owner]
+
+    return gone
 
 
 class MissingPayloadField(ValueError):
@@ -211,13 +280,73 @@ _worker_ctx = threading.local()  # .deferrable: this thread is a queue worker th
 
 
 _DEFER_PAUSE_S = 1.0
+_CLAIM_TIMEOUT_S = 1.0  # worker claim timeout, so the loop notices drain() between claims
 _DEFER_MESSAGE = "Waiting for a free slot on this engine"
+# S4 (ADR 0093): minimum seconds between two per-segment progress writes of a translate job.
+_PROGRESS_EVERY_S = 0.5
 
 
 class JobDeferred(Exception):
     """A queue worker found the job's engine at its max_parallel_jobs cap. The job goes back
     to QUEUED and behind the rest of the queue, so the worker is free for other jobs (a
     capped engine's backlog never pins every worker). Never reaches a caller."""
+
+
+class TransientJobError(RuntimeError):
+    """A handler hit a failure that is worth retrying (upstream 429/503/504, a timeout, a
+    connection reset). The job goes back to QUEUED and is re-dispatched after a backoff, up
+    to ``RETRY_MAX`` times, keeping the cost booked so far; only when retries run out does it
+    FAIL with this error. ``retry_after`` (seconds) overrides the computed backoff, e.g. a
+    ``Retry-After`` header."""
+
+    def __init__(self, message: str = "", retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+#: Transient-retry policy: at most RETRY_MAX retries, delay RETRY_BASE_S * 2**n (2, 4, 8, 16 s)
+#: with +-25% jitter, capped at RETRY_CAP_S.
+RETRY_MAX = 4
+RETRY_BASE_S = 2.0
+RETRY_CAP_S = 60.0
+_TRANSIENT_HTTP = frozenset({429, 502, 503, 504})
+
+
+def is_transient(exc: BaseException) -> bool:
+    """True for failures a handler may re-raise as ``TransientJobError``: HTTP 429/502/503/504
+    (``status_code`` / ``response.status_code``), timeouts and connection resets."""
+    if isinstance(exc, TransientJobError | TimeoutError | ConnectionError):
+        return True
+    code = getattr(exc, "status_code", None)
+    if code is None:
+        code = getattr(getattr(exc, "response", None), "status_code", None)
+    if code in _TRANSIENT_HTTP:
+        return True
+    name = type(exc).__name__.lower()
+    return "timeout" in name or "connecterror" in name
+
+
+def retry_delay(retries_done: int, retry_after: float | None = None) -> float:
+    """Seconds to wait before retry number ``retries_done + 1``."""
+    import random
+
+    if retry_after is not None and retry_after >= 0:
+        return min(float(retry_after), RETRY_CAP_S)
+    base = min(RETRY_BASE_S * (2**retries_done), RETRY_CAP_S)
+    return base * random.uniform(0.75, 1.25)  # noqa: S311 -- jitter, not security
+
+
+# --- graceful drain (S1) ---
+# _RUNS: the jobs THIS process's workers are executing right now, jid -> run token. A handler's
+# terminal write and progress writes only apply while its token is still current, so a handler
+# thread that outlives drain() cannot flip a job that was handed back to the queue.
+_RUNS: dict[int, int] = {}
+_runs_lock = threading.Lock()
+_run_seq = 0
+_draining = threading.Event()
+# Workers inside a claim right now: drain() waits for them, so no claim that began before the
+# drain can win a job after drain() hands it back (each claim times out in _CLAIM_TIMEOUT_S).
+_claiming = 0
 
 
 def _translate_job_engine(doc_id, payload: dict) -> str:
@@ -229,10 +358,14 @@ def _translate_job_engine(doc_id, payload: dict) -> str:
     try:
         from app.models import Document, Project
 
+        # S4 (ADR 0093): one joined read (document -> project) instead of two.
         with Session(engine) as s:
-            doc = s.get(Document, doc_id)
-            project = s.get(Project, doc.project_id) if doc else None
-            return str(getattr(project, "default_provider", "") or "").strip().lower()
+            default = s.exec(
+                select(Project.default_provider)
+                .join(Document, Document.project_id == Project.id)
+                .where(Document.id == doc_id)
+            ).first()
+            return str(default or "").strip().lower()
     except Exception:
         return ""
 
@@ -304,29 +437,44 @@ def _run_translate_document(payload: dict, progress) -> dict:
     on the CLI. The refusal reuses `translate.DocumentNotFound` so the answer is
     byte-identical to a genuinely missing id — non-enumerable, matching
     `deps._visible_doc` / `api_cli._visible_document`."""
-    from app.models import Document, Segment
+    from app.models import Segment
     from app.services import translate
 
     doc_id, locale = _require(payload, "document_id"), _require(payload, "locale")
-    from app.services import ai_optout
+    from app.services import ai_optout, run_cache
 
     with Session(engine) as s:
-        _doc = s.get(Document, doc_id)
+        # S4 (ADR 0093): document, project and customer in one joined read; they serve the
+        # opt-out refusal (from this session's identity map) and the engine-slot key below.
+        _doc, _project, _customer = run_cache.load_document_chain(s, doc_id)
         if _doc is None or _doc.fmt == "keys":
             raise translate.DocumentNotFound(f"no such document: {doc_id}")
+        project_id = _doc.project_id
         # AI opt-out (DPAI-08): a job queued before the switch was flipped still refuses.
         ai_optout.refuse_for_document(s, _doc, "machine translation")
+        _engine_key = str(payload.get("provider") or "").strip().lower() or (
+            str(getattr(_project, "default_provider", "") or "").strip().lower()
+        )
     # provider: an effective provider stamped by the API when a routing rule (or an
     # explicit caller override) wins over the project default (Finding 1). Absent =>
     # the project default (spec_for_project inside pretranslate_stream).
     provider = str(payload.get("provider") or "").strip()
     spec = translate.spec_for_provider(provider) if provider else None
+    from sqlalchemy import bindparam
+
+    from app import db
+
     with Session(engine) as s:
         total = len(
             s.exec(
-                select(Segment.id).where(
-                    Segment.document_id == doc_id, Segment.target_locale == locale
-                )
+                db.prebuilt(  # S7b: built once per process
+                    "jobs.translate_segment_ids",
+                    lambda: select(Segment.id).where(
+                        Segment.document_id == bindparam("doc_id"),
+                        Segment.target_locale == bindparam("locale"),
+                    ),
+                ),
+                params={"doc_id": doc_id, "locale": locale},
             ).all()
         )
     if total == 0:
@@ -337,7 +485,7 @@ def _run_translate_document(payload: dict, progress) -> dict:
     done, stats = 0, {}
     from app.services import segment_review
 
-    with _EngineJobSlot(_translate_job_engine(doc_id, payload)), Session(engine) as s:
+    with _EngineJobSlot(_engine_key), Session(engine) as s:
         # #617 item 4 (gate): a job queued before a run paused on human review fails cleanly.
         try:
             segment_review.refuse_if_awaiting_review(s, doc_id, locale)
@@ -346,12 +494,25 @@ def _run_translate_document(payload: dict, progress) -> dict:
         # #702: report the total as soon as the work starts (a document whose first segment
         # takes minutes, e.g. one chunked #683 unit, used to show 0/0 until it finished).
         progress(0, total, f"0/{total} segments")
-        for ev in translate.pretranslate_stream(s, doc_id, locale, spec=spec):
-            if ev.get("type") == "segment":
-                done += 1
+        # S4 (ADR 0093): progress is a read plus a write on the job row. It is written at
+        # most every _PROGRESS_EVERY_S while segments land (each write still shows the
+        # exact count), always for the last segment, and once more after the stream if the
+        # last landed count was not written yet. A slow engine still updates per segment.
+        written, last_write = 0, time.monotonic()
+        try:
+            for ev in translate.pretranslate_stream(s, doc_id, locale, spec=spec):
+                if ev.get("type") == "segment":
+                    done += 1
+                    now = time.monotonic()
+                    if done >= total or now - last_write >= _PROGRESS_EVERY_S:
+                        progress(done, total, f"{done}/{total} segments")
+                        written, last_write = done, now
+                elif ev.get("type") == "summary":
+                    stats = {k: v for k, v in ev.items() if k != "type"}
+        finally:
+            # Also when the stream raises: the segments that landed are on the row.
+            if done != written:
                 progress(done, total, f"{done}/{total} segments")
-            elif ev.get("type") == "summary":
-                stats = {k: v for k, v in ev.items() if k != "type"}
     # Issue #572: a run with zero successes and at least one error is a FAILED job. It
     # used to land COMPLETED with `error: ""`, `translated: 0`, `errors: 2`, so an API
     # caller polling the job could not tell a dead engine from an empty document (the
@@ -377,13 +538,12 @@ def _run_translate_document(payload: dict, progress) -> dict:
     # document fully translated. Additive + idempotent; a partial multi-locale
     # project is left active. Best-effort — a lifecycle hiccup must not fail the job.
     try:
-        from app.models import Document
         from app.services import lifecycle
 
+        # S4 (ADR 0093): the project id read at the start (a document never moves project).
         with Session(engine) as s:
-            doc = s.get(Document, doc_id)
-            if doc is not None:
-                lifecycle.mark_completed_if_done(s, doc.project_id, actor="system")
+            if project_id is not None:
+                lifecycle.mark_completed_if_done(s, project_id, actor="system")
     except Exception:  # noqa: S110 -- project auto-complete is cosmetic; the job succeeded
         pass
     return stats
@@ -577,15 +737,25 @@ def _run_data_export(payload, progress):
     return data_export._execute_job(payload, progress)
 
 
+def _run_tm_import(payload, progress):
+    """Background TMX import (S6, ADR 0094). Lazy import, like data_export above."""
+    from app.services import tm_import_job
+
+    return tm_import_job.run(payload, progress)
+
+
 HANDLERS = {
     "translate_document": _run_translate_document,
     "connector_translate": _run_connector_translate,
     "data_export": _run_data_export,
+    "tm_import": _run_tm_import,
 }
 
 
 # --- engine ---
-def _insert_queued_job(s: Session, kind: str, payload: dict | None, actor: str) -> int:
+def _insert_queued_job(
+    s: Session, kind: str, payload: dict | None, actor: str, message: str = ""
+) -> int:
     """The Job insert shared by submit() and the budgeted doors: AI opt-out refusal, row,
     commit. Returns the job id."""
     if kind == "translate_document":
@@ -594,28 +764,35 @@ def _insert_queued_job(s: Session, kind: str, payload: dict | None, actor: str) 
         from app.services import ai_optout
 
         ai_optout.refuse_for_document(s, (payload or {}).get("document_id"), "machine translation")
-    job = Job(kind=kind, payload=payload or {}, created_by=actor)
+    job = Job(kind=kind, payload=payload or {}, created_by=actor, message=message)
     s.add(job)
     s.commit()
     s.refresh(job)
     return job.id
 
 
-def submit(kind: str, payload: dict, actor: str = "", *, session: Session | None = None) -> int:
+def submit(
+    kind: str,
+    payload: dict,
+    actor: str = "",
+    *,
+    session: Session | None = None,
+    message: str = "",
+) -> int:
     """Insert a QUEUED job and hand it to the workers. `session`, when given, is the
     caller's own transaction (the budgeted doors hold the department reservation lock on
-    it, #622): the Job is inserted and committed there, which also releases that lock."""
+    it, #622): the Job is inserted and committed there, which also releases that lock.
+    `message` is the status text the queued job shows until it starts (ADR 0105: a TM import
+    waiting for another import into the same project says so)."""
     if kind not in HANDLERS:
         raise ValueError(f"Unknown job kind: {kind}")
     if session is not None:
-        jid = _insert_queued_job(session, kind, payload, actor)
+        jid = _insert_queued_job(session, kind, payload, actor, message)
     else:
         with Session(engine) as s:
-            jid = _insert_queued_job(s, kind, payload, actor)
-    from app.ports import jobqueue
-
+            jid = _insert_queued_job(s, kind, payload, actor, message)
     ensure_workers()
-    jobqueue.get().enqueue(jid)
+    _enqueue(jid, kind)
     return jid
 
 
@@ -663,11 +840,13 @@ def submit_unique_budgeted(
     spend, so no budget check); otherwise the cap is re-checked and the job inserted while
     `_live_lock` is held. Raises LiveBudgetRefused when the cap is used up. Lock order is
     always _live_lock then _submit_lock (nothing takes them the other way round)."""
-    from app.services import budgets
+    from app.services import budgets, leader
 
     keys = (dedupe_key,) if isinstance(dedupe_key, str) else tuple(dedupe_key)
     want = tuple((payload or {}).get(k) for k in keys)
-    with _live_lock:
+    # S3c gate MED-1: the dedupe read and the insert are atomic across processes too (a
+    # double-click can land on two web processes); a no-op in the single `all` process.
+    with leader.mutex(f"submit:{kind}"), _live_lock:
         with Session(engine) as s:
             for j in s.exec(
                 select(Job).where(
@@ -742,7 +921,11 @@ def submit_unique(
     try:
         # A caller-owned session means the budgeted door already holds _submit_lock (it must
         # take it before the database reservation lock), and the lock is not reentrant.
-        with contextlib.nullcontext() if not own else _submit_lock:
+        from app.services import leader
+
+        # S3c gate MED-1: across processes as well (the budgeted door holds it already).
+        cross = leader.mutex(f"submit:{kind}") if own else contextlib.nullcontext()
+        with cross, contextlib.nullcontext() if not own else _submit_lock:
             active = s.exec(
                 select(Job).where(
                     Job.kind == kind, Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING])
@@ -760,10 +943,8 @@ def submit_unique(
     finally:
         if own:
             s.close()
-    from app.ports import jobqueue
-
     ensure_workers()
-    jobqueue.get().enqueue(jid)
+    _enqueue(jid, kind)
     return jid, True
 
 
@@ -975,6 +1156,7 @@ def reserve_live_translate(
                 "department": dept.lower(),
                 "est_tokens": est,
                 "live_stream": True,
+                **web_owner_stamp(),
             },
             created_by=actor,
             status=JobStatus.RUNNING,
@@ -1041,26 +1223,86 @@ def settle_live_translate(
 
 
 def ensure_workers() -> None:
+    """Start the two worker pools once: WORKER_COUNT long workers (any kind, long first) and
+    SHORT_WORKER_COUNT short workers (short kinds only). A one-shot CLI process on the durable
+    queue starts none: they would claim server jobs and die with the process."""
     global _started
+    if not config.runs_background_work():
+        # S3 (ADR 0095): the web role executes no job; a worker process claims it.
+        return
     with _start_lock:
         if _started:
             return
+        if _cli_no_workers:
+            from app.ports import jobqueue
+
+            if jobqueue.DB_BACKEND_ARMED:
+                return
         for i in range(WORKER_COUNT):
-            threading.Thread(target=_worker_loop, name=f"loc-job-{i}", daemon=True).start()
+            threading.Thread(
+                target=_worker_loop, args=(("long", "short"),), name=f"loc-job-{i}", daemon=True
+            ).start()
+        for i in range(SHORT_WORKER_COUNT):
+            threading.Thread(
+                target=_worker_loop, args=(("short",),), name=f"loc-sjob-{i}", daemon=True
+            ).start()
         _started = True
 
 
-def _worker_loop() -> None:
+def _enqueue(jid: int, kind: str) -> None:
+    """Hand a just-inserted Job to the active queue, naming its pool."""
+    from app.ports import jobqueue
+
+    if not config.runs_background_work() and not jobqueue.DB_BACKEND_ARMED:
+        # S3 (ADR 0095): a web-role process hands every job to the worker processes through
+        # the database; arm the durable queue even if this process skipped the boot (a
+        # script, a test client), or the job would sit in an in-memory queue nobody reads.
+        jobqueue.configure_at_boot()
+    jobqueue.get().enqueue(jid, pool=pool_for(kind))
+    from app.services import wake
+
+    # S3: a web-role process tells the worker processes (no-op otherwise); S7b: one wake-up per
+    # job, for its pool, so each worker process sends one claimer to the table, not all of them.
+    wake.poke("jobs", pool=pool_for(kind))
+
+
+def _worker_loop(pools: tuple[str, ...] = ("long", "short")) -> None:
     from app.ports import jobqueue
 
     worker_id = f"{instance_id()}/{threading.current_thread().name}"
+    idle = False
     while True:
+        if _draining.is_set():  # drain(): claim nothing new; resume_after_drain() clears this
+            time.sleep(0.2)
+            continue
         q = jobqueue.get()  # call-time lookup: honors a boot-time swap to the DB adapter
-        jid = q.claim(worker_id)
-        if jid is None:  # only a finite-timeout claim returns None; the blocking path never does
+        # A finite claim timeout lets the loop notice a drain request between claims. `idle`
+        # (S7b): after an empty claim the DB queue does not look again at once, only on a
+        # wake-up or its poll.
+        global _claiming
+        with _runs_lock:
+            _claiming += 1
+        try:
+            jid = q.claim(worker_id, timeout=_CLAIM_TIMEOUT_S, pools=pools, idle=idle)
+        finally:
+            with _runs_lock:
+                _claiming -= 1
+        idle = jid is None
+        if jid is None:
+            continue
+        if _draining.is_set():
+            # Claimed as drain() began: never start it here, put it straight back (the Job is
+            # still QUEUED; nothing ran).
+            try:
+                q.requeue(jid)
+            except Exception:
+                log.exception("Job %s could not be put back during drain; lease expiry will", jid)
             continue
         _worker_ctx.deferrable = True
         _worker_ctx.deferred = False
+        _worker_ctx.retry_delay = None
+        _worker_ctx.retry_error = None
+        _worker_ctx.run_token = None
         try:
             with accounted_work():
                 _execute(jid)
@@ -1068,30 +1310,117 @@ def _worker_loop() -> None:
             log.exception("Job %s crashed outside its handler", jid)
         finally:
             deferred = getattr(_worker_ctx, "deferred", False)
+            delay = getattr(_worker_ctx, "retry_delay", None)
+            error = getattr(_worker_ctx, "retry_error", None)
+            token = getattr(_worker_ctx, "run_token", None)
             _worker_ctx.deferred = False
-            if deferred:
+            _worker_ctx.retry_delay = None
+            with _runs_lock:
+                handed_back = token is not None and _RUNS.get(jid) != token
+                if not handed_back:
+                    _RUNS.pop(jid, None)
+            if handed_back:
+                # drain() already returned this job to the queue (its row is pending or owned by
+                # a new claim): releasing here would fail a fresh claim of the same job.
+                log.info("Job %s finished after drain handed it back; result discarded", jid)
+            elif deferred:
                 try:
                     # One atomic step per adapter (never enqueue + release: on the DB queue
                     # release keys on job_id and would also fail a second worker's fresh claim).
-                    q.requeue(jid)
+                    q.requeue(jid, delay=delay or 0.0, error=error)
                 except Exception:
                     # The claim is left in place: lease expiry / boot recovery hands it back.
                     log.exception("Job %s could not be requeued; it stays QUEUED", jid)
             else:
                 q.release(jid)
-        if deferred:
+        if deferred and not delay:
             time.sleep(_DEFER_PAUSE_S)  # do not spin on a backlog that is all at its cap
 
 
-def _update(jid: int, **fields) -> None:
-    with Session(engine) as s:
-        job = s.get(Job, jid)
-        if not job:
-            return
-        for k, v in fields.items():
-            setattr(job, k, v)
-        s.add(job)
-        s.commit()
+def drain(timeout: float = 20.0) -> int:
+    """Graceful shutdown: stop workers claiming new jobs, wait up to ``timeout`` seconds for the
+    jobs running in this process to finish, then hand every job still RUNNING back to QUEUED
+    (Job RUNNING -> QUEUED with ``started_at`` cleared; on the DB queue the row goes back to
+    pending with worker and lease cleared) so the next boot re-runs it instead of failing it.
+    Handler threads cannot be killed: their eventual terminal writes are discarded (see
+    ``_RUNS``). Live-stream translate rows have no queue entry and are never touched here.
+    Returns the number of jobs handed back. ``resume_after_drain()`` undoes the claim stop."""
+    from sqlalchemy import text
+
+    from app.ports import jobqueue
+
+    _draining.set()
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    while time.monotonic() < deadline:
+        with _runs_lock:
+            # A claim already in flight when the drain began must also return (and put its job
+            # back, see _worker_loop) before the hand-back below, or it could take a job just
+            # handed back. Claims time out in _CLAIM_TIMEOUT_S, well inside the drain budget.
+            if not _RUNS and not _claiming:
+                break
+        time.sleep(0.05)
+    # Only a drain shorter than one claim can get here with a claim still open: let it return.
+    # With the 8 s shutdown default every claim ended long before, so the budget is unchanged.
+    claim_deadline = time.monotonic() + _CLAIM_TIMEOUT_S + 0.2
+    while time.monotonic() < claim_deadline:
+        with _runs_lock:
+            if not _claiming:
+                break
+        time.sleep(0.02)
+    with _runs_lock:
+        pending = list(_RUNS)
+        _RUNS.clear()  # tokens gone: late handler writes and releases are discarded
+    handed = []
+    if pending:
+        with Session(engine) as s:
+            for jid in pending:
+                # Job first, queue row second: a crash between leaves a QUEUED Job whose
+                # running row expires back to pending, never a pending row on a RUNNING Job.
+                res = s.execute(
+                    text(
+                        "UPDATE job SET status='queued', started_at=NULL "
+                        "WHERE id=:jid AND status='running'"
+                    ),
+                    {"jid": jid},
+                )
+                if res.rowcount == 1:
+                    handed.append(jid)
+            s.commit()
+        try:
+            jobqueue.get().hand_back(pending)
+        except Exception:
+            log.exception("drain: could not reset queue rows; lease expiry will return them")
+    if handed:
+        log.warning("drain: handed %s running job(s) back to the queue: %s", len(handed), handed)
+    return len(handed)
+
+
+def resume_after_drain() -> None:
+    """Let the workers claim again (tests; a real shutdown never resumes)."""
+    _draining.clear()
+
+
+def _update(jid: int, *, if_running: bool = False, **fields) -> bool:
+    if not fields:
+        with Session(engine) as s:
+            job = s.get(Job, jid)
+            return job is not None and (not if_running or job.status == JobStatus.RUNNING)
+    # S4 follow-up: ONE conditional UPDATE instead of a read then a write (four of these per
+    # translate job). A missing row, or with if_running a row that is no longer RUNNING
+    # (drain() handed it back: a late handler write must not flip it), matches nothing and
+    # returns False, as the read-then-check did; the check is now atomic with the write.
+    # S7b: a core UPDATE on the table, not the ORM bulk-update path (no object is
+    # involved; the ORM layer cost more CPU than the statement). Same columns, same types.
+    from sqlalchemy import update
+
+    t = Job.__table__
+    stmt = update(t).where(t.c.id == jid)
+    if if_running:
+        stmt = stmt.where(t.c.status == JobStatus.RUNNING)
+    with engine.begin() as cx:
+        hit = cx.execute(stmt.values(**fields)).rowcount
+    if not hit:
+        return False
     # Observability (Train Q2): count job STATUS transitions (RUNNING/COMPLETED/FAILED)
     # from the one lifecycle setter -- a progress-only _update (no `status` field) is
     # skipped. Lazy import + a strict no-op when metrics is off; never perturbs the job.
@@ -1099,6 +1428,16 @@ def _update(jid: int, **fields) -> None:
         from app import extensions as _extensions
 
         _extensions.observability.observe_job_status(fields["status"])
+    return True
+
+
+def _run_current(jid: int, token: int | None) -> bool:
+    """True when this run still owns the job (no drain handed it back). Token None = a caller
+    outside the worker pool (CLI run_sync), which always owns its job."""
+    if token is None:
+        return True
+    with _runs_lock:
+        return _RUNS.get(jid) == token
 
 
 @admitted_work
@@ -1120,6 +1459,18 @@ def _execute(jid: int) -> None:
             log.debug("Job %s deferred before start: engine %s at its cap", jid, full)
             _worker_ctx.deferred = True
             return
+    token = None
+    outer_token = getattr(_worker_ctx, "run_token", None)  # set when nested in another run
+    if getattr(_worker_ctx, "deferrable", False):
+        global _run_seq
+        with _runs_lock:
+            if _draining.is_set():
+                _worker_ctx.deferred = True  # shutting down: leave it queued, no RUNNING flip
+                return
+            _run_seq += 1
+            token = _run_seq
+            _RUNS[jid] = token
+        _worker_ctx.run_token = token
     _update(jid, status=JobStatus.RUNNING, started_at=datetime.utcnow())
     if kind == "connector_translate":
         from app.services import notify
@@ -1127,6 +1478,8 @@ def _execute(jid: int) -> None:
         notify.on_connector_job(jid, "started")  # never raises; a no-op without channels
 
     def progress(done: int, total: int | None = None, message: str = "") -> None:
+        if not _run_current(jid, token):
+            return  # drained: the job is back in the queue, not ours to update
         fields = {"progress_done": done, "message": message[:300]}
         if total is not None:
             fields["progress_total"] = total
@@ -1137,8 +1490,16 @@ def _execute(jid: int) -> None:
     # #364: collect the USD the ledger books while this job runs (every call, failover and
     # failed attempts included, a free engine's 0) and store it on the row with the terminal
     # status. A handler-supplied "cost_usd" in the result is never trusted: it is dropped.
-    with spend.cost_scope() as cost_sink:
-        _run_handler(jid, kind, payload, progress, cost_sink)
+    try:
+        with spend.cost_scope() as cost_sink:
+            _run_handler(jid, kind, payload, progress, cost_sink, token)
+    finally:
+        if outer_token is not None:
+            # Nested inside another worker run: give the outer run back its token and drop
+            # this run's entry (only the worker loop owns the outermost one).
+            _worker_ctx.run_token = outer_token
+            with _runs_lock:
+                _RUNS.pop(jid, None)
     if getattr(_worker_ctx, "deferred", False):
         return  # requeued, not finished: no terminal notification
 
@@ -1147,12 +1508,60 @@ def _execute(jid: int) -> None:
     _after_execute(jid, kind)
 
 
-def _run_handler(jid: int, kind: str, payload: dict, progress, cost_sink) -> None:
+def _finish(jid: int, token: int | None, **fields) -> bool:
+    """A terminal / retry write from a handler run: applied only while this run still owns the
+    job (drain() did not hand it back) and the row is still RUNNING (conditional write)."""
+    if not _run_current(jid, token):
+        log.info("Job %s: discarded a late write after drain handed it back", jid)
+        return False
+    return _update(jid, if_running=True, **fields)
+
+
+def _transient(jid: int, e: TransientJobError, token, base_cost: float, cost_sink) -> None:
+    """A transient failure: requeue with backoff while retries remain (the booked cost is kept
+    and accumulated), else FAIL with the last error and the retry count."""
+    with Session(engine) as s:
+        job = s.get(Job, jid)
+        done = int((job.retries if job else 0) or 0)
+    total = base_cost + cost_sink.total
+    if getattr(_worker_ctx, "deferrable", False) and done < RETRY_MAX and not _draining.is_set():
+        delay = retry_delay(done, e.retry_after)
+        msg = f"Retry {done + 1} of {RETRY_MAX} in {delay:.0f} s: {e}"[:300]
+        log.warning("Job %s transient failure, %s", jid, msg)
+        if _finish(
+            jid,
+            token,
+            status=JobStatus.QUEUED,
+            started_at=None,
+            progress_done=0,
+            retries=done + 1,
+            message=msg,
+            cost_usd=total,
+        ):
+            _worker_ctx.deferred = True
+            _worker_ctx.retry_delay = delay
+            _worker_ctx.retry_error = str(e)[:500]
+        return
+    log.warning("Job %s failed after %s transient retries: %s", jid, done, e)
+    _finish(
+        jid,
+        token,
+        status=JobStatus.FAILED,
+        finished_at=datetime.utcnow(),
+        error=f"{e} (gave up after {done} of {RETRY_MAX} retries)"[:500],
+        cost_usd=total,
+    )
+
+
+def _run_handler(jid: int, kind: str, payload: dict, progress, cost_sink, token=None) -> None:
     """Run one job handler and record its terminal state plus the booked cost."""
     from app.services import ai_optout, translate
     from app.services.providers import DeadEngineError
 
     _worker_ctx.deferred = False
+    with Session(engine) as s:
+        row = s.get(Job, jid)
+        base_cost = float((row.cost_usd if row else 0) or 0)  # kept from earlier retries
     try:
         # AI opt-out (DPAI-08): the job runs inside its document/project AI scope, so any
         # engine call a handler makes passes ai_optout.guard with project context.
@@ -1164,36 +1573,41 @@ def _run_handler(jid: int, kind: str, payload: dict, progress, cost_sink) -> Non
                 result = HANDLERS[kind](payload, progress)
         finally:
             _CURRENT_JOB.reset(job_token)
-        _update(
+        _finish(
             jid,
+            token,
             status=JobStatus.COMPLETED,
             finished_at=datetime.utcnow(),
             result=_without_cost(result),
-            cost_usd=cost_sink.total,
+            cost_usd=base_cost + cost_sink.total,
         )
     except JobDeferred as e:
         # Engine at its max_parallel_jobs cap: back to QUEUED, no cost, no notification. The
         # worker loop re-enqueues the id (see _worker_loop).
         log.info("Job %s (%s) deferred: engine %s is at its parallel-jobs limit", jid, kind, e)
-        _update(
+        if _finish(
             jid,
+            token,
             status=JobStatus.QUEUED,
             started_at=None,
             progress_done=0,
             message=_DEFER_MESSAGE,
-        )
-        _worker_ctx.deferred = True
+        ):
+            _worker_ctx.deferred = True
+    except TransientJobError as e:
+        _transient(jid, e, token, base_cost, cost_sink)
     except JobFailed as e:
         # Controlled failure that still carries data (e.g. a connector run that
         # reached the API but had item failures): FAILED, but keep both.
         log.warning("Job %s (%s) failed with data: %s", jid, kind, e)
-        _update(
+        _finish(
             jid,
+            token,
             status=JobStatus.FAILED,
             finished_at=datetime.utcnow(),
             error=str(e)[:500],
             result=_without_cost(e.result),
-            cost_usd=cost_sink.total,
+            cost_usd=base_cost + cost_sink.total,
         )
     except (
         translate.DocumentNotFound,
@@ -1216,21 +1630,23 @@ def _run_handler(jid: int, kind: str, payload: dict, progress, cost_sink) -> Non
         # behavior for the controlled cases while letting real bugs fall through
         # to the log.exception branch below.
         log.warning("Job %s (%s) failed: %s", jid, kind, e)
-        _update(
+        _finish(
             jid,
+            token,
             status=JobStatus.FAILED,
             finished_at=datetime.utcnow(),
             error=str(e)[:500],
-            cost_usd=cost_sink.total,
+            cost_usd=base_cost + cost_sink.total,
         )
     except Exception as e:
         log.exception("Job %s (%s) failed", jid, kind)
-        _update(
+        _finish(
             jid,
+            token,
             status=JobStatus.FAILED,
             finished_at=datetime.utcnow(),
             error=f"{type(e).__name__}: {e}"[:500],
-            cost_usd=cost_sink.total,
+            cost_usd=base_cost + cost_sink.total,
         )
 
 
@@ -1245,13 +1661,16 @@ def _without_cost(result: dict | None) -> dict:
 def _after_execute(jid: int, kind: str) -> None:
     # self-filters to translate_document jobs with an email created_by; no-ops when
     # notify_on_job_finish is off or SMTP is unconfigured.
+    # S4 (ADR 0093): the finished row is read once and serves both hooks below (it no
+    # longer changes: the job is terminal before this runs).
+    finished = None
     try:
         from app.services import notifications
 
         with Session(engine) as s:
             finished = s.get(Job, jid)
         if finished is not None:
-            notifications.on_job_finished(finished)
+            notifications.on_job_finished(finished, reread=False)
     except Exception:
         log.exception("Completion notification failed for job %s", jid)
 
@@ -1268,7 +1687,7 @@ def _after_execute(jid: int, kind: str) -> None:
         from app.services import project_budgets
 
         with Session(engine) as s:
-            job = s.get(Job, jid)
+            job = finished if finished is not None else s.get(Job, jid)
             # N5: bound-safe resolution — a hostile/out-of-range document_id never reaches
             # a session.get bind (reports._job_project_id OverflowErrors on one, which
             # silently killed this hook), so it works on every job, not just clean ids.
@@ -1384,6 +1803,7 @@ def status_dict(job: Job) -> dict:
         "message": job.message,
         "error": job.error,
         "result": job.result or {},
+        "retries": job.retries or 0,
     }
 
 
@@ -1403,9 +1823,131 @@ def recover_interrupted(at_boot: bool = False) -> int:
     from app.ports import jobqueue
 
     touched = jobqueue.get().recover(at_boot)
-    if at_boot:
+    if at_boot and config.runs_background_work():
+        touched += _adopt_once_after_switch(jobqueue.DB_BACKEND_ARMED)
+    if at_boot and config.ROLE == "all":
+        # Live streams run where HTTP is served. With split roles (S3, ADR 0095) a booting
+        # WORKER must not fail a stream the live web process is serving; the web boot runs
+        # this cleanup for its own streams instead (app/main.py::_startup).
         touched += fail_orphaned_live_rows()
     return touched
+
+
+# Present while this data dir has run on the durable queue since it last booted on the memory
+# queue: adopt_unqueued_rows runs once per switch to the DB queue (the upgrade), not every boot.
+_ADOPTED_MARKER = ".jobqueue-adopted"
+
+
+def _adopt_once_after_switch(db_armed: bool) -> int:
+    """Boot: on the DB queue, run adopt_unqueued_rows the first time only and leave the marker;
+    on the memory queue, remove the marker so a later switch back adopts that era's rows. Once is
+    all the upgrade needs, and it keeps a later boot from failing a live one-shot CLI job (a
+    `job run` row is RUNNING with no queue row too). Gate round 1 M1."""
+    marker = config.DATA_DIR / _ADOPTED_MARKER
+    try:
+        if not db_armed:
+            marker.unlink(missing_ok=True)
+            return 0
+        if marker.exists():
+            return 0
+    except OSError:
+        log.exception("durable job queue: cannot read the adoption marker %s", marker)
+        return 0
+    n = adopt_unqueued_rows()
+    if config.ROLE != "all":
+        # A worker never fails RUNNING rows (a peer may own them), so only the single-process
+        # boot completes the switch; until one runs, worker boots keep adopting QUEUED rows
+        # (gate round 2 M1). The upgrade notes say to boot once in role all first.
+        return n
+    try:
+        marker.write_bytes(b"")
+    except OSError:
+        # Without a writable, persistent data dir this runs on every boot (gate round 2 L1).
+        log.exception("durable job queue: cannot write the adoption marker %s", marker)
+    return n
+
+
+def adopt_unqueued_rows() -> int:
+    """Boot only, on the durable queue: pick up Job rows that have NO jobqueue row and were
+    written before this process started (S8 upgrade fix). The in-memory queue (the default
+    before S2, ADR 0092) never wrote jobqueue rows, so on the first boot after the upgrade a
+    job it left QUEUED would never be claimed and one it left RUNNING would read running
+    forever (both also hold the dedupe doors, e.g. Sync now). Applies the in-memory restart
+    contract to exactly those rows: QUEUED ones are enqueued, RUNNING ones are failed.
+
+    Runs once per switch to the DB queue (_adopt_once_after_switch), so an ordinary later boot
+    never touches a one-shot CLI `job run` row in flight. Only rows from before this process
+    started: a peer web process's submit inserts the Job and then its queue row, and that
+    window is milliseconds, never a whole boot. RUNNING rows are failed only in the `all` role
+    and only ownerless ones; live streams and background /api calls keep their own owner-aware
+    cleanups. Residual: a CLI `job run` still running across the upgrade boot itself is failed,
+    the same as the in-memory queue did at every boot. Returns the count."""
+    from sqlalchemy import exists
+
+    from app.models import JobQueue
+
+    no_queue_row = ~exists().where(JobQueue.job_id == Job.id)
+    adopted: list[tuple[int, str]] = []
+    failed = 0
+    now = datetime.utcnow()
+    with Session(engine) as s:
+        for jid, kind in s.exec(
+            select(Job.id, Job.kind).where(
+                Job.status == JobStatus.QUEUED, Job.created_at < _PROCESS_STARTED, no_queue_row
+            )
+        ).all():
+            adopted.append((jid, kind))
+        if config.ROLE != "all":
+            left = [
+                payload
+                for payload in s.exec(
+                    select(Job.payload).where(
+                        Job.status == JobStatus.RUNNING,
+                        Job.created_at < _PROCESS_STARTED,
+                        Job.kind != "api_task",
+                        no_queue_row,
+                    )
+                ).all()
+                # the same rows the role-all branch below would fail (gate round 3 L1)
+                if not (payload or {}).get("live_stream") and not (payload or {}).get("owner")
+            ]
+            if left:
+                log.warning(
+                    "durable job queue: %s running job(s) have no queue row (left by the "
+                    "in-memory queue?); boot once with LOC_TMS_ROLE=all to fail them",
+                    len(left),
+                )
+        else:
+            for job in s.exec(
+                select(Job).where(
+                    Job.status == JobStatus.RUNNING,
+                    Job.created_at < _PROCESS_STARTED,
+                    Job.kind != "api_task",  # app/web/background_calls.py::fail_interrupted
+                    no_queue_row,
+                )
+            ).all():
+                payload = job.payload or {}
+                if payload.get("live_stream") or payload.get("owner"):
+                    continue  # fail_orphaned_live_rows / the web boot's presence check
+                job.status = JobStatus.FAILED
+                job.error = "Interrupted by a server restart."
+                job.finished_at = now
+                s.add(job)
+                failed += 1
+            if failed:
+                s.commit()
+    for jid, kind in adopted:
+        _enqueue(jid, kind)
+    if adopted or failed:
+        log.warning(
+            "durable job queue: enqueued %s queued job(s) and failed %s running job(s) that had "
+            "no queue row (left by the in-memory queue before this boot)",
+            len(adopted),
+            failed,
+        )
+        if adopted:
+            ensure_workers()
+    return len(adopted) + failed
 
 
 def fail_orphaned_live_rows() -> int:
@@ -1417,11 +1959,16 @@ def fail_orphaned_live_rows() -> int:
     running server could fail a stream still in progress. Returns the count."""
     n = 0
     now = datetime.utcnow()
+    # S3c (ADR 0097): with several web processes, a stream another LIVE web process is serving
+    # is not this boot's to fail (owner_gone_fn is True for every row in the `all` role).
+    gone = owner_gone_fn()
     with Session(engine) as s:
         for job in s.exec(
             select(Job).where(Job.kind == "translate_document", Job.status == JobStatus.RUNNING)
         ).all():
             if not (job.payload or {}).get("live_stream"):
+                continue
+            if not gone(job.payload):
                 continue
             job.status = JobStatus.FAILED
             job.error = "live translation interrupted by a restart"

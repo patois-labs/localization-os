@@ -34,7 +34,7 @@ start command. No image may serve before this gate passes.
 `docker-compose.yml` passes `RELEASE`/`RELEASE_COMMIT` through to the image as
 build args (`args: RELEASE: ${RELEASE:-}` / `RELEASE_COMMIT: ${RELEASE_COMMIT:-}`).
 Skip the two `export` lines and the build still succeeds, but with both unset the
-image falls back to the fixed `version = "0.8.0"` in `pyproject.toml`, so
+image falls back to the `version` in `pyproject.toml` (for example `1.1.0`), so
 `/health` and `python -m app.cli version` report the wrong release.
 
 On first boot the login wall is ON and **no accounts exist yet** - your first
@@ -125,15 +125,30 @@ Health endpoints (the image's HEALTHCHECK uses `/ready`):
 - `GET /health` - liveness, no DB work.
 - `GET /ready` - readiness, checks the DB connection.
 
+### Podman
+
+The image builds and runs under Podman too, with two differences from Docker:
+
+- Podman refuses short image names unless the host's registries configuration resolves them. The Dockerfile's
+  `TAILSCALE_BASE` default is the short name `tailscale/tailscale:...`, so pass the fully qualified name:
+  `podman build --build-arg TAILSCALE_BASE=docker.io/tailscale/tailscale:<tag>@sha256:<digest> ...` (the same tag and
+  digest as the `ARG` line). If your host does not resolve the official `python` and `rust` images either, qualify
+  `PYTHON_BASE` and `RUST_BASE` the same way.
+- Podman's default OCI image format drops the `HEALTHCHECK`. Build with `podman build --format docker ...` to keep it.
+
+The Compose image scan gate applies the same way.
+
 ### Base image pins
 
-The two base images (`python:3.13-slim` for both Python stages and
-`tailscale/tailscale:v1.102.5`) come from the `PYTHON_BASE` and `TAILSCALE_BASE`
-arguments at the top of the `Dockerfile`. A pinned value reads
+The three base images (`python:3.13-slim` for every Python stage,
+`tailscale/tailscale:v1.104.2`, and `rust:1.94.1-slim-trixie`, whose toolchain the
+native stage copies to build the optional `locos_native` module, ADR 0091) come from
+the `PYTHON_BASE`, `TAILSCALE_BASE` and `RUST_BASE` arguments at the top of the
+`Dockerfile`. A pinned value reads
 `python:3.13-slim@sha256:<digest>`: Docker pulls that exact image, and the tag stays in
 the value so you can see what it is. `scripts/pin_base_images.py` resolves each tag to
 its current digest via registry HTTPS and writes it in (no Docker needed), and `--check`
-exits non-zero while either value has no digest. To pin for the first time, or to take
+exits non-zero while any value has no digest. To pin for the first time, or to take
 a new Debian or Python patch release deliberately, run from the repo folder:
 
 ```text
@@ -141,7 +156,7 @@ python scripts\pin_base_images.py
 python scripts\pin_base_images.py --check
 ```
 
-Review the `Dockerfile` diff (only the two `ARG` lines change), rebuild, and commit it
+Review the `Dockerfile` diff (only the base `ARG` lines change), rebuild, and commit it
 like any dependency bump. To move to a new tag (say a new tailscale release), edit the
 tag in the `ARG` line first, then run the script.
 
@@ -205,9 +220,9 @@ the newest pip still vendors msgpack, urllib3 and setuptools versions the image 
 
 ```text
 python:3.13-slim
-sha256:bf44cdfcb76cd3b41e879bc058fc37ec5872002ccfde7fcb765e218cde0cd79c
-tailscale/tailscale:v1.102.5
-sha256:c507f3a2a6ab1cabd8d809b98edeb41edbd5c3fb6ad9632ffd098b4c7d0b4065
+sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962
+tailscale/tailscale:v1.104.2
+sha256:b11583ad2e93e4671128538c88cf11f460444a5d7e449311dd1933a400ab849d
 caddy:2
 sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52
 postgres:16
@@ -258,6 +273,17 @@ locks are byte-identical except the Vendor Studio lock, which must match the roo
 fastapi 0.142.2 and python-dotenv 1.2.4 here and, because fastapi 0.142.2 now requires opentelemetry-api, gains
 opentelemetry-api 1.45.0 (the root lock's version; Apache-2.0). Dependabot #555 is the matching Vendor Studio
 `requirements.txt` pin. `httpx2-jsfetch` (emscripten-only, pulled by httpx2) stays out of the lock as before.
+
+The 2026-10-24 security refresh (shipped in 1.1.0, pip-audit over every lock) moves pillow 12.3.0 to 13.0.0 (37
+advisories), certifi to 2026.10.19 (root lock, dev lock, Vendor Studio lock), opentelemetry-api to 1.45.1 with the
+whole tracing family to 1.45.1 / 0.66b1 (the SDK pins the API exactly; the `prerelease-accepted` notes stay),
+filelock to 4.2.1 (dev and pii locks) and setuptools to 84.1.0 (pii lock and `scripts/locks/requirements-build.lock`).
+Pins were edited in place and `scripts/hash_locks.py` re-hashed them; no other pin moved. Pillow 13 needs Python 3.11,
+so `requires-python` is now `>=3.11`. The SAML lxml fallback lock keeps lxml 6.0.0 and its advisory warning.
+The same release re-pins the bases (`scripts/pin_base_images.py`): Python slim to the 2026-10-21 digest (also in the
+Vendor Studio Dockerfile) and tailscale v1.102.5 to v1.104.2 (Go 1.27.3: the stdlib and golang.org/x fixes behind
+CVE-2026-56854 and the other HIGH findings accepted for earlier images). Build without a stale layer cache: a cached
+apt layer kept libbrotli1 1.1.0-2+b7 although trixie-security has 1.1.0-2+deb13u1.
 
 The Docker builder installs `requirements.lock` plus `requirements-postgres.lock`
 with `--no-deps`. It does not resolve new transitive versions during a rebuild.
@@ -388,9 +414,7 @@ separate trees. Additional opt-ins are inventoried in `.github/runtime-profiles.
 Presidio, local OCR, and
 SQLCipher. These opt-ins resolve under base-lock constraints at audit time; their
 retained freeze files and JSON audit results describe that run, not a locked release.
-Resolution or audit failures fail the workflow. Embeddings use remote/local HTTP
-providers and require no additional Python embedding package; neural evaluation
-metrics are not yet implemented. Optional model downloads are not Python package
+Resolution or audit failures fail the workflow. Optional model downloads are not Python package
 inventories and are outside this scan.
 
 Each accepted advisory in `.github/pip-audit-ignores.txt` must have `owner`, `expires`,
@@ -535,6 +559,40 @@ The published Docker image already bundles the driver, so the compose flow above
 needs no extra step. If `DATABASE_URL` points at Postgres without the driver
 present, the app fails fast with a clear `pip install -r requirements-postgres.txt`
 hint (never an opaque `ModuleNotFoundError`).
+
+### 2c. Moving an existing SQLite install to Postgres
+
+`db copy-to-postgres` copies a SQLite install file into an empty, migrated Postgres database in one transaction
+(parents first, sequences reset, per-table row counts verified, all-or-nothing). It is a host-only command: it has no
+web, API or MCP surface because it reads a file on the host and writes to a database server the operator names. The
+target URL comes from an environment variable, never from the command line:
+
+```bash
+alembic upgrade head                                   # on the empty target (DATABASE_URL set)
+export LOC_TMS_TARGET_PG_URL=postgresql+psycopg://user@host:5432/locstudio
+loc-tms db copy-to-postgres /data/loc_tms.db --check   # preflight only
+loc-tms db copy-to-postgres /data/loc_tms.db
+```
+
+Stop the app and back up first; the SQLite file is only read. Full procedure with rehearsal numbers, the cutover
+steps, verification and rollback: `docs/guides/postgres-migration.md`.
+
+### 2d. Roles: web plus worker processes
+
+`LOC_TMS_ROLE` chooses what one process does: `all` (the default, today's single process), `web` (HTTP only; launches
+become durable queued rows) or `worker` (no HTTP: job pools, run admission and step continuation, scheduler, sweeps and
+boot recovery; started with `python -m app.worker`). Split roles need the durable queue (`job_queue_backend=db`, the
+default) and run on SQLite (WAL, one box) or Postgres; Postgres is the recommendation for more than a couple of
+workers.
+
+In the container, `LOC_TMS_WORKER_PROCESSES=N` (default `0`: one process, role `all`, byte-for-byte the old
+behaviour) starts `N` workers plus the web server in the same container. The entrypoint stays PID 1 as a supervisor: it
+forwards SIGTERM to every child, waits up to `LOC_TMS_STOP_WAIT_SECONDS` (default `LOC_TMS_DRAIN_SECONDS` + 10), kills
+stragglers, and **exits nonzero when any child dies** so the restart policy relaunches the whole group (boot recovery
+reclaims expired leases). Give the container a stop grace period above that wait (`docker stop -t 40`; compose
+`stop_grace_period: 40s`). Every process has its own database pool: keep (1 + N) x (`LOC_TMS_DB_POOL_SIZE` +
+`LOC_TMS_DB_MAX_OVERFLOW`) under the Postgres `max_connections`. Separate web and worker containers on one image and
+one data volume also work. Details and landmines: `docs/guides/postgres-migration.md`.
 
 ---
 

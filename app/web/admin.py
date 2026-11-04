@@ -11,7 +11,7 @@ Documented in: docs/architecture/configuration.md
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
@@ -216,7 +216,6 @@ def setup_ai(request: Request):
             "tm_matching": {
                 "lock_ice": settings.get("tm_lock_ice") != "0",
                 "hundreds_enter_lqa": settings.get("tm_hundreds_enter_lqa") != "0",
-                "context_floor": settings.get("tm_context_floor") or "95",
                 # Batch 15 T2: default ON (only an explicit "0" turns it off).
                 "empty_delivery_gate": settings.get("tm_empty_delivery_gate") != "0",
             },
@@ -888,21 +887,15 @@ def setup_ai_tm_save(
     request: Request,
     tm_lock_ice: str = Form(""),
     tm_hundreds_enter_lqa: str = Form(""),
-    tm_context_floor: str = Form("95"),
     tm_empty_delivery_gate: str = Form(""),
 ):
-    """Save the TM-matching policy card (the three §6 controls, GLOBAL interim, + the
+    """Save the TM-matching policy card (the §6 controls, GLOBAL interim, + the
     Batch 15 TM-only delivery empty gate). The booleans are unchecked-checkbox fields
     (absent => off), same convention as the semantic card. The kill switch
     (TM_LOCKS_ENABLED) is ENV-ONLY and is not here."""
     me, blocked = _ai_block(request)
     if blocked:
         return blocked
-    try:
-        floor = int(tm_context_floor or "95")
-    except (TypeError, ValueError):
-        floor = 95
-    floor = max(50, min(99, floor))
     lock_ice = "1" if tm_lock_ice == "1" else "0"
     hundreds = "1" if tm_hundreds_enter_lqa == "1" else "0"
     # Batch 15 T2: the empty-delivery gate is an unchecked-checkbox boolean like the others.
@@ -911,7 +904,6 @@ def setup_ai_tm_save(
         {
             "tm_lock_ice": lock_ice,
             "tm_hundreds_enter_lqa": hundreds,
-            "tm_context_floor": str(floor),
             "tm_empty_delivery_gate": empty_gate,
         }
     )
@@ -919,8 +911,7 @@ def setup_ai_tm_save(
         actor=getattr(me, "email", "system"),
         action="tm_locks.settings",
         detail=(
-            f"lock_ice={lock_ice} hundreds_enter_lqa={hundreds} floor={floor} "
-            f"empty_delivery_gate={empty_gate}"
+            f"lock_ice={lock_ice} hundreds_enter_lqa={hundreds} empty_delivery_gate={empty_gate}"
         ),
         ip=_ip(request),
     )
@@ -1598,13 +1589,17 @@ def settings_feature_toggle(request: Request, slug: str, enabled: str = Form("")
     # unchanged toggle is not a real "feature.toggle" event worth a forensics row.
     # `remote=False` -- this is a LOCAL, session-authed write, so the install-locked
     # feature keys (data_export, databricks) stay flippable here exactly as before.
-    features_admin.set_feature_enabled(
-        slug,
-        enabled == "1",
-        actor=getattr(me, "email", "system"),
-        ip=_ip(request),
-        remote=False,
-    )
+    try:
+        features_admin.set_feature_enabled(
+            slug,
+            enabled == "1",
+            actor=getattr(me, "email", "system"),
+            ip=_ip(request),
+            remote=False,
+        )
+    except features_admin.FeatureNotInstalled:
+        # The core lists no add-on feature, so its toggle reads as a missing page.
+        return _error_page(request, 404, "Not found.")
     # The Features card's in-place switch (settings.html) posts the SAME form via fetch
     # with this header and patches the card without a reload; it gets the outcome as
     # JSON. The plain form post (no JS) keeps the redirect below, byte-for-byte.
@@ -2843,7 +2838,7 @@ def audit_export(request: Request, actor: str = "", action: str = "", since: str
             )
         if since_dt.tzinfo is not None:
             # AuditLog.ts is stored naive-UTC; normalize before comparing
-            since_dt = since_dt.astimezone(timezone.utc).replace(tzinfo=None)
+            since_dt = since_dt.astimezone(UTC).replace(tzinfo=None)
     # log the export itself first, so the event ships in the export when it matches
     audit.log(
         actor=getattr(me, "email", "system"),

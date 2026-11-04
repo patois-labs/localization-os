@@ -129,6 +129,9 @@ migration authority, and the transaction mechanics.
 | Bookkeeping capacity | `app/services/bookkeeping.py::session` and `app/services/bookkeeping.py::scope` | Pooled sessions with headroom, otherwise the unbounded blocking emergency engine; bookkeeping never takes operator request relief permits. |
 | Pool-wait budget | `app/db.py::_BudgetedQueuePool` · `app/db.py::begin_pool_budget` · `app/db.py::pool_budget_spent` · `app/db.py::pool_has_no_capacity` | One checkout timeout per request however many queries it runs, the per-request scope the middleware opens, the signal an error renderer reads to skip a database-backed page, and the non-blocking "the pool has nothing left" read the doorman sheds on. |
 | Write-contention law | `app/db.py::commit_with_retry` · `app/db.py::commit_launch` · `app/db.py::commit_or_shed` · `app/db.py::WriteContentionError` | Bounded retry, the launch-path retryable error, and the shed-a-row posture. |
+| Postgres conflict retry | `app/db.py::is_retryable_conflict` · `app/db.py::retry_conflicts` · `app/db.py::lock_rows_in_order` · `app/db.py::conflict_retry_pause` | A Postgres deadlock (40P01) or serialization failure (40001) re-runs the whole transaction, at most 3 tries with 20-80 ms jitter; multi-row writers lock their rows in id order first (`SELECT ... FOR UPDATE ORDER BY id`, no SQL on SQLite). Applied to the TMX import's chunk writes (tm-and-glossary; Postgres only, SQLite unchanged): the chunk's existing rows are locked in order, and a deadlock on rows another writer inserted meanwhile is caught by the retry. |
+| Postgres plan reuse | `app/db.py::_plan_reuse_connection_class` · `app/db.py::_install_plan_reuse` · `app/db.py::_plan_safe` | Pooled psycopg connections keep their prepared statements across the ROLLBACK that ends every checkout (ADR 0109), so Postgres stops planning every statement of every request; a failed transaction, rolled-back DDL or a rollback to savepoint still clears them as stock psycopg does. Postgres through psycopg only. |
+| Cross-process live events | `app/services/events.py::publish` · `app/services/events.py::subscribe` · `app/models.py::LiveEvent` | One event bus for every process (ADR 0110): Postgres LISTEN/NOTIFY over one dedicated listen connection per process, SQLite a `liveevent` table polled with an id cursor. No SSE stream uses it yet. |
 | Org-confinement assertion | `app/db.py::_assert_org_confinement_invariant` | The boot-time data-law check on the root org, all backends. |
 | Id + name coercion | `app/services/ids.py::coerce_id` · `app/services/ids.py::clean_name` · `app/services/ids.py::InvalidNameError` | The id/name coercion law surfaces route request ids and names through: some call it directly, others through a module-local `_coerce_id`. |
 | Data retention | `app/services/retention.py::purge` · `app/services/retention.py::delete_document` · `app/services/retention.py::tick` | Ages uploads, terminal jobs, TM and memory; preserves live jobs, catalogue content and TM matching surviving document sources. |
@@ -185,6 +188,22 @@ migration authority, and the transaction mechanics.
   backups still require their own disposal policy. Implementation:
   `app/services/retention.py::delete_document`, `app/services/document_erasure.py`;
   regression coverage: `verify_document_erasure`.
+- **Live events (`liveevent`, ADR 0110).** `app/services/events.py` publishes to and fans out
+  from one bus per process. On SQLite every event is a `liveevent` row; each process with a
+  subscriber polls it every 250 ms with an id cursor (the table is `sqlite_autoincrement`, so
+  ids never go backwards after the retention sweep, which deletes rows older than 10 minutes).
+  On Postgres events travel by `NOTIFY loc_tms_events` and only payloads over 7000 bytes are
+  stored, the NOTIFY carrying the row id. A subscription sees events published after it
+  started, per channel in order, once each; `publish(..., session=s)` goes out only when that
+  transaction commits. The table is pure infrastructure: excluded from data export.
+- **Write conflicts on Postgres.** Callers wrap a whole transaction in
+  `app/db.py::retry_conflicts` (the function must be safe to re-run from the top: no provider
+  calls or events before its commit). `sqlite_locks=False` keeps a call site's SQLite
+  behavior byte-identical. Candidates still to convert in S3 proper: the orchestrator's per-step
+  segment writes and run/step status commits (`app/services/orchestrator.py`), the batch
+  dispatcher commits (`app/services/batch_runs_hub.py`), the glossary bulk sync
+  (`app/services/glossary_concepts_part3.py::_bulk_sync_glossary_from_entries`), approve-to-TM
+  upserts (`app/services/tm_common.py`), and `app/services/tm_module.py::bulk_delete`.
 - **Models:** `app/models.py` is the single declaration of every table, including
   `app/models.py::Setting` (the key/value store every setting reads and writes),
   `app/models.py::Job` (the background-job row, documented in jobs-and-scheduler), and
@@ -205,6 +224,12 @@ migration authority, and the transaction mechanics.
 - `verify_migrations`: the nullability parity between the model create-all and the Alembic
   head, and the `_ADDED_COLUMNS` registry guard that keeps the additive-column shim covered
   by a revision.
+- `verify_pg_conflict_retry`: conflict classification, the 3-try retry, the no-SQL SQLite lock
+  helper, the TMX chunk retry (Postgres conflicts only), and, with `LOC_TMS_TEST_PG_URL` set, a
+  real deadlock retried and ordered locks that avoid it.
+- `verify_live_events`: cross-process delivery within 2 s, a 200-event burst in order without
+  duplicates, channel isolation, commit-only delivery, oversized payloads and the retention
+  sweep, on SQLite and (with `LOC_TMS_TEST_PG_URL`) on Postgres.
 - `verify_write_contention`: the bounded commit retry and the retryable `WriteContentionError`
   the launch path surfaces instead of a 500.
 - `verify_nullability_selfheal`: the create-all self-heal that widens a legacy NOT NULL
@@ -235,6 +260,10 @@ migration authority, and the transaction mechanics.
 - **Single-node by design.** The default SQLite install is one process with WAL readers;
   the multi-instance story is Postgres plus the durable job queue (jobs-and-scheduler), and
   cross-node coordination beyond that is out of scope.
+- **Live events are not durable.** A Postgres listen connection that drops misses the events
+  published until it reconnects, a subscriber whose buffer fills (10,000 events) drops the
+  oldest and counts them, and SQLite rows are swept after 10 minutes. Subscribers treat an
+  event as "look again" and re-read state from the database.
 - **A legacy pre-Alembic SQLite DB cannot receive non-additive migrations.** The self-heal
   fallback applies additive columns and nullability widening only; the operator is told to
   back up, delete, and rebuild under Alembic to make it authoritative, stated in

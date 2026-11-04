@@ -146,7 +146,7 @@
       "step_workflow_desc": "Automatisieren Sie Übersetzung, Review und QA als wiederverwendbaren Graphen.",
       "step_workflow_cta": "Workflow erstellen",
       "step_provider_title": "Anbieter verbinden",
-      "step_provider_desc": "Fügen Sie einen API-Schlüssel hinzu, um live zu gehen. Bis dahin ist die Übersetzung gesperrt; wählen Sie für eine Offline-Demo unter „KI einrichten“ Mock.",
+      "step_provider_desc": "Fügen Sie einen API-Schlüssel hinzu, um mit einer echten Engine zu übersetzen. Bis dahin übersetzt die Offline-Engine Mock, sodass Sie jeden Schritt ausprobieren können.",
       "step_provider_cta": "KI einrichten",
       "showme": "Zeig mir",
       "spot_cta_hint": "Dies öffnet den echten Bildschirm dafür - bereit?",
@@ -249,7 +249,7 @@
     },
     "jobs": {
       "title": "Ausführungsverlauf",
-      "intro": "Ein chronologisches Protokoll aller Hintergrundaufträge und Workflow-Läufe – wie ein Audit-Log, nur für Ausführungen. Neueste zuerst. Unterbrochene Aufträge werden beim Neustart als fehlgeschlagen markiert.",
+      "intro": "Ein chronologisches Protokoll aller Hintergrundaufträge und Workflow-Läufe – wie ein Audit-Log, nur für Ausführungen. Neueste zuerst. Aufträge und Läufe, die ein Neustart unterbrochen hat, werden wieder aufgenommen.",
       "col_type": "Typ",
       "col_id": "#",
       "col_kind": "Art / Workflow",

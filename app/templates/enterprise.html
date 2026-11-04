@@ -4,12 +4,10 @@
 {% block content %}
 
 {% set header_meta %}
-  <p class="muted">The one place to turn on OpenTelemetry, Prometheus <code>/metrics</code>,
-  SAML SSO, SCIM provisioning, PII named-entity redaction, the durable job queue, and
-  S3-compatible storage. Each runs a <strong>preflight</strong> against your proposed
-  configuration <em>before</em> the write, so a missing library or a bad endpoint is caught
-  here instead of at the next restart. <strong>All seven take effect at boot - restart the
-  server after enabling.</strong></p>
+  <p class="muted">The one place to turn on the infrastructure features below. Each runs a
+  <strong>preflight</strong> against your proposed configuration <em>before</em> the write,
+  so a missing library or a bad endpoint is caught here instead of at the next restart.
+  <strong>All of them take effect at boot - restart the server after enabling.</strong></p>
   {% if saved and saved != 'preflight' %}<p class="ok">{{ saved }}</p>{% endif %}
   {# a11y T7: ?error= renders once, as a sentence, in the page error summary at the top
      of main (base.html + _form_errors.html). #}

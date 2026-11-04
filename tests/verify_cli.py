@@ -2089,6 +2089,7 @@ def test_workflow_show_reveals_stored_step_config():
             "--adaptive-window",
             "4",
             "--doc-context-prepass",
+            "--tm-examples",
             "--tm-examples-window",
             "2",
         ]

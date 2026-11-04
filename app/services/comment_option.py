@@ -36,6 +36,11 @@ Documented in: docs/architecture/content-and-projects.md
 
 from __future__ import annotations
 
+from sqlalchemy import text
+
+# The one-row read, built once per process (a text() built per call is parsed and keyed each time).
+_STORED_STMT = text("SELECT value FROM setting WHERE key = :k")
+
 SETTING_PREFIX = "translate_comments"
 
 #: The formats whose filters take the option (canonical fmt names). DOCX is the only one
@@ -48,17 +53,39 @@ def _key(project) -> str:
     return f"{SETTING_PREFIX}:{getattr(project, 'id', project)}"
 
 
-def stored(project) -> str | None:
-    """ "1", "0", or None when the project has no row (a pre-option project)."""
-    from app.services import settings
+def stored(project, session=None) -> str | None:
+    """ "1", "0", or None when the project has no row (a pre-option project).
 
+    Read straight from the row, not through the settings read-through cache (S7b round 2,
+    ADR 0101): a per-project key is read once per import, so the one-row read is cheap and
+    always current, and project creation then has no cross-process cache to invalidate. It
+    used to bump the global settings version on EVERY project create, which made every web
+    and worker process drop its whole settings cache and re-run apply_to_config."""
     pid = getattr(project, "id", project)
     if pid is None:
         return None
     try:
-        raw = settings.get(_key(pid), None)
+        if session is not None:
+            # S9: a request that already holds a session reads the row on ITS connection (the
+            # same statement, without a second pool checkout and BEGIN/ROLLBACK).
+            raw = session.connection().execute(_STORED_STMT, {"k": _key(pid)}).scalar()
+        else:
+            from app.db import engine
+
+            with engine.connect() as cx:
+                raw = cx.execute(
+                    text("SELECT value FROM setting WHERE key = :k"), {"k": _key(pid)}
+                ).scalar()
     except Exception:
-        return None
+        # Gate LOW-3: a failed direct read (pool exhausted, a transient error) falls back to
+        # the settings read the option always used, never straight to "no row" (which would
+        # import a stamped-off project's Word comments).
+        try:
+            from app.services import settings
+
+            raw = settings.get(_key(pid), None)
+        except Exception:
+            return None
     if raw is None:
         return None
     raw = str(raw).strip()
@@ -74,12 +101,13 @@ def enabled_for(project, fmt: str) -> bool:
     return (fmt or "").lower() in LEGACY_ON_FORMATS
 
 
-def status(project) -> dict:
+def status(project, session=None) -> dict:
     """The read-back every surface reports: `translate_comments` (bool, what new imports
     of non-Word formats do), `translate_comments_word` (bool, Word) and
     `translate_comments_source` ("project" = switched explicitly, "legacy" = a project
-    from before the option: Word on, the rest off)."""
-    value = stored(project)
+    from before the option: Word on, the rest off). `session`: the caller's open session, so
+    the read shares its connection (see stored)."""
+    value = stored(project, session)
     if value is None:
         return {
             "translate_comments": False,
@@ -133,9 +161,9 @@ def stamp_new_project(project, session) -> None:
     write session: a caller may still hold a write transaction (a savepoint-wrapped
     service call, a request session with pending writes), and on SQLite a second writer
     then waits on the first one in the same thread until "database is locked" (the QA-1
-    geometry `settings.forget` documents). The cross-process settings version is bumped
-    in the same transaction, as `settings.set_many` and `ledger_controls` do, so other
-    processes drop any cached value for a reused project id."""
+    geometry `settings.forget` documents). No cross-process settings version bump: `stored`
+    reads the row directly, so no process can serve a cached value for a reused project id
+    (S7b round 2: the bump made every process reload all settings on each project create)."""
     from app.models import Setting
     from app.services import settings
 
@@ -151,7 +179,6 @@ def stamp_new_project(project, session) -> None:
         session.flush()
     session.add(Setting(key=name, value="0"))
     session.flush()
-    settings._bump_version(session)
     session.commit()
     settings.forget([name])
     if project is not pid:

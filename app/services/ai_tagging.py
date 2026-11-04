@@ -247,8 +247,25 @@ def restore(text: str | None, mapping: dict) -> tuple[str, bool]:
     # the exact generated bodies are matched, so a fixed-shape `«TAG_1»` stays untouched.
     # ONE pass over the text, so a restored `⟦g1⟧` is never rescanned: a later per-token
     # pass used to take its `⟧` as the frame of the next sentinel (`⟦g1⟦/g1⟧`).
+    #
+    # Speed (engine S5 profile: ~11% of a job's CPU was compiling a per-call pattern): when
+    # every generated-shape body in the text is one of this call's, the generic body
+    # `_RESTORE_BODY` matches exactly where the per-call alternation would, so the pattern
+    # compiled once below gives a byte-identical result. A foreign body (an id we never
+    # issued, another call's nonce) must NOT be matched: its frame could swallow the
+    # delimiter of a real sentinel beside it (`«TAG…_9«TAG…_1»`). Such text is the rare
+    # residual path and keeps the per-call pattern. tests/verify_ai_tagging_restore_parity.py
+    if all(_RESTORE_BODY_FULL.fullmatch(x) for x in present) and all(
+        m.group(0) in bodies for m in _RESTORE_BODY_RE.finditer(out)
+    ):
+        return _restore_sub(_RESTORE_RE, _RESTORE_BODY_RE, bodies, out)
     b = "(?:" + "|".join(re.escape(x) for x in sorted(present, key=len, reverse=True))
     b += r")(?!\d)"
+    return _restore_sub(re.compile(_restore_pattern(b)), re.compile(b), bodies, out)
+
+
+def _restore_pattern(b: str) -> str:
+    """The frame alternation of `restore` around the body pattern `b`."""
     d = f"[{re.escape(_DELIMS)}]"
     alts = []
     # #684: a doubled ASCII frame (`{{TAG…}}`) is one frame, tried first so the single-
@@ -261,15 +278,26 @@ def restore(text: str | None, mapping: dict) -> tuple[str, bool]:
     # #726: one side / none. The side groups are matched only to SEE a one-sided frame
     # (left untouched below); a delimiter that opens the NEXT sentinel is not this one's.
     alts.append(rf"(?P<pre>{d}\s*)?{b}(?P<suf>\s*{d}(?!\s*TAG[0-9a-f]{{6,}}_))?")
-    body_re = re.compile(b)
+    return "|".join(alts)
 
+
+def _restore_sub(pattern: re.Pattern, body_re: re.Pattern, bodies: dict, out: str):
     def _sub(m: re.Match) -> str:
         if m.group("pre") or m.group("suf"):
             return m.group(0)  # one-sided frame: ambiguous, stays a residual (review)
         return bodies[body_re.search(m.group(0)).group(0)]
 
-    out = re.sub("|".join(alts), _sub, out)
+    out = pattern.sub(_sub, out)
     return out, bool(_GEN_RESIDUAL_RE.search(out))
+
+
+# The generic body of a generated sentinel (`mask`: lowercase hex nonce, decimal id). Hex and
+# digits stop at `_` and at the guard, so it matches one extent at a position, as each exact
+# body of the per-call alternation does.
+_RESTORE_BODY = r"TAG[0-9a-f]{6,}_\d+(?!\d)"
+_RESTORE_BODY_RE = re.compile(_RESTORE_BODY)
+_RESTORE_BODY_FULL = re.compile(r"TAG[0-9a-f]{6,}_\d+")
+_RESTORE_RE = re.compile(_restore_pattern(_RESTORE_BODY))
 
 
 def has_residual_sentinel(text: str | None, source: str | None = None) -> bool:

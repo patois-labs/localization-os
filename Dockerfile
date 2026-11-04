@@ -21,8 +21,9 @@
 #   .venv\Scripts\python.exe scripts\pin_base_images.py --check  (exit 1 while unpinned)
 # See docs/DEPLOY.md, "Base image pins". tests/verify_docker_image.py holds the shape.
 # ---------------------------------------------------------------------------
-ARG PYTHON_BASE=python:3.13-slim@sha256:bf44cdfcb76cd3b41e879bc058fc37ec5872002ccfde7fcb765e218cde0cd79c
-ARG TAILSCALE_BASE=tailscale/tailscale:v1.102.5@sha256:c507f3a2a6ab1cabd8d809b98edeb41edbd5c3fb6ad9632ffd098b4c7d0b4065
+ARG PYTHON_BASE=python:3.13-slim@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962
+ARG TAILSCALE_BASE=tailscale/tailscale:v1.104.2@sha256:b11583ad2e93e4671128538c88cf11f460444a5d7e449311dd1933a400ab849d
+ARG RUST_BASE=rust:1.94.1-slim-trixie@sha256:cf09adf8c3ebaba10779e5c23ff7fe4df4cccdab8a91f199b0c142c53fef3e1a
 
 # ---------------------------------------------------------------------------
 # Stage 1 - builder: create a self-contained venv with all requirements.
@@ -119,6 +120,48 @@ RUN case "$WITH_SQLCIPHER" in \
     esac
 
 # ---------------------------------------------------------------------------
+# Native hot paths (ADR 0091): locos_native, the Rust twins of four pure text functions
+# (tm_common.normalize / hash_text, quality_common.tag_damage, the built-in sentence splitter).
+# The module reads CPython's own string storage, so it is built against THIS image's Python
+# (same PYTHON_BASE as the runtime) and dropped into the venv. The app keeps the Python
+# functions when the module is missing or was built for a different Python source, so
+#   --build-arg WITH_NATIVE=0   builds an image without it that behaves the same, only slower.
+# The toolchain is copied out of the digest-pinned official Rust image (no curl | sh), and
+# cargo fetches only what the committed Cargo.lock pins (--locked; cargo checks each crate's
+# checksum). ring (SHA-256) compiles a little C, hence gcc. Nothing from this stage but the
+# one .so file reaches the runtime image.
+# ---------------------------------------------------------------------------
+FROM ${RUST_BASE} AS rust
+
+FROM ${PYTHON_BASE} AS native
+ARG WITH_NATIVE=1
+RUN mkdir -p /out && case "$WITH_NATIVE" in \
+        0|1) ;; \
+        *) echo "WITH_NATIVE must be 0 or 1, got '$WITH_NATIVE'" >&2; exit 1 ;; \
+    esac
+COPY --from=rust /usr/local/cargo /usr/local/cargo
+COPY --from=rust /usr/local/rustup /usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo \
+    RUSTUP_HOME=/usr/local/rustup \
+    PATH="/usr/local/cargo/bin:$PATH"
+RUN if [ "$WITH_NATIVE" = 1 ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends gcc libc6-dev \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+WORKDIR /native
+COPY native/locos_native/Cargo.toml native/locos_native/Cargo.lock ./
+COPY native/locos_native/src ./src
+# Build, then prove the module imports under this Python and carries this Python's Unicode
+# tables (the loader refuses it otherwise) before it is handed to the runtime stage.
+RUN if [ "$WITH_NATIVE" = 1 ]; then \
+        PYO3_PYTHON=/usr/local/bin/python3 cargo build --release --locked \
+        && suffix="$(python3 -c 'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))')" \
+        && cp target/release/liblocos_native.so "/out/locos_native${suffix}" \
+        && PYTHONPATH=/out python3 -c "import locos_native, unicodedata; assert locos_native.UNIDATA_VERSION == unicodedata.unidata_version, 'unicode tables'; print('locos_native', locos_native.__version__)"; \
+    fi
+
+# ---------------------------------------------------------------------------
 # Tailscale binaries (OPT-IN private egress to a model server on your own network).
 # We COPY the static `tailscale` + `tailscaled` binaries out of the official
 # image into our runtime below. They ship in EVERY build but do NOTHING unless
@@ -187,6 +230,12 @@ RUN if [ "$WITH_SQLCIPHER" = 1 ]; then \
     fi
 
 COPY --from=builder /opt/venv /opt/venv
+# The native module (empty when built with WITH_NATIVE=0; see the native stage). The import check
+# fails the build if a Python bump moved site-packages away from this path (the app would
+# otherwise fall back to Python silently).
+ARG WITH_NATIVE=1
+COPY --from=native /out/ /opt/venv/lib/python3.13/site-packages/
+RUN if [ "$WITH_NATIVE" = 1 ]; then /opt/venv/bin/python -c "import locos_native"; fi
 
 # The running image never installs packages (the locks were installed in the builder), so
 # pip is removed from both the base's system Python and the copied venv. pip 26.2.1, the
@@ -272,6 +321,10 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/health || exit 1
 
+# LOC_TMS_WORKER_PROCESSES=N (default 0 = one process, role all) makes the entrypoint run
+# this command as the web process (LOC_TMS_ROLE=web) next to N `python -m app.worker`
+# processes (LOC_TMS_ROLE=worker). Give `docker stop` a grace period above
+# LOC_TMS_DRAIN_SECONDS + 10 then (docs/guides/postgres-migration.md).
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 # Default command: production uvicorn, NO reload. The entrypoint execs this.
 #

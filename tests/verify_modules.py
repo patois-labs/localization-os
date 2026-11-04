@@ -190,7 +190,10 @@ from tests import _routes
 #: (/memories/draft, /evaluations/draft), which ship with the paid add-ons. No other row moved.
 #: Bumped 2026-10-19 (public 1.0.0): the terminology_concept_editor description lost its internal
 #: spec label. Copy only; no field, flag or route changed.
-_FEATURES_DIGEST = "ab319d8410683d71e93c93749bbffc45ee7d0e3b10b9e5c9123005106bae3e29"
+#: Bumped 2026-11-03 (1.1.0, ADR 0102 leverage report): the `vendors` row's cross_reach_allow lost
+#: three entries (app/web/queries.py, app/cli/cmd_project_part2.py, app/web/api_cli_projects_1.py)
+#: because they no longer import vendor_cost; app/services/leverage.py now owns the leverage seam.
+_FEATURES_DIGEST = "79a8c9047e9b54ac559409132d57fbf8141c1de786e565560e8a0be962145228"
 
 #: The pre-migration router grouping: group -> ordered (submodule, attr) the three hand lists
 #: in app/web/__init__.py used to carry. router_groups() must resolve exactly these, in order.

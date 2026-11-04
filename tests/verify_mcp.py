@@ -319,7 +319,7 @@ def level2(base_url: str, docs_key: str, out_dir: str) -> None:
         names = asyncio.run(guarded())
         print(f"  level 2 (stdio protocol): spawned server, list_tools -> {names}")
         print("  level 2: call_tool('list_capabilities') round-tripped over stdio")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         print("  SKIP level 2: stdio round-trip timed out (guarded, suite continues)")
     except Exception as e:
         print(f"  SKIP level 2: stdio protocol not exercised ({type(e).__name__}: {e})")

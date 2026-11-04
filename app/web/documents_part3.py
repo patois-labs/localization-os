@@ -3,11 +3,15 @@
 Documented in: docs/architecture/translation-pipeline.md
 """
 
+import contextlib
 import logging
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import JSONResponse
-from sqlmodel import Session
+from sqlalchemy import and_, bindparam, exists, func
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import aliased
+from sqlmodel import Session, select
 
 from app import db
 from app import extensions as _extensions
@@ -19,10 +23,15 @@ from app.kernel import (
     segment_review,
 )
 from app.models import (
+    Customer,
     Document,
+    Project,
+    RunStatus,
     Segment,
+    SegmentPostEdit,
     SegStatus,
     TransMode,
+    WorkflowRun,
 )
 from app.web.deps import (
     _actor_email,
@@ -53,6 +62,34 @@ def _same_text(posted: str, stored: str | None) -> bool:
     return norm(posted) == norm(stored or "")
 
 
+def _scope_and_episode():
+    """The changed save's one observer read (see segment_save), after the save's commit: the
+    document's project, that project's customer and the segment's newest post-edit episode (an
+    outer join on the highest episode_seq, so no episode yet answers None). It replaces the
+    memory capture's scope SELECT and the post-edit capture's last-episode SELECT. Kept out of
+    the save's first statement on purpose: Postgres plans every statement afresh here (the
+    pool's reset rollback discards psycopg's prepared statements), and a six-table first
+    statement made every UNCHANGED save (the editor posts on every blur) pay that planning."""
+    newest = aliased(SegmentPostEdit)
+    return (
+        select(Project, Customer, SegmentPostEdit)
+        .select_from(Document)
+        .outerjoin(Project, Project.id == Document.project_id)
+        .outerjoin(Customer, Customer.id == Project.customer_id)
+        .outerjoin(
+            SegmentPostEdit,
+            and_(
+                SegmentPostEdit.segment_id == bindparam("seg_id"),
+                SegmentPostEdit.episode_seq
+                == select(func.max(newest.episode_seq))
+                .where(newest.segment_id == bindparam("seg_id"))
+                .scalar_subquery(),
+            ),
+        )
+        .where(Document.id == bindparam("doc_id"))
+    )
+
+
 @router.post("/segments/{seg_id}/save")
 def segment_save(
     seg_id: int,
@@ -62,10 +99,38 @@ def segment_save(
     confirm: str = Form(""),
     session: Session = Depends(get_session),
 ):
-    seg = session.get(Segment, seg_id)
+    # S9: the segment, its document and "is a run parked on a review step for this document
+    # and locale" in ONE statement (they were three round trips). The outer join keeps an
+    # orphan segment (no document row) answering exactly as before; the EXISTS is the same
+    # predicate `orchestrator.waiting_human_review` starts with, so when it is false that
+    # function would have returned None without further reads, and when it is true the
+    # function still runs (below, after the visibility gate) and decides.
+    _row = session.exec(
+        db.prebuilt(
+            "documents_part3.segment_document_paused",
+            lambda: (
+                select(
+                    Segment,
+                    Document,
+                    exists().where(
+                        WorkflowRun.document_id == Segment.document_id,
+                        WorkflowRun.target_locale == Segment.target_locale,
+                        WorkflowRun.status == RunStatus.PAUSED,
+                    ),
+                )
+                .outerjoin(Document, Document.id == Segment.document_id)
+                .where(Segment.id == bindparam("seg_id"))
+            ),
+        ),
+        params={"seg_id": seg_id},
+    ).first()
+    seg, doc, _maybe_paused = _row if _row is not None else (None, None, False)
     if not seg:
         return _missing_or(request, session, JSONResponse({"ok": False}, status_code=404))
-    doc = session.get(Document, seg.document_id)
+    if doc is not None:
+        # S9: the fmt lookup `placeholder_violation` makes is answered from the row just loaded
+        # (same session, same transaction) instead of a second SELECT of `document.fmt`.
+        session.info.setdefault("quality_doc_fmt_703", {})[doc.id] = doc.fmt
     blocked = _visibility_block(request, session, doc.project_id if doc else None)
     if blocked:
         return blocked
@@ -79,7 +144,7 @@ def segment_save(
     # #617 item 4: while a run waits on a human review step the editor is read-only; refuse the
     # write here too (a stale tab or a script), after the visibility gate so it is no oracle.
 
-    if segment_review.awaiting_review_run(session, seg) is not None:
+    if _maybe_paused and segment_review.awaiting_review_run(session, seg) is not None:
         return JSONResponse(
             {
                 "ok": False,
@@ -135,7 +200,8 @@ def segment_save(
                 "ok": True,
                 "status": seg.status,
                 # Nothing changed, so the editor leaves the row's origin chip ("TM" for a
-                # 100% TM fill, which is stored as status "mt") exactly as it is.
+                # 100% TM fill, which is stored as status "mt") exactly as it is. A stored
+                # legacy lock_band "fuzzy" (ADR 0102) is not a TM fill: it stays an MT chip.
                 "unchanged": True,
                 "tm_fill": bool(
                     seg.status == SegStatus.MT
@@ -266,35 +332,114 @@ def segment_save(
 
         tm_lock.clear_lock_on_human_edit(session, seg, actor=_actor_email(request), ip=_ip(request))
     session.add(seg)
-    session.commit()
+    # S7d: the rows this request just wrote stay loaded across its own commit.
+    # Everything below (the LLMemory and post-edit captures, the response) reads the segment
+    # and its document; with the default expiry each read re-SELECTed a row this request had
+    # just committed (the document with its whole skeleton). Nothing here has a
+    # server-side default or trigger, so the loaded values ARE the committed values.
+    expire = session.expire_on_commit
+    session.expire_on_commit = False
+    try:
+        session.commit()
+    finally:
+        session.expire_on_commit = expire
     # LLMemory capture seam 1, continued. ONLY when the text ACTUALLY CHANGED: the
     # editor posts this endpoint on approve/confirm too, and an approve-without-edit is
-    # a reviewer saying "this was already right" — recording it as a correction would
+    # a reviewer saying "this was already right" -- recording it as a correction would
     # feed the distiller identical before/after pairs and dilute its evidence
     # thresholds. `record_segment_edit` re-checks the no-op itself (defence in depth),
     # and is a hard no-op when `llmemory_capture_enabled` is off, so this line adds no
     # behaviour to an install with the switch down. Guarded: capture is an OBSERVER of
-    # the save, never a participant — a memory failure must not turn a committed save
+    # the save, never a participant -- a memory failure must not turn a committed save
     # into a 500 for the reviewer.
+    #
+    # S9: both observers (the memory event and the post-edit episode) write in ONE
+    # transaction after the save's own commit, not one each. Invariants kept:
+    #   * the save is already committed, so neither observer can fail it (every failure
+    #     below is caught and logged; a shed commit drops the observers, never the save);
+    #   * a memory event is only written for a save that committed (it is staged AFTER the
+    #     save's commit);
+    #   * the post-edit capture runs in its own SAVEPOINT (`capture_guarded`), so a failed
+    #     episode write rolls back only the savepoint and the staged memory event is still
+    #     committed; a memory-event failure is rolled back and caught BEFORE the post-edit
+    #     capture runs, so the episode is still recorded;
+    #   * a transient writer lock retries the shared commit with BOTH rows re-staged
+    #     (`commit_with_retry` expunges pending INSERTs on its rollback); a persistent lock
+    #     sheds both rows together (before, each had its own shed; under sustained
+    #     contention both would be lost anyway, and the save is unaffected either way);
+    #   * a lock at the memory-event INSERT itself (where SQLite WAL raises it) falls back
+    #     to the event's own bounded commit_or_shed, as before S9.
     if (seg.target_text or "") != _mem_before:
+        _mem_ev = None
+        # Save path (2026-10-26): ONE read for both observers (`_scope_and_episode`), after the
+        # save's commit like the two reads it replaces, so the episode is as fresh as before.
+        # Inside the guarded block: a failed read is logged and costs the memory event, as a
+        # failed scope read inside the memory capture did; the post-edit capture then reads
+        # its last episode itself.
+        # A rollback below expires the prefetched episode, so it is only handed to the
+        # post-edit capture while no rollback has happened (gate r1 LOW-3). A missing project
+        # row (should not happen) leaves the memory capture to resolve its own scope.
+        _scope = None
+        _pe_prefetch = {}
         try:
-            llmemory.record_segment_edit(
-                session, seg, _mem_before, seg.target_text or "", actor=_actor_email(request)
+            if doc is not None:
+                _obs = session.exec(
+                    db.prebuilt(
+                        "documents_part3.save_scope_and_episode", lambda: _scope_and_episode()
+                    ),
+                    params={"seg_id": seg.id, "doc_id": doc.id},
+                ).first()
+                if _obs is not None:
+                    _proj, _cust, _pe_last = _obs
+                    if doc.project_id is None or _proj is not None:
+                        _scope = llmemory.scope_from_rows(doc, _proj, _cust)
+                    _pe_prefetch = {"prefetched_last": _pe_last}
+            _mem_ev = llmemory.record_segment_edit(
+                session,
+                seg,
+                _mem_before,
+                seg.target_text or "",
+                actor=_actor_email(request),
+                stage_only=True,
+                scope=_scope,
             )
+            if _mem_ev is not None:
+                try:
+                    session.flush()
+                except OperationalError as exc:
+                    # Gate round 1: on SQLite (WAL) the writer lock is taken at the INSERT,
+                    # i.e. HERE, not at the commit. Before S9 that INSERT ran inside the
+                    # event's own commit_or_shed and rode out a transient lock; so on a lock
+                    # fall back to exactly that (own bounded retry, own shed + WARN) and let
+                    # the post-edit row take its own commit below.
+                    if not db.is_locked_error(exc):
+                        raise
+                    _ev, _mem_ev = _mem_ev, None
+                    session.rollback()
+                    _pe_prefetch = {}
+                    if not db.commit_or_shed(
+                        session, stage=lambda: session.add(_ev), keep_loaded=True
+                    ):
+                        _logger.warning(
+                            "llmemory: DROPPED a segment_edit event under sustained write "
+                            "contention (bounded retry exhausted; capture degraded, the host "
+                            "is unaffected)"
+                        )
         except Exception:
             _logger.warning("llmemory: segment_edit capture failed", exc_info=True)
-        # Post-edit capture seam 1 (SPEC-wave2 §3.2.4) — an in-house CAT save. Runs AFTER
+            _mem_ev = None
+            _pe_prefetch = {}
+            with contextlib.suppress(Exception):  # best effort; the save is already committed
+                session.rollback()
+        # Post-edit capture seam 1 (SPEC-wave2 sec 3.2.4) -- an in-house CAT save. Runs AFTER
         # the llmemory call so that call's ordering is byte-identical, and inside the
         # change-gated branch so a no-op approve records nothing. `capture_guarded` is
-        # savepoint-wrapped (never raises, never poisons this committed session — the
-        # llmemory capture that just ran is likewise protected). This seam runs POST-commit
-        # (the seg save committed at :1057) and the llmemory switch may be off (no commit of
-        # its own), so the PE row needs its OWN commit here — but through `commit_or_shed`
-        # (gate H2), NOT a bare commit: a writer-lock on a bare commit would 500 the request
-        # AFTER the save already committed, violating invariant 6 (capture never fails a
-        # committed save). `commit_or_shed` sheds a transient lock and drops only the PE row.
-        # unit_kind follows the document mode (L4). Only the SEGMENTED CAT save is web-only
-        # (§6); full-text + vendor post-edits are captured on every surface.
+        # savepoint-wrapped (never raises, never poisons this committed session). Shed
+        # through `commit_or_shed` (gate H2), NOT a bare commit: a writer-lock on a bare
+        # commit would 500 the request AFTER the save already committed, violating invariant
+        # 6 (capture never fails a committed save). unit_kind follows the document mode (L4).
+        # Only the SEGMENTED CAT save is web-only (sec 6); full-text + vendor post-edits are
+        # captured on every surface.
         pe_row = postedit.capture_guarded(
             session,
             segment=seg,
@@ -307,21 +452,39 @@ def segment_save(
             pre_status=_pe_pre_status,
             tm_match_pct=_pe_pre_tm_pct,
             lock_band=_pe_pre_lock_band,
+            **_pe_prefetch,
         )
+        _staged = [r for r in (_mem_ev, pe_row) if r is not None]
         # M5: pass a `stage=` re-add. commit_with_retry's rollback on a transient lock
-        # EXPUNGES the pending PE INSERT (db.py:1289-1297), so a bare re-commit would
-        # persist NOTHING while returning True (silent loss). Re-staging the row makes the
-        # retry re-apply it — the llmemory._add_event pattern. keep_loaded keeps its PK
-        # readable without a follow-up SELECT that could itself lose the lock. (A rare
-        # continuation-episode UPDATE that loses the writer lock re-adds the row but not the
-        # reverted in-memory increment — acceptable best-effort degradation; the row survives.)
-        if pe_row is not None and not db.commit_or_shed(
-            session, stage=lambda: session.add(pe_row), keep_loaded=True
+        # EXPUNGES the pending INSERTs (db.py:1289-1297), so a bare re-commit would persist
+        # NOTHING while returning True (silent loss). Re-staging the rows makes the retry
+        # re-apply them. keep_loaded keeps their PKs readable without a follow-up SELECT that
+        # could itself lose the lock. (A rare continuation-episode UPDATE that loses the writer
+        # lock re-adds the row but not the reverted in-memory increment -- acceptable
+        # best-effort degradation; the row survives.)
+        if _staged and not db.commit_or_shed(
+            session,
+            stage=lambda: [session.add(r) for r in _staged],
+            keep_loaded=True,
         ):
-            _logger.warning(
-                "postedit: segment-save PE capture may not have persisted "
-                "under sustained write contention (the save is unaffected)"
-            )
+            if pe_row is not None:
+                _logger.warning(
+                    "postedit: segment-save PE capture may not have persisted "
+                    "under sustained write contention (the save is unaffected)"
+                )
+            # The shared commit shed both rows. Before S9 the memory event had a commit of its
+            # own, so a lock that only the post-edit commit lost never cost the event: keep that
+            # (one more bounded attempt, for the event alone, only on this rare path).
+            _ev_shed = _mem_ev is not None
+            if _ev_shed and pe_row is not None:
+                _ev_shed = not db.commit_or_shed(
+                    session, stage=lambda: session.add(_mem_ev), keep_loaded=True
+                )
+            if _ev_shed:
+                _logger.warning(
+                    "llmemory: DROPPED a segment_edit event under sustained write contention "
+                    "(bounded retry exhausted; capture degraded, the host is unaffected)"
+                )
     return JSONResponse(
         {
             "ok": True,

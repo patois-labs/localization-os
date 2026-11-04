@@ -22,7 +22,7 @@ can delete without a manager.)
 Documented in: docs/architecture/tm-and-glossary.md
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
@@ -76,7 +76,7 @@ def _parse_date(raw):
         return None
     try:
         d = datetime.strptime(raw, "%Y-%m-%d")
-        return d.replace(tzinfo=timezone.utc).replace(tzinfo=None)
+        return d.replace(tzinfo=UTC).replace(tzinfo=None)
     except ValueError:
         return None
 

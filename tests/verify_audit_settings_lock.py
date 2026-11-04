@@ -192,6 +192,17 @@ def test_3_host_doors_force_their_rows():
     print("  [3] #220 config set / config apply force their rows; audit verify says AUDIT OFF")
 
 
+def _staged(session):
+    """The objects a commit_or_shed stage left in `session`: still-pending ones, the ones it
+    already flushed, and the audit rows of a group append. The group append (S9, WP-AUDIT) writes
+    its rows with one Core INSERT and records them as plain column dicts in
+    `session.info["audit_group_rows"]`; they are rebuilt here as AuditLog objects (in the TEST,
+    never in the locked section) so the stand-ins below keep asking the same question: does this
+    transaction carry an audit row?"""
+    rows = (AuditLog(**row) for row in session.info.get("audit_group_rows", ()))
+    return [*session.new, *session.identity_map.values(), *rows]
+
+
 def _shed_audit_inserts():
     """A commit_or_shed stand-in that sheds ONLY an audit-row insert (every other write
     commits normally): the writer lock never clears for the audit trail."""
@@ -200,7 +211,7 @@ def _shed_audit_inserts():
     def _fn(session, *, stage=None, attempts=_db.WRITE_RETRY_ATTEMPTS, keep_loaded=False):
         if stage is not None:
             stage()
-        if any(isinstance(o, AuditLog) for o in session.new):
+        if any(isinstance(o, AuditLog) for o in _staged(session)):
             session.rollback()
             return False
         return real(session, attempts=attempts, keep_loaded=keep_loaded)
@@ -522,7 +533,7 @@ def _shed_audit_inserts_after(n_ok: int):
     def _fn(session, *, stage=None, attempts=_db.WRITE_RETRY_ATTEMPTS, keep_loaded=False):
         if stage is not None:
             stage()
-        if any(isinstance(o, AuditLog) for o in session.new):
+        if any(isinstance(o, AuditLog) for o in _staged(session)):
             seen["n"] += 1
             if seen["n"] > n_ok:
                 session.rollback()
@@ -575,7 +586,9 @@ def test_10_write_after_row_sheds_to_a_clean_503():
     ):
         if stage is not None:
             stage()
-        if any(isinstance(o, AuditLog) and o.action == "POST /auth/login" for o in session.new):
+        if any(
+            isinstance(o, AuditLog) and o.action == "POST /auth/login" for o in _staged(session)
+        ):
             session.rollback()
             return False
         return real(session, attempts=attempts, keep_loaded=keep_loaded)

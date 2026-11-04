@@ -5,7 +5,7 @@ Documented in: docs/architecture/string-keys.md
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlmodel import Session, select
 
@@ -923,5 +923,5 @@ def parse_modified_after(raw) -> datetime:
         except ValueError as e:
             raise BadTimestampError(raw) from e
     if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        dt = dt.astimezone(UTC).replace(tzinfo=None)
     return dt

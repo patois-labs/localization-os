@@ -298,7 +298,8 @@ FEATURES: tuple[Feature, ...] = (
         title="Durable DB job queue",
         description=(
             "Dispatch background jobs through the durable, DB-backed queue (survives "
-            "restarts; the HA seam) instead of the in-memory queue. Takes effect at boot."
+            "restarts; the HA seam). On by default; turn it off to use the in-memory "
+            "queue. Takes effect at boot."
         ),
         setting_key="job_queue_backend",
         on_value="db",
@@ -353,6 +354,34 @@ def feature(key: str) -> Feature:
 
 def feature_keys() -> list[str]:
     return [f.key for f in FEATURES]
+
+
+#: Features whose adapter code ships in a paid add-on (the open core keeps the switch and an
+#: honest preflight, but does not list them while the add-on is absent).
+ADDON_OF: dict[str, str] = {
+    "otel": "enterprise_observability",
+    "metrics": "enterprise_observability",
+    "s3": "enterprise_s3",
+}
+
+
+def listed_features() -> list[Feature]:
+    """The features the panel and `enterprise status` list: every core feature, plus an
+    add-on feature only when its add-on is installed. `feature(key)` still resolves every key,
+    so an explicit enable of an add-on feature is refused by its preflight, not by a lookup."""
+    from app import editions
+
+    return [
+        f
+        for f in FEATURES
+        if f.key not in _UNLISTED
+        and (f.key not in ADDON_OF or editions.addon_installed(ADDON_OF[f.key]))
+    ]
+
+
+#: Resolvable but not listed: the database job queue is the default backend since 1.1
+#: (`job_queue_backend=db`), so it is no longer an enterprise turn-on.
+_UNLISTED = frozenset({"jobqueue"})
 
 
 # --------------------------------------------------------------------------- #
@@ -945,7 +974,7 @@ def status_rows() -> list[dict]:
     """The ``enterprise status`` / panel-load rows: each feature with its on/off state and
     OFFLINE preflight (no network). One place both surfaces read so they cannot drift."""
     rows = []
-    for f in FEATURES:
+    for f in listed_features():
         pf = preflight(f.key, run_network=False)
         rows.append(
             {

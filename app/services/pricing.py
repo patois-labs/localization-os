@@ -43,7 +43,7 @@ Documented in: docs/architecture/cost-and-budgets.md
 """
 
 import re
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 # (input_per_1m, output_per_1m) USD. The LONGEST key found as a substring of the
 # (lower-cased) model id wins (see rates_for), so a more-specific id beats its
@@ -272,7 +272,7 @@ _DATED: dict[str, tuple[date, tuple[float, float]]] = {
 
 
 def _today() -> date:
-    return datetime.now(timezone.utc).date()
+    return datetime.now(UTC).date()
 
 
 def rates_for(

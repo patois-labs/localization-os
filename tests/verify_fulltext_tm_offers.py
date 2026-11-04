@@ -187,12 +187,13 @@ def test_prompts():
             p, doc, wf = fixture(s, template)
             tm.write_back(s, p.id, "Save changes.", TARGET, "en-US", "fr-FR")
             tm.write_back(s, p.id, "Fresh sentences.", "Une phrase proche.", "en-US", "fr-FR")
-            fuzzy = tm.lookup_batch(s, p.id, ["Fresh sentence."], "en-US", "fr-FR", min_score=1)
-            assert 0 < fuzzy["Fresh sentence."]["match_pct"] < 100
-            step = orchestrator.get_steps(s, wf.id)[0]
-            step.tm_fill_threshold = 1
-            s.add(step)
-            s.commit()
+            # ADR 0102: the near-miss row ("Fresh sentences." vs "Fresh sentence.") never matches
+            # now (it used to be a <100 % fuzzy hit that a fill threshold of 1 could take), so
+            # the "no near match is offered" assertions below hold by construction.
+            assert (
+                tm.lookup_batch(s, p.id, ["Fresh sentence."], "en-US", "fr-FR")["Fresh sentence."]
+                is None
+            )
             summary, calls = run_capture(s, wf, doc)
             assert len(calls) == 1, calls
             prompt, payload = calls[0]

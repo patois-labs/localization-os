@@ -6,7 +6,7 @@ Documented in: docs/architecture/data-export.md
 import hashlib
 import hmac
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import and_, false, or_, true
 from sqlmodel import Session, select
@@ -176,7 +176,7 @@ def build_manifest(run_uuid, scope, history, counts, dropped, members, audit_sli
     # ``_write_audit_slice`` passes the real {included, rows, chain_verify} for a workspace dump.
     return {
         "manifest_schema": MANIFEST_SCHEMA,
-        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "app_version": _app_version(),
         "run_uuid": run_uuid,
         "scope": {
@@ -358,7 +358,8 @@ ENTITY_REGISTRY: tuple = (
         "parent_fk",
         parent_col="workflow_run_id",
         history="full",
-        scrub_cols=frozenset({"input_text", "output_text", "error"}),
+        # S1: `checkpoint` holds the run's working texts (ADR 0090); scrubbed like the texts.
+        scrub_cols=frozenset({"input_text", "output_text", "error", "checkpoint"}),
     ),
     Extractor(
         "memory_event",
@@ -848,6 +849,17 @@ EXPLICIT_EXCLUSIONS: dict = {
         "content and no tenancy column (the document it names is already deleted), so the "
         "reaper's own bookkeeping must not become an export surface. Operational state, "
         "like assistallowance/loginthrottle. Excluded."
+    ),
+    "liveevent": (
+        "Engine redesign S3 (ADR 0110): transient cross-process live-event bus rows (the "
+        "SQLite transport, and oversized Postgres NOTIFY payloads), swept after minutes. "
+        "Pure infrastructure, no record of content. Excluded."
+    ),
+    "sharedstate": (
+        "S3c (ADR 0097): transient cross-process state for N web processes -- rate-limit "
+        "window counters, consumed SAML assertion ids (replay guard) and short-lived "
+        "encrypted one-time values. Expires in minutes, swept. Not content of record. "
+        "Excluded."
     ),
 }
 

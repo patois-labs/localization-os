@@ -32,7 +32,7 @@ import shutil
 import sqlite3
 import tarfile
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.cli._common import same_file
@@ -327,7 +327,7 @@ def create_archive(dst_path: str, *, force: bool) -> dict:
 
         manifest = {
             "manifest_schema": MANIFEST_SCHEMA,
-            "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "created_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "app_version": app_version(),
             "backend": backend,
             "db_encryption": "sqlcipher" if config.DB_ENCRYPTION_ON else "",

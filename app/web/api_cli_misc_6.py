@@ -3,6 +3,8 @@
 Documented in: docs/architecture/surfaces-and-parity.md
 """
 
+from datetime import UTC
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from sqlmodel import Session
@@ -112,7 +114,7 @@ def api_audit_export(
         return b
     since_dt = None
     if since:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         parsed = None
         for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
@@ -133,7 +135,7 @@ def api_audit_export(
         # incremental cursor skipped or duplicated rows. Normalize like the memory
         # rollback endpoint (api_cli_memories.py) does.
         if parsed.tzinfo is not None:
-            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            parsed = parsed.astimezone(UTC).replace(tzinfo=None)
         since_dt = parsed
     cust = customer_id or None
     # #586: a customer-bound caller exports only its OWN customer's trail (no customer_id

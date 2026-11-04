@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "locos_native"
+version = "0.1.0"
+description = "Native (Rust) hot paths for Localization OS; optional, the app falls back to Python"
+requires-python = ">=3.10"
+
+[tool.maturin]
+# A plain extension module (no Python package): `import locos_native`.
+module-name = "locos_native"
+features = ["pyo3/extension-module"]

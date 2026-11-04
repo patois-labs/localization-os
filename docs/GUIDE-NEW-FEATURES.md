@@ -12,48 +12,9 @@ UI unless marked CLI. Written 2026-08-02, last content update 2026-08-04.
   **Check** (an LLM judge scores it - "LQA"), **Review** (a human looks at it),
   **TM match** (fill + lock exact translation-memory matches so later steps skip them),
   and **External** (dispatch the packaged text to a vendor and park the run until it returns).
-- **Memory** is the system's notebook about a customer: terminology decisions and
-  style rules it should keep applying. Some entries you write; some it learns from
-  corrections people make.
-- **The Evaluations Lab** is a sandbox for one question: *"which setup translates
-  better?"* You give it content, two or more setups, and it scores them side by side
-  and tells you if the difference is real.
 - **Engines** are the models that do the work. Your default local engine (set on the
   **Setup AI** page) is your local model (for example in LM Studio); any step that says provider
   "local" with no model pinned uses it.
-
----
-
-## Memory (LLMemory): teach it a rule
-
-**What it does:** when a Translate step runs, the system quietly adds up to two
-relevant terminology decisions and one style note into the prompt - scoped to that
-customer. That's the whole trick. You can see exactly what it injected (below).
-
-**Teach it something (1 minute):**
-1. Go to **Memories** in the nav. Pick the customer.
-2. Add a note. Two shapes matter:
-   - **Term decision** - "when the source says X, the translation uses Y".
-     Also how you say "never translate our product name": make X and Y the same
-     (e.g. `Acme Cloud → Acme Cloud`).
-   - **Tone/style rule** - free text, e.g. "Formal register: address the reader as
-     usted." Scope it to a project if it only applies there.
-3. That's it. Next run for that customer, if a segment's source contains the term,
-   the decision rides along.
-
-**See it working:** open **LLM Ledger** (admin) after a run - records with a
-"memory" chip show exactly which memories were injected into which segment's prompt.
-That chip is your proof it's on.
-
-**It also learns by itself:** when someone corrects a translation in the editor and
-saves, the before/after is captured as evidence. Run **distill** (Memories page
-button, or CLI `memory distill`) and it turns repeated, consistent corrections into
-new term decisions - which start life needing enough evidence, unlike your manual
-notes, which are trusted immediately.
-
-**Undo:** every memory has an **invalidate** button (kept but off) and a purge
-(gone). There's also a "roll back everything it learned since <date>" verb (CLI
-`memory invalidate-since`) if it picks up something bad.
 
 ---
 
@@ -97,55 +58,15 @@ On the workflow builder page, the graph is now editable:
 
 ---
 
-## Evaluations Lab: find out which setup is better
-
-**The loop is always the same:** dataset → candidates → run → compare → promote.
-
-1. **Dataset** = the content you test on.
-   - **Upload**: one segment per line; add a TAB + the known-good translation if you
-     have references (this unlocks the strong metrics like BLEU/chrF).
-   - **Snapshot a document**: copies a real document's segments (and current
-     translations as references) into the Lab. It's a frozen copy - later edits to
-     the document never change the dataset.
-   - Aim for **30+ segments** - below that the statistics engine will honestly
-     refuse to call a winner (you'll see "indicative only").
-2. **Candidates** = the setups you're comparing. Easiest: point each candidate at a
-   workflow. To compare two *models*, make two one-step Translate workflows that
-   differ only in the model, and one candidate for each.
-3. **Run**: pick dataset + candidates + scorers. You'll get a **cost estimate
-   first** and must confirm. Notes: reference metrics (BLEU/chrF/TER) need a
-   dataset with references; `judge_mqm` uses an LLM judge - if the judge is the
-   same model as a candidate, the app warns you it may favor itself (trust the
-   deterministic metrics as the cross-check). A local-engine run costs $0.
-   ⚠ Current wart: long runs can make the app slow/unresponsive until they finish -
-   start them and get coffee. (A fix is chipped.)
-4. **Compare**: pick the dataset, the baseline candidate, and the candidates -
-   ⚠ current wart: include the baseline in the candidate list too, or it silently
-   compares against the wrong thing (fix chipped). You get a verdict per candidate:
-   **Improvement / Regression / Tradeoff / Tie**, with the judge's reasoning
-   inline - never just a bare number.
-5. **Promote**: one click turns the winning candidate into a real production
-   workflow. "Supported" on the promote screen means the statistics actually back
-   the win at your margin - it refuses to pretend otherwise.
-
-**Example:** we uploaded 40 WMT sentences with references, made
-"Local default" and "Llama 3 8B" candidates, ran both for $0, and the Lab called
-the local default an Improvement (BLEU 43 vs 36) - then promoted it. That's the whole intended
-loop, and it took four commands.
-
----
-
-## Ask + Draft + module guides (`/help`)
+## Ask + module guides (`/help`)
 
 **What it does:** every main page now has two things in the corner and one box.
 
 - **A "?" next to the page title** opens that module's guide - a short, task-first
   page written for someone who is not an expert in this app. There is one per
-  module (seventeen visible by default - documents, keys, workflows, TM, glossary,
-  memories, evaluations, engines, connectors, images, routing, reports, vendors,
-  queries, worklist, data export, plus the machine-facing LLM overview; Advanced
-  Workflows adds an eighteenth card once enabled), and `/help` lists them all at
-  the top.
+  module (documents, keys, workflows, TM, glossary, engines, connectors, images,
+  routing, reports, vendors, queries, worklist, data export, plus the machine-facing
+  LLM overview), and `/help` lists them all at the top.
 - **"Ask about this page"** - a question box at the bottom of the page. Type a
   question, get an answer. The answer comes **only** from that module's guide (plus
   the guides it connects to), never from what the model happens to remember about
@@ -155,26 +76,9 @@ loop, and it took four commands.
 - **Three starter questions** are offered as one-click chips: *What can this do?*,
   *How do I get started?*, *How does this connect to the rest of the app?*
 
-**"Describe what you want" (Draft)** - on **Memories** and **Evaluations** only.
-
-- On **Memories**: type the rule in plain words ("we never translate our product
-  names", "always use usted"). It comes back as the ordinary add-note form(s),
-  filled in, one per rule it found.
-- On **Evaluations**: type what you want to find out ("is the new model better than
-  the old one on my support articles?"). It comes back as the ordinary run-start
-  form, filled in from **your actual datasets and candidates** - with one sentence
-  per choice explaining why, and warnings where it had to drop something (a metric
-  that needs references your dataset doesn't have, a sample too small to mean
-  anything).
-
-**Draft never writes and never launches.** What you get is a filled-in form. The
-save/launch button on it is the same button as always, and the cost estimate,
-judge-bias warning and confirm screen all still happen. If you close the page
-without pressing anything, nothing happened.
-
 **Two honest limits worth knowing:**
 - With no engine configured, Ask says so and points you at the guide instead of
-  making something up. Draft says it couldn't draft that. Neither pretends.
+  making something up.
 - A **viewer** doesn't get the Ask box (asking is a request the role can't make);
   the "?" guides are there for everyone.
 
@@ -187,15 +91,9 @@ engine, so it costs nothing). A cloud engine goes through the normal spend ledge
 
 **CLI:**
 ```bash
-loc-tms ask memories "how do I stop it translating our product name?"
+loc-tms ask workflows "how do I add a review step?"
 loc-tms ask "which module decides what a step's engine is?"     # no module = ask across all guides
-loc-tms memory draft "we never translate Acme Cloud" --customer 1
-loc-tms eval draft "is our local model better than Llama on the support articles?" --customer 1
 ```
-Both `draft` verbs print the drafted values **plus the exact ordinary command** that
-would apply them, so you can copy it and read it before running it. Adding
-`--apply --yes` runs that same command's seam; `--apply` without `--yes` refuses in
-words and writes nothing.
 
 ---
 
@@ -315,14 +213,14 @@ Two kinds of lock:
   wins, and it's audited). To remove a lock without editing, use the **Unlock** action
   (CLI: `doc unlock-segment <id>`).
 
-**The policy** (three settings on **Setup AI → "TM matching & locks"**, or the CLI
-`config` group `tm_lock_ice` / `tm_hundreds_enter_lqa` / `tm_context_floor`):
+**The policy** (two lock settings on **Setup AI → "TM matching & locks"**, or the CLI
+`config` group `tm_lock_ice` / `tm_hundreds_enter_lqa`):
 
 - **100% matches enter LQA (soft lock)** - on by default. Turn it off to make 100%
   matches *hard* locks instead.
-- **Hard-lock in-context (ICE / 101) matches** - for a future in-context-match wave; inert
-  today.
-- **Context-attach floor** - for the deferred context/fuzzy-context wave.
+- **Hard-lock in-context (101%) matches** - an exact match whose neighbouring segments (or
+  string key) match too is locked hard. TM fills exact matches only (ADR 0102); there is no
+  fuzzy matching and no context floor.
 
 These settings are **global** for now (a labelled interim; a per-TM version is planned).
 The `TM_LOCKS_ENABLED` master kill switch is an **environment variable** (needs a restart),
@@ -396,8 +294,8 @@ envelopes or a failed envelope write leaves Advanced execution and its own spend
 
 - **Run view**: every step's score, gate, visits, cost; the graph shows the path
   the run actually took.
-- **LLM Ledger** (admin): the exact prompt and reply for every model call - with
-  the memory chip, so you can see precisely what the model was told.
+- **LLM Ledger** (admin): the exact prompt and reply for every model call, so you can
+  see precisely what the model was told.
 - **Export warnings**: if segments come back in English with a "substituted"
   warning, the export guard caught damaged formatting and shipped the source
   instead of a broken file - that's it working, not failing.
@@ -547,7 +445,7 @@ and made the workflow look paired. After the upgrade those workflows simply show
 
 ## Turning features on and off (Settings → Features)
 
-**What it does.** Localization OS has a lot of surface - images, key projects, evaluations,
+**What it does.** Localization OS has a lot of surface - images, key projects,
 memory, vendors, reports, routing, and more. Not every install wants all of it. The
 **Settings → Features** page is one place to switch a **non-core** feature off, and
 switching it off does not just hide it - it **removes** it. The nav item disappears,
@@ -561,19 +459,15 @@ documents, projects, translation, TM, glossary, workflows, the editor, budgets/s
 caps, identity - are **core** and are not on this page; they stay always-on. Only the
 peripheral/add-on features are toggleable.
 
-**Three kinds of "off".** A toggleable feature behaves in one of three ways:
+**Kinds of "off".** A toggleable feature behaves in one of these ways:
 
 - **Removed** - the *whole* surface 404s (images, key projects, vendors, reports,
   routing authoring, assist, UTCP). These are default-ON kill switches; there is
   nothing left to see once off.
-- **Writes off** - **memory (LLMemory)** and the **Evaluations Lab** keep *answering
-  reads*, but every *write* refuses and names the switch. This is deliberate: the one
-  place you go to diagnose "why won't this save?" should tell you the switch is off, not
-  pretend the data vanished.
-- **Opt-in (default-off)** - **LLM Ledger** and **Databricks export** start OFF and are
-  turned on by an operator. The flag starts and stops the feature but never 404s a
-  surface: their own control pages stay reachable (a prompt-tap page you cannot reach
-  could not turn capture back on), so nothing is "removed" when they are off.
+- **Opt-in (default-off)** - the **LLM Ledger** starts OFF and is turned on by an
+  operator. The flag starts and stops the feature but never 404s a surface: its own
+  control page stays reachable (a prompt-tap page you cannot reach could not turn capture
+  back on), so nothing is "removed" when it is off.
 
 Two things that look like they should switch off but don't, on purpose:
 
@@ -596,9 +490,9 @@ python -m app.cli config set routing_enabled 0    # remove routing rule authorin
 
 `config features` is read-only (it is the CLI mirror of the Features card); the actual
 toggle is `config set <flag> 0|1`. The flag names are the switches themselves -
-`image_localization_enabled`, `key_projects_enabled`, `evaluations_enabled`,
-`llmemory_enabled`, `assist_enabled`, `prompt_tap_enabled`, `utcp_manual_enabled`,
-`vendors_enabled`, `reports_enabled`, `routing_enabled`, `databricks_export_enabled`.
+`image_localization_enabled`, `key_projects_enabled`, `assist_enabled`,
+`prompt_tap_enabled`, `utcp_manual_enabled`, `vendors_enabled`, `reports_enabled`,
+`routing_enabled`.
 
 ---
 
@@ -647,7 +541,7 @@ sync?"* The agent calls tools; the tools call the same `/api` the web UI uses.
 
 **What it can and can't do.** It packages the product as **89 task-shaped tools** across
 9 families - orientation, projects, documents, keys + the change feed, workflows,
-glossaries and TM, memory, the Evaluations Lab, and reports. Two safety rules are built in:
+glossaries and TM, and reports. Two safety rules are built in:
 
 - **Nothing destructive.** No tool deletes a project, purges memory, signs off a human
   review, or writes into a connected Jira/Airtable/Zendesk. Those verbs simply aren't

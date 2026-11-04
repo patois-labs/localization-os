@@ -488,14 +488,25 @@ def main() -> None:
         s.refresh(running)
         s.refresh(queued)
         rid, qid = running.id, queued.id
-    touched = jobs.recover_interrupted()
-    assert touched >= 2, touched
-    with Session(engine) as s:
-        assert s.get(Job, rid).status == JobStatus.FAILED, "RUNNING must fail on restart"
-        assert "restart" in s.get(Job, rid).error
-    d = wait_job(c, qid)
-    assert d["status"] == JobStatus.COMPLETED, "QUEUED must be re-enqueued and run"
-    print("  restart recovery: RUNNING -> failed, QUEUED -> re-run to completion")
+    # S2: the durable queue is the default, and it recovers from its own `jobqueue` rows (covered
+    # by verify_job_queue / verify_job_pools). This block pins the in-memory OPT-OUT contract:
+    # RUNNING fails visibly on restart, QUEUED is re-enqueued.
+    from app import ports
+    from app.ports import jobqueue as _jq
+
+    _durable = ports.get("jobqueue")
+    ports.register("jobqueue", _jq.InMemoryJobQueue())
+    try:
+        touched = jobs.recover_interrupted()
+        assert touched >= 2, touched
+        with Session(engine) as s:
+            assert s.get(Job, rid).status == JobStatus.FAILED, "RUNNING must fail on restart"
+            assert "restart" in s.get(Job, rid).error
+        d = wait_job(c, qid)
+        assert d["status"] == JobStatus.COMPLETED, "QUEUED must be re-enqueued and run"
+    finally:
+        ports.register("jobqueue", _durable)
+    print("  restart recovery (memory opt-out): RUNNING -> failed, QUEUED -> re-run to completion")
 
     # --- pages + APIs ---
     page = c.get("/jobs").text

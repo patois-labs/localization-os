@@ -1,10 +1,10 @@
 """Translation Memory — two parallel stores.
 
 Transitional compatibility shim for one release (added 2026-09-15, remove the re-export block after
-the next tagged release): `__all__` re-exports XML_LANG, TM_FUZZY_CANDIDATE_CAP, TM_UNION_CHUNK,
-_META_PROP_MAP, _PROP_META_MAP, _META_VALUE_CAP, _like_escape, _sanitize_meta_value,
-_provenance_meta, _meta_from_tu, _tmx_stamp_tu, _build_export_tmx, lookup, lookup_batch,
-example_matches_batch, concordance from app.services.tm_hub.
+the next tagged release): `__all__` re-exports XML_LANG,
+_META_PROP_MAP, _PROP_META_MAP, _META_VALUE_CAP,
+_like_escape, _sanitize_meta_value, _provenance_meta, _meta_from_tu, _tmx_stamp_tu,
+_build_export_tmx, lookup, lookup_batch, lookup_segments, concordance from app.services.tm_hub.
 
 Transitional compatibility shim for one release (added 2026-09-14, remove the re-export block after
 the next tagged release): `__all__` re-exports _content_type_name, _project_content_type_id,
@@ -12,11 +12,13 @@ _tm_source_project_ids, _tm_scope, _own_first, _own_first_key, _content_type_sco
 normalize, is_tm_eligible, hash_text, _lang_match, _pick, LocaleMismatchError,
 resolve_import_locales, _project_targets, _pair_has_rows, resolve_export_locales, LEVERAGE_BANDS,
 leverage_bands, count, _source_fallback_blocked, ft_count, _export_entries, ft_lookup, ft_store from
-app.services.tm_common, app.services.tm_part2.
+app.services.tm_common,
+app.services.tm_part2.
 
 Segment TM (the traditional kind):
   - import/export TMX (the industry interchange format)
-  - fuzzy lookup with rapidfuzz: 100% exact + 75-99% fuzzy matches
+  - exact lookup only (ADR 0102): 100% exact and 101% in-context matches; fuzzy matching
+    was removed
 
 Full-Text TM (the novel kind):
   - key a whole-document translation by a hash of its normalized source
@@ -30,6 +32,7 @@ import hashlib
 import io
 import logging
 import math
+import os
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -37,7 +40,6 @@ from datetime import datetime
 
 import sqlalchemy as sa
 from lxml import etree
-from rapidfuzz import fuzz
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
@@ -62,6 +64,7 @@ from app.services.tm_common import (
     _tm_read_scope,
     _tm_scope,
     _tm_source_project_ids,
+    context_key,
     count,
     ft_count,
     hash_text,
@@ -76,29 +79,30 @@ from app.services.tm_hub import (
     _META_PROP_MAP,
     _META_VALUE_CAP,
     _PROP_META_MAP,
-    TM_FUZZY_CANDIDATE_CAP,
-    TM_UNION_CHUNK,
+    TMX_CONTEXT_KEY_PROP,
     XML_LANG,
     _build_export_tmx,
+    _context_from_tu,
     _like_escape,
     _meta_from_tu,
     _provenance_meta,
     _sanitize_meta_value,
     _tmx_stamp_tu,
     concordance,
-    example_matches_batch,
     lookup,
     lookup_batch,
+    lookup_segments,
 )
 from app.services.tm_part2 import _export_entries, ft_lookup, ft_store
 from app.services.tm_sdltm import SdltmError
 
 log = logging.getLogger(__name__)
+# Bound once: suites swap `tm.time` for a stub that only has sleep() (verify_import_chunks_615).
+_monotonic = time.monotonic
 
 __all__ = [
     "LEVERAGE_BANDS",
-    "TM_FUZZY_CANDIDATE_CAP",
-    "TM_UNION_CHUNK",
+    "TMX_CONTEXT_KEY_PROP",
     "XML_LANG",
     "_META_PROP_MAP",
     "_META_VALUE_CAP",
@@ -131,23 +135,45 @@ __all__ = [
     "concordance",
     "count",
     "etree",
-    "example_matches_batch",
+    "example_matches_hybrid",
     "ft_count",
     "ft_lookup",
     "ft_store",
     "func",
-    "fuzz",
     "hash_text",
     "hashlib",
     "is_tm_eligible",
     "leverage_bands",
     "lookup",
     "lookup_batch",
+    "lookup_segments",
     "math",
     "normalize",
     "resolve_export_locales",
     "resolve_import_locales",
 ]
+
+
+def examples_available() -> bool:
+    """True when an add-on registered a TM example retriever ("tm_examples"). The core ships
+    none (ADR 0102), so surfaces that offer TM few-shot examples hide or label them when this
+    is False."""
+    from app import extensions
+
+    return extensions.provider("tm_examples") is not None
+
+
+def example_matches_hybrid(session, project_id, sources, *args, **kwargs) -> dict:
+    """TM few-shot examples for a prompt: {source_text: [pairs]} (ADR 0102). The core fills
+    exact matches only and ships no example retriever (fuzzy example scoring was removed with
+    the fuzzy TM engine). An add-on may register one as the "tm_examples" extension; without
+    it every source maps to an empty list, so prompts carry no TM examples."""
+    from app import extensions
+
+    retriever = extensions.provider("tm_examples")
+    if retriever is not None:
+        return retriever.example_matches_hybrid(session, project_id, sources, *args, **kwargs)
+    return {s: [] for s in dict.fromkeys(sources)}
 
 
 # --- Segment TM ----------------------------------------------------------------
@@ -199,6 +225,11 @@ TMX_WRITE_CHUNK_ROWS = 2500
 # Seconds the importer waits between two chunks with the write lock FREE, so a writer polling
 # SQLite's busy handler (sleeps of up to 100 ms) reliably gets in between chunks.
 TMX_CHUNK_PAUSE_S = 0.05
+# ADR 0105: how many times a chunk retries a compare-and-set UPDATE that matched nothing because
+# another writer changed the row again, and how many times it re-inserts units that a concurrent
+# writer stored and deleted again, before it stops and counts them (skipped / concurrent_deleted).
+TMX_CAS_ROUNDS = 3
+TMX_INSERT_ROUNDS = 3
 
 
 class TmxImportIncomplete(ValueError):
@@ -214,22 +245,18 @@ class TmxImportIncomplete(ValueError):
         self.rows_total = rows_total
 
 
-def _load_scope_map(
-    session: Session, project_id: int | None, source_locale: str, target_locale: str
-) -> dict[str, tuple[int, str]]:
-    """source_hash -> (row id, stored target_text) for every row in one TM scope.
-    Streamed into the dict (no .all() list) and columns-only, so nothing here scales with
-    the size of a SegmentTM row."""
-    return {
-        h: (rid, tgt)
-        for h, rid, tgt in session.exec(
-            select(SegmentTM.source_hash, SegmentTM.id, SegmentTM.target_text).where(
-                SegmentTM.project_id == project_id,
-                SegmentTM.source_locale == source_locale,
-                SegmentTM.target_locale == target_locale,
-            )
-        )
-    }
+def cached_count(session: Session, project_id: int | None) -> int:
+    """`count` served from the process-local cache (S1 item 6): for per-request surfaces."""
+    from app.services import tm_counts
+
+    return tm_counts.count(session, project_id)
+
+
+def cached_ft_count(session: Session, project_id: int | None) -> int:
+    """`ft_count` served from the process-local cache (S1 item 6)."""
+    from app.services import tm_counts
+
+    return tm_counts.ft_count(session, project_id)
 
 
 # Issue #567: how many withheld units an import reports row by row (the counts are exact
@@ -263,6 +290,94 @@ def import_tmx(
     header naming source/target or the two locale codes) is accepted too. Anything else
     that is not XML (and not an .sdltm) is converted to a TMX body first
     (tabular_import.tm_tmx), so it passes every check below exactly like a TMX upload."""
+    from app.services import tm_counts
+
+    try:
+        return _import_tmx_dispatch(
+            session,
+            project_id,
+            data,
+            source_locale,
+            target_locale,
+            acknowledge_placeholder_loss=acknowledge_placeholder_loss,
+            progress=progress,
+        )
+    finally:
+        # S1 item 6: chunks may have committed even when the import fails part-way.
+        tm_counts.invalidate(project_id)
+
+
+def import_tmx_file(
+    session: Session,
+    project_id: int | None,
+    path,
+    source_locale: str,
+    target_locale: str,
+    *,
+    acknowledge_placeholder_loss: bool = False,
+    progress=None,
+    parse_progress=None,
+) -> dict:
+    """`import_tmx` for a file ON DISK (S6, ADR 0094): the background TM import job and the
+    host CLI. A TMX is never read into memory: it is pre-scanned and parsed straight from the
+    file under TMX_IMPORT_MAX_BYTES / TMX_IMPORT_MAX_UNITS, and the write plan is spooled to
+    disk, so memory stays flat whatever the file size. A Trados .sdltm or a spreadsheet TM is
+    converted in memory as before, so it keeps the MAX_UPLOAD_BYTES cap.
+
+    Same reply, rules and failures as `import_tmx`. `parse_progress`, when given, is called as
+    parse_progress(bytes_read, bytes_total, units_seen) about once a second while the file is
+    parsed; `progress(rows_written, rows_total)` after every committed write chunk."""
+    from app import config
+    from app.services import tabular_import, tm_counts, tm_sdltm
+
+    with open(path, "rb") as fh:
+        head = fh.read(64 * 1024)
+    try:
+        if tm_sdltm.is_sdltm(head) or not tabular_import.looks_like_tmx(head):
+            size = os.path.getsize(path)
+            if size > config.MAX_UPLOAD_BYTES:
+                raise ValueError(
+                    f"this file is {size} bytes; only a TMX may be larger than the "
+                    f"{config.MAX_UPLOAD_BYTES}-byte upload limit (SDLTM and spreadsheet "
+                    "TMs are converted in memory)."
+                )
+            with open(path, "rb") as fh:
+                data = fh.read()
+            return _import_tmx_dispatch(
+                session,
+                project_id,
+                data,
+                source_locale,
+                target_locale,
+                acknowledge_placeholder_loss=acknowledge_placeholder_loss,
+                progress=progress,
+            )
+        return _import_tmx_attempt(
+            session,
+            project_id,
+            None,
+            source_locale,
+            target_locale,
+            acknowledge_placeholder_loss=acknowledge_placeholder_loss,
+            progress=progress,
+            path=path,
+            parse_progress=parse_progress,
+        )
+    finally:
+        # S1 item 6: chunks may have committed even when the import fails part-way.
+        tm_counts.invalidate(project_id)
+
+
+def _import_tmx_dispatch(
+    session: Session,
+    project_id: int | None,
+    data: bytes,
+    source_locale: str,
+    target_locale: str,
+    *,
+    acknowledge_placeholder_loss: bool = False,
+    progress=None,
+) -> dict:
     from app.services import tabular_import, tm_sdltm
 
     if tm_sdltm.is_sdltm(data):
@@ -297,6 +412,8 @@ def _import_tmx_attempt(
     *,
     acknowledge_placeholder_loss: bool = False,
     progress=None,
+    path=None,
+    parse_progress=None,
 ) -> dict:
     """Import a TMX file's translation units into the project's segment TM.
 
@@ -340,6 +457,13 @@ def _import_tmx_attempt(
         TMX_IMPORT_REPORT_ROWS withheld units as {row, code, reason, source}. An existing
         row is never updated to a withheld target. A placeholder loss that WAS acknowledged
         is counted in `acknowledged_placeholder_loss`.
+    S6 (ADR 0094): `path` (instead of `data`) imports a TMX from disk without reading it into
+    memory (TMX_IMPORT_MAX_BYTES / TMX_IMPORT_MAX_UNITS instead of MAX_UPLOAD_BYTES /
+    MAX_DOCUMENT_ROWS), and the write plan the notes below describe as in-memory maps and
+    tuples now lives in a throwaway SQLite file (tm_import_stream.ImportSpool) with the same
+    counting rules, so memory no longer grows with the file. `parse_progress(bytes_read,
+    bytes_total, units_seen)` is called about once a second while the file is parsed.
+
     `imported` is also the count new callers should treat as "the number of TM
     entries now usable" for a fresh import; existing callers that only cared
     about a plain count can sum imported+updated for "units processed".
@@ -442,29 +566,59 @@ def _import_tmx_attempt(
     (it base64-decodes a JSON body with no bounded read) and on the CLI's
     local-file read."""
     from app import config
-    from app.services import quality
+    from app.services import quality, seed_caps
+    from app.services import tm_import_stream as tstream
 
-    if len(data) > config.MAX_UPLOAD_BYTES:
-        raise ValueError(
-            f"the TMX file is {len(data)} bytes, over the "
-            f"{config.MAX_UPLOAD_BYTES}-byte upload limit."
-        )
-    if _ENTITY_DECL.search(data) or (
-        b"\x00" in data and _ENTITY_DECL.search(data.replace(b"\x00", b""))
-    ):
-        raise ValueError("this TMX file declares XML entities, which are not accepted.")
+    if path is not None:
+        # S6 (ADR 0094): a TMX already on disk (the background import, the CLI) is never
+        # read into memory. Its own, larger, still bounded size and unit caps apply.
+        total_bytes = os.path.getsize(path)
+        if total_bytes > config.TMX_IMPORT_MAX_BYTES:
+            raise ValueError(
+                f"the TMX file is {total_bytes} bytes, over the "
+                f"{config.TMX_IMPORT_MAX_BYTES}-byte TMX import limit (TMX_IMPORT_MAX_BYTES)."
+            )
+        has_entity, _tus = tstream.scan_tmx_file(path)
+        if has_entity:
+            raise ValueError("this TMX file declares XML entities, which are not accepted.")
 
-    # #576: far more <tu> elements than MAX_DOCUMENT_ROWS is refused by a C-speed count
-    # before anything is parsed or read from the DB. (A UTF-16 file interleaves NULs, so
-    # the count also runs on the NUL-stripped view; the loop below re-checks the count it
-    # really walked, so this only has to be cheap, not exact.)
-    from app.services import seed_caps
+        def _check_units(n: int) -> None:
+            if n > config.TMX_IMPORT_MAX_UNITS:
+                raise seed_caps.InputLimitError(
+                    f"This TMX file has more than {config.TMX_IMPORT_MAX_UNITS} translation "
+                    "units (TMX_IMPORT_MAX_UNITS). Nothing was stored. Split the file, or ask "
+                    "the operator to raise the limit."
+                )
 
-    _tus = data.count(b"<tu>") + data.count(b"<tu ")
-    if b"\x00" in data:
-        _flat = data.replace(b"\x00", b"")
-        _tus = max(_tus, _flat.count(b"<tu>") + _flat.count(b"<tu "))
-    seed_caps.check_import_rows(_tus, what="This TMX file")
+        def _open():
+            return open(path, "rb")  # closed in the finally below
+    else:
+        total_bytes = len(data)
+        if total_bytes > config.MAX_UPLOAD_BYTES:
+            raise ValueError(
+                f"the TMX file is {total_bytes} bytes, over the "
+                f"{config.MAX_UPLOAD_BYTES}-byte upload limit."
+            )
+        if _ENTITY_DECL.search(data) or (
+            b"\x00" in data and _ENTITY_DECL.search(data.replace(b"\x00", b""))
+        ):
+            raise ValueError("this TMX file declares XML entities, which are not accepted.")
+        # #576: far more <tu> elements than MAX_DOCUMENT_ROWS is refused by a C-speed count
+        # before anything is parsed or read from the DB. (A UTF-16 file interleaves NULs, so
+        # the count also runs on the NUL-stripped view; the loop below re-checks the count it
+        # really walked, so this only has to be cheap, not exact.)
+        _tus = data.count(b"<tu>") + data.count(b"<tu ")
+        if b"\x00" in data:
+            _flat = data.replace(b"\x00", b"")
+            _tus = max(_tus, _flat.count(b"<tu>") + _flat.count(b"<tu "))
+
+        def _check_units(n: int) -> None:
+            seed_caps.check_import_rows(n, what="This TMX file")
+
+        def _open():
+            return io.BytesIO(data)
+
+    _check_units(_tus)
 
     # QA BUG-03: reconcile the requested pair with the project's BEFORE a single row
     # is written, so an import can never land in a bucket the read path cannot reach.
@@ -475,15 +629,18 @@ def _import_tmx_attempt(
     )
 
     ct_id = None
-    # source_hash -> (row id, stored target_text) for every row already in this
-    # scope, plus every row this call has changed. PRIMITIVES ONLY (see BOUNDED
-    # MEMORY): holding ORM instances here was a 348 MB peak on a 150k-row
-    # re-import, and they would have to stay in the identity map to be usable.
-    existing_by_hash: dict[str, tuple[int, str]] | None = None
+    # S6 (ADR 0094): the write plan lives in a throwaway SQLite file (tm_import_stream.
+    # ImportSpool), not in Python dicts. Before, the plan held every new unit as a tuple
+    # plus a hash index and the scope's rows as hash -> (id, target): about 500 bytes per
+    # unit, so a 2M-unit TMX needed over 1 GB. The spool holds the same three things
+    # (`ex` = the scope's rows as phase 1 read them, `nw` = new rows, `exw` = existing rows
+    # the file names) with the same counting rules (ImportSpool.resolve), at a fixed page
+    # cache. Created at the first qualifying <tu>, so a file with none never touches the DB.
+    spool = None
 
     def _ensure_loaded() -> None:
-        nonlocal ct_id, existing_by_hash
-        if existing_by_hash is not None:
+        nonlocal ct_id, spool
+        if spool is not None:
             return
         # Issue #584: PHASE 1 is read-only. Nothing is written until the whole
         # file has been parsed and validated, so a bad file costs the other
@@ -492,26 +649,66 @@ def _import_tmx_attempt(
         # every NEW row (resolved once — all rows share the same target
         # project). Updated rows are NOT retro-restamped (kept type — §4.5).
         ct_id = _project_content_type_id(session, project_id)
-        existing_by_hash = _load_scope_map(session, project_id, source_locale, target_locale)
+        spool = tstream.ImportSpool()
+        spool.load_existing(
+            session.exec(
+                select(SegmentTM.source_hash, SegmentTM.id, SegmentTM.target_text).where(
+                    SegmentTM.project_id == project_id,
+                    SegmentTM.source_locale == source_locale,
+                    SegmentTM.target_locale == target_locale,
+                )
+            )
+        )
 
     imported = skipped = updated = skipped_refusal = 0
     skipped_integrity = acknowledged_loss = 0
     skipped_by_code: dict[str, int] = {}
     skipped_rows: list[dict] = []
     processed = 0
-    # Issue #584: the whole import's WRITES, held as COMPACT tuples (never ORM
-    # objects: those were ~4.6 KB per unit) until the file is fully parsed.
-    #   new_rows:     (source_hash, source_text, target_text, meta) per new row;
-    #   new_idx:      source_hash -> index into new_rows, so an in-file duplicate of
-    #                 a new unit replaces that tuple's target (one row, LAST target);
-    #   existing:     row id -> (target as phase 1 READ it, target the file ends with,
-    #                 units counted `updated`, units counted `skipped`) for every existing
-    #                 row the file names. Phase 2 re-reads each row under its chunk's write
-    #                 lock and decides on what is stored then, so the counts are corrected
-    #                 when another writer changed or deleted it meanwhile (#615 gate).
-    new_rows: list[tuple] = []
-    new_idx: dict[str, int] = {}
-    existing: dict[int, tuple[str, str, int, int]] = {}
+    # Accepted units waiting to be resolved against the spool, in file order:
+    # (source_hash, source_text, target_text, meta). At most TMX_IMPORT_FLUSH_BATCH. A unit's
+    # in-context key (ADR 0102) rides in meta["_ck"] through the spool and is moved into the
+    # context_key column when the row is inserted.
+    pending: list[tuple] = []
+    # One-unit lookahead for the in-context key: a unit with no context props takes the key of
+    # its neighbours in file order (previous and next unit), so it is finished when the NEXT
+    # unit has been read. held = (candidate or None, previous source), prev_src = last source.
+    held: tuple | None = None
+    prev_src = ""
+    # Units of this locale pair seen so far, and whether the file is our own export (header
+    # creationtool). The adjacent-unit fallback needs evidence of document order: a lone
+    # unit has none (it would get ctx("", "") and become a false 101 for any one-segment
+    # document), and our own export states its contexts explicitly, so a unit without a
+    # key there stays context-free instead of inheriting its file neighbours.
+    n_pairs = 0
+    own_export = False
+
+    def _emit(cand: tuple, prev: str, nxt: str) -> None:
+        h, src, tgt, meta, ck = cand
+        m = dict(meta) if meta else {}
+        m["_ck"] = ck or (context_key(prev, nxt) if n_pairs >= 2 and not own_export else None)
+        pending.append((h, src, tgt, m))
+        if len(pending) >= max(1, int(TMX_IMPORT_FLUSH_BATCH)):
+            _flush_pending()
+
+    def _chain(src_i: str | None, cand_i: tuple | None) -> None:
+        nonlocal held, prev_src, n_pairs
+        if src_i is None:  # not a source/target pair: invisible to adjacency
+            return
+        n_pairs += 1
+        if held is not None and held[0] is not None:
+            _emit(held[0], held[1], src_i)
+        held = (cand_i, prev_src)
+        prev_src = src_i
+
+    def _flush_pending() -> None:
+        nonlocal imported, updated, skipped
+        if pending:
+            i, u, s = spool.resolve(pending)
+            imported += i
+            updated += u
+            skipped += s
+            pending.clear()
 
     # The SPECIFIC <body> element that is a direct child of the document root
     # (root.find("body") returns the FIRST such match, or None) -- latched by
@@ -535,126 +732,135 @@ def _import_tmx_attempt(
     # children are never dropped before the <tu>'s own end event reads them.
     open_tu = None
 
-    stack: list = []
-    for event, elem in ET.iterparse(io.BytesIO(data), events=("start", "end")):  # noqa: S314 -- _ENTITY_DECL refused entity declarations
-        if event == "start":
-            parent = stack[-1] if stack else None
-            if elem.tag == "body" and root_body is None and len(stack) == 1:
-                root_body = elem
-            elif (
-                elem.tag == "tu" and open_tu is None and parent is not None and parent is root_body
-            ):
-                open_tu = elem
-            stack.append(elem)
-            continue
-        stack.pop()
-        parent = stack[-1] if stack else None
-        if elem is not open_tu:
-            if open_tu is None:
-                # Outside every qualifying <tu>: nothing downstream reads this
-                # subtree, so drop it now and drop the completed siblings its
-                # parent still holds. This is what bounds peak memory for the
-                # no-match documents described above.
-                elem.clear()
-                if parent is not None:
-                    parent.clear()
-            continue
-        open_tu = None
-
-        _ensure_loaded()
-        langs: dict[str, str] = {}
-        for tuv in elem.findall("tuv"):
-            lang = tuv.get(XML_LANG)
-            seg = tuv.find("seg")
-            text = "".join(seg.itertext()) if seg is not None else None
-            if lang and text is not None:
-                langs[lang] = text
-        src = _pick(langs, source_locale)
-        tgt = _pick(langs, target_locale)
-        if src and tgt:
-            # Refusal GATE (Deliverable 3): a hedged TARGET is skipped outright
-            # — never inserted, updated, or embedded — so an MT-exported TMX
-            # can't poison the TM with a 100%%-match that bypasses the live
-            # guard. Position-anchored semantics (refusal.is_refusal) hold: a
-            # legitimate translation that merely mentions refusal vocabulary
-            # mid-string is NOT skipped.
-            refused = quality.is_refusal_check(tgt)
-            skip = None
-            if refused:
-                skipped_refusal += 1
-            else:
-                # Issue #567: the approve-path integrity gate (#562). A pair that
-                # breaks placeholders/tags would be reused as a 100% match, so it is
-                # withheld here exactly as approve withholds it; the file goes on.
-                skip = integrity_skip(
-                    src, tgt, source_locale=source_locale, target_locale=target_locale
-                )
-                if (
-                    skip is not None
-                    and skip[0] == TM_SKIP_PLACEHOLDER
-                    and acknowledge_placeholder_loss
+    fh = _open()
+    reader = tstream.CountingReader(fh)
+    # Parse progress is reported at most about once a second (bytes read of the file).
+    last_tick = _monotonic()
+    try:
+        stack: list = []
+        for event, elem in ET.iterparse(reader, events=("start", "end")):  # noqa: S314 -- _ENTITY_DECL / scan_tmx_file refused entity declarations
+            if event == "start":
+                parent = stack[-1] if stack else None
+                if elem.tag == "header" and len(stack) == 1:
+                    own_export = elem.get("creationtool") == branding.brand_name()
+                if elem.tag == "body" and root_body is None and len(stack) == 1:
+                    root_body = elem
+                elif (
+                    elem.tag == "tu"
+                    and open_tu is None
+                    and parent is not None
+                    and parent is root_body
                 ):
-                    acknowledged_loss += 1
-                    skip = None
-            if skip is not None:
-                skipped_integrity += 1
-                skipped_by_code[skip[0]] = skipped_by_code.get(skip[0], 0) + 1
-                if len(skipped_rows) < TMX_IMPORT_REPORT_ROWS:
-                    skipped_rows.append(
-                        {
-                            "row": processed + 1,
-                            "code": skip[0],
-                            "reason": skip[1],
-                            "source": src[:80],
-                        }
-                    )
-            elif not refused:
-                h = hash_text(src, source_locale, target_locale)
-                nidx = new_idx.get(h)
-                known = None if nidx is not None else existing_by_hash.get(h)
-                if nidx is not None:
-                    # A repeated <tu> in the SAME file whose first occurrence is
-                    # a new row: replace that tuple's target, so one row is
-                    # inserted carrying the LAST target.
-                    prev = new_rows[nidx]
-                    if prev[2] != tgt:
-                        new_rows[nidx] = (prev[0], prev[1], tgt, prev[3])
-                        updated += 1
-                    else:
-                        skipped += 1
-                elif known is None:
-                    # Phase 4: read our x-* provenance props back off the
-                    # <tu> into meta (round-trip). None when the TMX carried
-                    # no recognized prop, so a legacy/propless import stays
-                    # byte-identical (nothing stamped).
-                    new_idx[h] = len(new_rows)
-                    new_rows.append((h, src, tgt, _meta_from_tu(elem)))
-                    imported += 1
-                elif known[1] != tgt:
-                    # An existing row: the ONE row for this hash ends up with
-                    # the last target. The first sight of a row records the target
-                    # as stored (existing_by_hash only changes after that).
-                    orig, _f, n_upd, n_skip = existing.get(known[0], (known[1], "", 0, 0))
-                    existing[known[0]] = (orig, tgt, n_upd + 1, n_skip)
-                    existing_by_hash[h] = (known[0], tgt)
-                    updated += 1
+                    open_tu = elem
+                stack.append(elem)
+                continue
+            stack.pop()
+            parent = stack[-1] if stack else None
+            if elem is not open_tu:
+                if open_tu is None:
+                    # Outside every qualifying <tu>: nothing downstream reads this
+                    # subtree, so drop it now and drop the completed siblings its
+                    # parent still holds. This is what bounds peak memory for the
+                    # no-match documents described above.
+                    elem.clear()
+                    if parent is not None:
+                        parent.clear()
+                continue
+            open_tu = None
+
+            _ensure_loaded()
+            langs: dict[str, str] = {}
+            for tuv in elem.findall("tuv"):
+                lang = tuv.get(XML_LANG)
+                seg = tuv.find("seg")
+                text = "".join(seg.itertext()) if seg is not None else None
+                if lang and text is not None:
+                    langs[lang] = text
+            src = _pick(langs, source_locale)
+            tgt = _pick(langs, target_locale)
+            cand = None
+            if src and tgt:
+                # Refusal GATE (Deliverable 3): a hedged TARGET is skipped outright
+                # — never inserted, updated, or embedded — so an MT-exported TMX
+                # can't poison the TM with a 100%%-match that bypasses the live
+                # guard. Position-anchored semantics (refusal.is_refusal) hold: a
+                # legitimate translation that merely mentions refusal vocabulary
+                # mid-string is NOT skipped.
+                refused = quality.is_refusal_check(tgt)
+                skip = None
+                if refused:
+                    skipped_refusal += 1
                 else:
-                    orig, _f, n_upd, n_skip = existing.get(known[0], (known[1], "", 0, 0))
-                    existing[known[0]] = (orig, tgt, n_upd, n_skip + 1)
-                    skipped += 1
+                    # Issue #567: the approve-path integrity gate (#562). A pair that
+                    # breaks placeholders/tags would be reused as a 100% match, so it is
+                    # withheld here exactly as approve withholds it; the file goes on.
+                    skip = integrity_skip(
+                        src, tgt, source_locale=source_locale, target_locale=target_locale
+                    )
+                    if (
+                        skip is not None
+                        and skip[0] == TM_SKIP_PLACEHOLDER
+                        and acknowledge_placeholder_loss
+                    ):
+                        acknowledged_loss += 1
+                        skip = None
+                if skip is not None:
+                    skipped_integrity += 1
+                    skipped_by_code[skip[0]] = skipped_by_code.get(skip[0], 0) + 1
+                    if len(skipped_rows) < TMX_IMPORT_REPORT_ROWS:
+                        skipped_rows.append(
+                            {
+                                "row": processed + 1,
+                                "code": skip[0],
+                                "reason": skip[1],
+                                "source": src[:80],
+                            }
+                        )
+                elif not refused:
+                    # Phase 4: our x-* provenance props are read back off the <tu> into
+                    # meta (round-trip); None when the TMX carried no recognized prop, so a
+                    # legacy/propless import stays byte-identical. Kept for a new row only
+                    # (the first occurrence's meta), as before.
+                    cand = (
+                        hash_text(src, source_locale, target_locale),
+                        src,
+                        tgt,
+                        _meta_from_tu(elem),
+                        _context_from_tu(elem),
+                    )
+            _chain(src if (src and tgt) else None, cand)
 
-        processed += 1
-        seed_caps.check_import_rows(processed, what="This TMX file")
+            processed += 1
+            _check_units(processed)
 
-        # This <tu> is fully processed -- drop its subtree (tuv/seg/prop) and
-        # the completed-so-far siblings still held by <body>'s children list,
-        # so peak memory is one <tu> rather than the whole termbase (mirrors
-        # glossary_tbx.parse_rows's elem.clear() + stack[-1].clear() pattern).
-        elem.clear()
-        if stack:
-            stack[-1].clear()
+            # This <tu> is fully processed -- drop its subtree (tuv/seg/prop) and
+            # the completed-so-far siblings still held by <body>'s children list,
+            # so peak memory is one <tu> rather than the whole termbase (mirrors
+            # glossary_tbx.parse_rows's elem.clear() + stack[-1].clear() pattern).
+            elem.clear()
+            if stack:
+                stack[-1].clear()
+            if parse_progress is not None and processed % 2000 == 0:
+                now_t = _monotonic()
+                if now_t - last_tick >= 1.0:
+                    last_tick = now_t
+                    try:
+                        parse_progress(reader.bytes_read, total_bytes, processed)
+                    except Exception:  # a progress callback must never fail the import
+                        log.debug("tmx import parse progress callback failed", exc_info=True)
+        if held is not None and held[0] is not None:
+            _emit(held[0], held[1], "")  # the last unit of the file: an edge, no next source
+        held = None
+        if spool is not None:
+            _flush_pending()
+    except BaseException:
+        if spool is not None:
+            spool.close()
+        raise
+    finally:
+        fh.close()
 
-    if root_body is None:
+    if root_body is None or spool is None:
         # No qualifying <tu> was ever reached, so _ensure_loaded never ran: no
         # savepoint, no query, no commit -- the DB is untouched.
         return {
@@ -672,14 +878,60 @@ def _import_tmx_attempt(
             "write_chunks": 0,
             "concurrent_deleted": 0,
         }
+    if parse_progress is not None:
+        try:
+            parse_progress(total_bytes, total_bytes, processed)
+        except Exception:
+            log.debug("tmx import parse progress callback failed", exc_info=True)
+    try:
+        return _import_tmx_write(
+            session,
+            project_id,
+            source_locale,
+            target_locale,
+            spool=spool,
+            ct_id=ct_id,
+            progress=progress,
+            report={
+                "imported": imported,
+                "skipped": skipped,
+                "updated": updated,
+                "skipped_refusal": skipped_refusal,
+                "skipped_integrity": skipped_integrity,
+                "skipped_by_code": skipped_by_code,
+                "skipped_rows": skipped_rows,
+                "acknowledged_placeholder_loss": acknowledged_loss,
+                "source_locale": source_locale,
+                "target_locale": target_locale,
+                "locales_normalized": locales_normalized,
+            },
+        )
+    finally:
+        spool.close()
 
+
+def _import_tmx_write(
+    session: Session,
+    project_id: int | None,
+    source_locale: str,
+    target_locale: str,
+    *,
+    spool,
+    ct_id,
+    progress,
+    report: dict,
+) -> dict:
+    """PHASE 2 of `_import_tmx_attempt`: write the spooled plan in short chunk transactions.
+    `report` is phase 1's counts; the chunks correct imported/updated/skipped for what other
+    writers changed meanwhile and add write_chunks / concurrent_deleted."""
     # ---- PHASE 2 (Issues #584, #615): chunked write transactions. -------------------
-    # The file parsed cleanly, so everything below is bulk SQL on rows already built in
-    # memory. #584 wrote it all in ONE transaction (all-or-nothing, lock held for the whole
-    # write: about 40 us per row, so 4 s at 100k units and 12 s at 300k, stalling every other
-    # writer that long). #615 bounds the hold: the rows go out in chunks of at most
-    # TMX_WRITE_CHUNK_ROWS, each its own short transaction that takes the write lock, writes,
-    # commits and RELEASES it, then pauses TMX_CHUNK_PAUSE_S so a waiting writer gets in.
+    # The file parsed cleanly, so everything below is bulk SQL on rows already planned
+    # (in the spool). #584 wrote it all in ONE transaction (all-or-nothing, lock held for
+    # the whole write: about 40 us per row, so 4 s at 100k units and 12 s at 300k,
+    # stalling every other writer that long). #615 bounds the hold: the rows go out in
+    # chunks of at most TMX_WRITE_CHUNK_ROWS, each its own short transaction that takes
+    # the write lock, writes, commits and RELEASES it, then pauses TMX_CHUNK_PAUSE_S so a
+    # waiting writer gets in.
     #
     # Atomicity, stated honestly:
     #   * a bad file (malformed XML, over a cap, entities, wrong locales) fails in phase 1,
@@ -709,29 +961,32 @@ def _import_tmx_attempt(
     upd_changed = (
         tbl.update()
         .where(tbl.c.id == sa.bindparam("b_id"), tbl.c.target_text == sa.bindparam("b_old"))
-        .values(target_text=sa.bindparam("b_tgt"), activity_at=sa.bindparam("b_now"))
+        .values(
+            target_text=sa.bindparam("b_tgt"),
+            activity_at=sa.bindparam("b_now"),
+            # ADR 0102: a target changed by the file takes the file unit's own in-context key
+            # (NULL when it has none): the old key described the OLD target's approval.
+            context_key=sa.bindparam("b_ck"),
+        )
     )
     upd_touched = (
         tbl.update()
         .where(tbl.c.id == sa.bindparam("b_id"))
         .values(activity_at=sa.bindparam("b_now"))
     )
-    # Sorted by source_hash: every index on this table leads with (or ends in) the
-    # hash, so hash-ordered inserts append to each b-tree instead of splitting random
-    # pages, which is most of the time the write lock is held (#615).
-    new_rows.sort(key=lambda r: r[0])
-    # Existing rows, one entry each (a source repeated in the file folds into its final
-    # target): (row id, target phase 1 read, target to store). A row whose final target is
-    # the one it already has only gets its activity_at bumped.
-    existing_rows = [(rid, v[0], v[1]) for rid, v in existing.items()]
     chunk_rows = max(1, int(TMX_WRITE_CHUNK_ROWS))
-    total_rows = len(new_rows) + len(existing_rows)
+    n_new, n_existing = spool.counts()
+    total_rows = n_new + n_existing
+    # The spool packs chunks exactly as the in-memory plan did (new rows first, in source
+    # hash order: every index on this table leads with or ends in the hash, so hash-ordered
+    # inserts append to each b-tree instead of splitting random pages; then existing rows),
+    # so the chunk count is known up front.
+    n_work = -(-total_rows // chunk_rows)
     handled = 0  # rows of the plan dealt with by committed chunks
     chunks_done = 0
 
-    def _insert_chunk(chunk: list[tuple], adj: dict, out_new: list, out_changed: list) -> None:
-        # Under the write lock: which of these hashes did another writer store since phase 1?
-        hashes = [r[0] for r in chunk]
+    def _read_present(hashes: list[str]) -> dict[str, tuple[int, str]]:
+        """{source hash: (row id, target)} of the hashes the TM holds NOW for this pair."""
         present: dict[str, tuple[int, str]] = {}
         for i in range(0, len(hashes), 500):
             for h, rid, tgt in session.execute(
@@ -743,13 +998,123 @@ def _import_tmx_attempt(
                 )
             ):
                 present[h] = (rid, tgt)
+        return present
+
+    def _read_targets(ids: list[int]) -> dict[int, str]:
+        cur: dict[int, str] = {}
+        for i in range(0, len(ids), 500):
+            for rid, tgt in session.execute(
+                sa.select(tbl.c.id, tbl.c.target_text).where(tbl.c.id.in_(ids[i : i + 500]))
+            ):
+                cur[rid] = tgt
+        return cur
+
+    def _cas(rows: list[dict]) -> dict[int, str]:
+        """Apply the compare-and-set `upd_changed` and VERIFY it (ADR 0105). The UPDATE only
+        matches while the target is still `b_old`; a writer that changed the row between the
+        re-read and here makes it match nothing (silently: executemany row counts are not
+        reliable on every driver). So the targets are read back: "ok" = the row holds the file's
+        target, "gone" = deleted meanwhile, "lost" = still another value after
+        TMX_CAS_ROUNDS tries. A miss is retried on the fresh target (the file's target wins over
+        any change committed before the write, #584), so only a writer that keeps changing the
+        row every round ends as "lost"."""
+        outcome: dict[int, str] = {}
+        todo = rows
+        for _round in range(max(1, int(TMX_CAS_ROUNDS))):
+            session.execute(upd_changed, todo)
+            cur = _read_targets([r["b_id"] for r in todo])
+            again = []
+            for r in todo:
+                have = cur.get(r["b_id"])
+                if have is None:
+                    outcome[r["b_id"]] = "gone"
+                elif have == r["b_tgt"]:
+                    outcome[r["b_id"]] = "ok"
+                else:
+                    outcome[r["b_id"]] = "lost"
+                    again.append({**r, "b_old": have})
+            if not again:
+                break
+            todo = again
+        return outcome
+
+    def _insert_fresh(rows: list[tuple]) -> set[str]:
+        """INSERT ... ON CONFLICT DO NOTHING RETURNING source_hash (ADR 0105): the hashes THIS
+        statement stored. A row whose key a concurrent writer stored after the re-read is simply
+        not inserted (on Postgres the statement first waits for a writer that has not committed),
+        instead of failing the chunk with a unique violation."""
+        values = [
+            {
+                "project_id": project_id,
+                "source_locale": source_locale,
+                "target_locale": target_locale,
+                "source_text": src,
+                "target_text": tgt,
+                "source_hash": h,
+                "content_type_id": ct_id,
+                "created_at": now,
+                "use_count": 0,
+                "last_used_at": None,
+                "activity_at": now,
+                "meta": {k: v for k, v in meta.items() if k != "_ck"} or None if meta else None,
+                "context_key": (meta or {}).get("_ck"),
+            }
+            for h, src, tgt, meta in rows
+        ]
+        dialect = session.get_bind().dialect.name
+        if dialect in ("postgresql", "sqlite"):
+            from sqlalchemy.dialects import postgresql as _pg
+            from sqlalchemy.dialects import sqlite as _lite
+
+            ins = (_pg.insert if dialect == "postgresql" else _lite.insert)(tbl)
+            stmt = ins.on_conflict_do_nothing(
+                index_elements=["project_id", "source_hash", "source_locale", "target_locale"]
+            ).returning(tbl.c.source_hash)
+            try:
+                return {row[0] for row in session.execute(stmt, values)}
+            except sa.exc.OperationalError as exc:
+                # A legacy SQLite file whose unique index was skipped for pre-existing
+                # duplicates (the init_db shim warns): no index to conflict on, so the plain
+                # INSERT it always had. The statement failed before running; the savepoint holds.
+                if dialect != "sqlite" or "ON CONFLICT clause does not match" not in str(exc):
+                    raise
+        session.execute(tbl.insert(), values)
+        return {r[0] for r in rows}
+
+    def _insert_chunk(chunk: list[tuple], adj: dict, out_new: list, out_changed: list) -> None:
+        # Under the write lock: which of these hashes did another writer store since phase 1?
+        present = _read_present([r[0] for r in chunk])
+        late = [r for r in chunk if r[0] in present]
         fresh = [r for r in chunk if r[0] not in present]
-        if present:
+        # ADR 0105: on Postgres the write lock is per row, so a writer can still store one of the
+        # "fresh" units between the re-read above and the INSERT below (two imports into one
+        # project did, S7c). The INSERT never fails on that: the rows it did not store are
+        # re-read and join `late`. Rounds, because a row stored and DELETED again meanwhile is
+        # absent on the re-read; after TMX_INSERT_ROUNDS it is counted `concurrent_deleted`.
+        for _round in range(max(1, int(TMX_INSERT_ROUNDS))):
+            if not fresh:
+                break
+            won = _insert_fresh(fresh)
+            out_new.extend(r for r in fresh if r[0] in won)
+            missed = [r for r in fresh if r[0] not in won]
+            found = _read_present([r[0] for r in missed]) if missed else {}
+            present.update(found)
+            late.extend(r for r in missed if r[0] in found)
+            fresh = [r for r in missed if r[0] not in found]
+        if fresh:
+            adj["imported"] -= len(fresh)
+            adj["concurrent_deleted"] += len(fresh)
+        if late:
             # Stored by another writer since phase 1 (#584 semantics): the file's target is
             # applied to that row (updated), or it already matches (skipped).
-            late = [r for r in chunk if r[0] in present]
             moved = [
-                {"b_id": present[r[0]][0], "b_old": present[r[0]][1], "b_tgt": r[2], "b_now": now}
+                {
+                    "b_id": present[r[0]][0],
+                    "b_old": present[r[0]][1],
+                    "b_tgt": r[2],
+                    "b_now": now,
+                    "b_ck": (r[3] or {}).get("_ck"),
+                }
                 for r in late
                 if present[r[0]][1] != r[2]
             ]
@@ -757,45 +1122,24 @@ def _import_tmx_attempt(
             adj["updated"] += len(moved)
             adj["skipped"] += len(late) - len(moved)
             if moved:
-                session.execute(upd_changed, moved)
-                out_changed.extend((m["b_id"], m["b_tgt"]) for m in moved)
-        out_new.extend(fresh)
-        if fresh:
-            session.execute(
-                tbl.insert(),
-                [
-                    {
-                        "project_id": project_id,
-                        "source_locale": source_locale,
-                        "target_locale": target_locale,
-                        "source_text": src,
-                        "target_text": tgt,
-                        "source_hash": h,
-                        "content_type_id": ct_id,
-                        "created_at": now,
-                        "use_count": 0,
-                        "last_used_at": None,
-                        "activity_at": now,
-                        "meta": meta,
-                    }
-                    for h, src, tgt, meta in fresh
-                ],
-            )
+                outcome = _cas(moved)
+                for m in moved:
+                    got = outcome[m["b_id"]]
+                    if got == "ok":
+                        out_changed.append((m["b_id"], m["b_tgt"]))
+                    else:  # deleted meanwhile, or changed again every round: not written
+                        adj["updated"] -= 1
+                        adj["concurrent_deleted" if got == "gone" else "skipped"] += 1
 
     def _existing_chunk(chunk: list[tuple], adj: dict, out_changed: list) -> None:
         # Under the write lock: re-read these rows and decide on what is stored NOW, not on
         # what phase 1 read (#584 semantics per chunk; see the PHASE 2 note above).
-        ids = [r[0] for r in chunk]
-        current: dict[int, str] = {}
-        for i in range(0, len(ids), 500):
-            for rid, tgt in session.execute(
-                sa.select(tbl.c.id, tbl.c.target_text).where(tbl.c.id.in_(ids[i : i + 500]))
-            ):
-                current[rid] = tgt
+        current = _read_targets([r[0] for r in chunk])
         upd: list[dict] = []
         touch: list[dict] = []
-        for rid, orig, final in chunk:
-            _o, _f, n_upd, n_skip = existing[rid]
+        counted: dict[int, int] = {}  # row id -> units counted `updated` for it so far
+        still_skip: dict[int, int] = {}  # row id -> units still counted `skipped` for it
+        for rid, orig, final, n_upd, n_skip, ck_set, ck in chunk:
             cur = current.get(rid)
             if cur is None:
                 # Deleted by another writer while the import ran: not brought back, and not
@@ -813,68 +1157,120 @@ def _import_tmx_attempt(
             else:
                 # Differs from the file: the file's target is stored (as #584's re-run did when
                 # another writer had changed it before the write).
+                counted[rid] = n_upd
+                still_skip[rid] = 0
                 if cur != orig:
                     adj["skipped"] -= n_skip
                     adj["updated"] += n_skip
-                upd.append({"b_id": rid, "b_old": cur, "b_tgt": final, "b_now": now})
-                out_changed.append((rid, final))
+                    counted[rid] += n_skip
+                else:
+                    still_skip[rid] = n_skip  # stay `skipped` unless the row is deleted meanwhile
+                # ck_set = 0: the file never changed this row's target, but another writer did
+                # and may have re-keyed it; putting the file's target back under that writer's
+                # key could pair them wrongly (a false 101), so the key is cleared.
+                upd.append(
+                    {
+                        "b_id": rid,
+                        "b_old": cur,
+                        "b_tgt": final,
+                        "b_now": now,
+                        "b_ck": ck if ck_set else None,
+                    }
+                )
         if upd:
-            session.execute(upd_changed, upd)
+            # ADR 0105: verified compare-and-set; a row changed again since the re-read is retried
+            # on its fresh target, one deleted meanwhile or never settled is not counted written.
+            outcome = _cas(upd)
+            for u in upd:
+                got = outcome[u["b_id"]]
+                if got == "ok":
+                    out_changed.append((u["b_id"], u["b_tgt"]))
+                else:
+                    adj["updated"] -= counted[u["b_id"]]
+                    if got == "gone":
+                        adj["skipped"] -= still_skip[u["b_id"]]  # as the cur-is-None branch
+                        adj["concurrent_deleted"] += 1
+                    else:
+                        adj["skipped"] += counted[u["b_id"]]
         if touch:
             session.execute(upd_touched, touch)
 
     adj = {"imported": 0, "updated": 0, "skipped": 0, "concurrent_deleted": 0}
 
-    # Pack the two kinds of write into chunks of at most chunk_rows rows in total (new rows
-    # first, then existing rows: target updates and activity touches), so an import with
-    # <= chunk_rows rows to write is ONE transaction whatever its mix.
-    work: list[tuple[list, list]] = []
-    cursors = [0, 0]
-    seqs = (new_rows, existing_rows)
-    while any(c < len(s) for c, s in zip(cursors, seqs, strict=True)):
-        budget = chunk_rows
-        parts = []
-        for k, seq in enumerate(seqs):
-            take = seq[cursors[k] : cursors[k] + budget]
-            cursors[k] += len(take)
-            budget -= len(take)
-            parts.append(take)
-        work.append((parts[0], parts[1]))
-    for n_chunk, (part_new, part_existing) in enumerate(work):
+    from app import db as _db  # local: app.db imports app.services at load time
+
+    for n_chunk, (part_new, part_existing) in enumerate(spool.iter_work(chunk_rows)):
         if n_chunk and TMX_CHUNK_PAUSE_S > 0:
             time.sleep(TMX_CHUNK_PAUSE_S)  # the write lock is free here: let a waiting writer in
-        savepoint = None
-        # Count adjustments and written rows of THIS chunk, kept only if it commits.
-        c_adj = dict.fromkeys(adj, 0)
-        c_new: list = []
-        c_changed: list = []
-        try:
-            savepoint = import_lock.begin_write_phase(session, SegmentTM)
-            if part_new:
-                _insert_chunk(part_new, c_adj, c_new, c_changed)
-            if part_existing:
-                _existing_chunk(part_existing, c_adj, c_changed)
-            savepoint.commit()  # RELEASE SAVEPOINT -- the writes join the outer txn
-            session.commit()  # ... and the commit frees the SQLite write lock
-        except BaseException as exc:
-            # ROLLBACK TO SAVEPOINT undoes this chunk and leaves the caller's own pending work
-            # (flushed into the OUTER transaction before the savepoint opened) untouched.
-            import_lock.rollback_quietly(session, savepoint)
-            if chunks_done and isinstance(exc, Exception):
-                # The full error goes to the log only: a database error text can carry SQL and
-                # row values, which must not reach the page, the API reply or the CLI.
-                log.warning(
-                    "tmx import stopped after chunk %d of %d", chunks_done, len(work), exc_info=True
-                )
-                raise TmxImportIncomplete(
-                    f"the TMX import stopped after {handled} of {total_rows} rows were processed "
-                    f"({chunks_done} of {len(work)} write chunks) because of a server-side error "
-                    f"({type(exc).__name__}). Those rows are kept; "
-                    "importing the same file again finishes the job and creates no duplicates.",
-                    rows_written=handled,
-                    rows_total=total_rows,
-                ) from exc
-            raise
+        attempt = 0
+        while True:  # S3/T4: a Postgres deadlock inside the savepoint re-runs the chunk
+            attempt += 1
+            savepoint = None
+            in_savepoint = False
+            # Count adjustments and written rows of THIS chunk, kept only if it commits.
+            c_adj = dict.fromkeys(adj, 0)
+            c_new: list = []
+            c_changed: list = []
+            try:
+                savepoint = import_lock.begin_write_phase(session, SegmentTM)
+                in_savepoint = True
+                # Postgres: lock this chunk's existing rows in id order first, so two imports
+                # (or an import and an editor) updating the same rows queue instead of
+                # deadlocking. No SQL on SQLite (one writer lock already orders everything).
+                # Partial by design: rows another writer inserted since phase 1 ("late" rows
+                # in _insert_chunk) and the new inserts' unique-index locks are not ordered
+                # here; a deadlock there is caught by the retry below. Under REPEATABLE READ
+                # or SERIALIZABLE a 40001 repeats (same outer snapshot) and is raised after 3.
+                _db.lock_rows_in_order(session, SegmentTM, [r[0] for r in part_existing])
+                if part_new:
+                    _insert_chunk(part_new, c_adj, c_new, c_changed)
+                if part_existing:
+                    _existing_chunk(part_existing, c_adj, c_changed)
+                in_savepoint = False
+                savepoint.commit()  # RELEASE SAVEPOINT -- the writes join the outer txn
+                session.commit()  # ... and the commit frees the SQLite write lock
+                break
+            except BaseException as exc:
+                # ROLLBACK TO SAVEPOINT undoes this chunk and leaves the caller's own pending
+                # work (flushed into the OUTER transaction before the savepoint opened) untouched.
+                import_lock.rollback_quietly(session, savepoint)
+                # A Postgres 40P01/40001 raised INSIDE the savepoint is undone by the rollback
+                # above and the chunk re-reads everything it writes, so running it again is
+                # safe. Never on SQLite (sqlite_locks=False: behavior unchanged there) and never
+                # once the commit itself started (the outer transaction may be gone).
+                if (
+                    in_savepoint
+                    and isinstance(exc, Exception)
+                    and attempt < _db.CONFLICT_RETRY_TRIES
+                    and _db.is_retryable_conflict(exc, sqlite_locks=False)
+                ):
+                    log.warning(
+                        "tmx import: write conflict in chunk %d, retrying it (attempt %d of %d)",
+                        n_chunk + 1,
+                        attempt + 1,
+                        _db.CONFLICT_RETRY_TRIES,
+                    )
+                    _db.conflict_retry_pause()
+                    continue
+                if chunks_done and isinstance(exc, Exception):
+                    # The full error goes to the log only: a database error text can carry SQL
+                    # and row values, which must not reach the page, the API reply or the CLI.
+                    log.warning(
+                        "tmx import stopped after chunk %d of %d",
+                        chunks_done,
+                        n_work,
+                        exc_info=True,
+                    )
+                    raise TmxImportIncomplete(
+                        f"the TMX import stopped after {handled} of {total_rows} rows were "
+                        f"processed ({chunks_done} of {n_work} write chunks) because of a "
+                        "server-side error "
+                        f"({type(exc).__name__}). Those rows are kept; "
+                        "importing the same file again finishes the job and creates no duplicates.",
+                        rows_written=handled,
+                        rows_total=total_rows,
+                    ) from exc
+                raise
         for k, v in c_adj.items():
             adj[k] += v
         handled += len(part_new) + len(part_existing)
@@ -884,33 +1280,22 @@ def _import_tmx_attempt(
                 progress(handled, total_rows)
             except Exception:  # a progress callback must never fail the import
                 log.debug("tmx import progress callback failed", exc_info=True)
-        if len(work) > 1 and (chunks_done % 10 == 0 or chunks_done == len(work)):
+        if n_work > 1 and (chunks_done % 10 == 0 or chunks_done == n_work):
             log.info("tmx import: %d/%d rows stored (%d chunks)", handled, total_rows, chunks_done)
-    imported += adj["imported"]
-    updated += adj["updated"]
-    skipped += adj["skipped"]
     if adj["concurrent_deleted"]:
         log.info(
             "tmx import: %d rows deleted by another writer during the import were not restored",
             adj["concurrent_deleted"],
         )
-    if not work:
+    if not chunks_done:
         session.commit()
-    return {
-        "imported": imported,
-        "skipped": skipped,
-        "updated": updated,
-        "skipped_refusal": skipped_refusal,
-        "skipped_integrity": skipped_integrity,
-        "skipped_by_code": skipped_by_code,
-        "skipped_rows": skipped_rows,
-        "acknowledged_placeholder_loss": acknowledged_loss,
-        "source_locale": source_locale,
-        "target_locale": target_locale,
-        "locales_normalized": locales_normalized,
-        "write_chunks": chunks_done,
-        "concurrent_deleted": adj["concurrent_deleted"],
-    }
+    out = dict(report)
+    out["imported"] += adj["imported"]
+    out["updated"] += adj["updated"]
+    out["skipped"] += adj["skipped"]
+    out["write_chunks"] = chunks_done
+    out["concurrent_deleted"] = adj["concurrent_deleted"]
+    return out
 
 
 def export_tmx(
@@ -984,6 +1369,7 @@ def export_tmx_stream(
                         SegmentTM.meta,
                         SegmentTM.created_at,
                         SegmentTM.use_count,
+                        SegmentTM.context_key,
                     )
                     .where(*where, SegmentTM.id > last_id)
                     .order_by(SegmentTM.id)
@@ -1010,7 +1396,14 @@ def export_tmx_stream(
 
 # --- write-back + concordance (used by the CAT editor) -------------------------
 def write_back(
-    session, project_id, source_text, target_text, source_locale, target_locale, segment=None
+    session,
+    project_id,
+    source_text,
+    target_text,
+    source_locale,
+    target_locale,
+    segment=None,
+    context=None,
 ):
     """Upsert an approved segment into the segment TM (keyed by source hash).
 
@@ -1023,7 +1416,13 @@ def write_back(
     `_source_fallback_blocked`. Passing nothing is byte-identical to the pre-#42
     behaviour.
 
-    """
+    CONTEXT (ADR 0102): the row stores the in-context key of this write, so a later lookup
+    with the same neighbours (or the same string key) is a 101 % match. `context` is a ready
+    key string, or a (prev_source, next_source) pair; when omitted and `segment` is given, the
+    key is read from the segment's neighbours by order_index (same document and target locale)
+    or from its string key (tm_context.context_key_for_segment). Written on insert AND update
+    (the last writer's context wins; a write with no context clears a stale key only when it
+    also changes the target)."""
     if not (target_text and target_text.strip()):
         return None
     if not is_tm_eligible(source_text):
@@ -1031,6 +1430,13 @@ def write_back(
     if _source_fallback_blocked(segment):
         return None
     h = hash_text(source_text, source_locale, target_locale)
+    ck = None
+    if context is not None:
+        ck = context if isinstance(context, str) else context_key(context[0], context[1])
+    elif segment is not None:
+        from app.services import tm_context
+
+        ck = tm_context.context_key_for_segment(session, segment)
     # SPEC-content-types phase 3: the project's content type (also the NEW-row stamp).
     ct_id = _project_content_type_id(session, project_id)
     # Phase 4 provenance: a write_back is the CAT approve write-back — origin is a
@@ -1053,9 +1459,13 @@ def write_back(
             )
         ).first()
 
-    # The UPDATE arm (re-stamp target + provenance, refresh the embedding). Shared by the
+    # The UPDATE arm (re-stamp target + provenance). Shared by the
     # first-check hit and the recovery after a losing INSERT race.
     def _apply_update(row):
+        if ck is not None:
+            row.context_key = ck
+        elif row.target_text != target_text:
+            row.context_key = None  # a new target with no known context: the old key is stale
         row.target_text = target_text
         row.activity_at = datetime.utcnow()
         row.meta = prov  # re-stamp current provenance (reassign so JSON is dirty)
@@ -1077,6 +1487,7 @@ def write_back(
         source_hash=h,
         content_type_id=ct_id,
         meta=prov,
+        context_key=ck,
         activity_at=datetime.utcnow(),
     )
     session.add(row)
@@ -1088,8 +1499,7 @@ def write_back(
         # window) inserted the row for this key between our read-check and this INSERT.
         # ux_segmenttm_upsert_key rejected the duplicate. Recover the upsert's intent by
         # rolling back the failed INSERT, re-reading the winner's row and taking the
-        # UPDATE path — last-writer-wins, byte-identical to the no-race outcome. Same
-        # idiom upsert_embedding already uses for its (segment_tm_id, model) unique index.
+        # UPDATE path — last-writer-wins, byte-identical to the no-race outcome.
         session.rollback()
         existing = _read_existing()
         if existing is not None:
@@ -1102,29 +1512,60 @@ def write_back(
     return row
 
 
+def grid_contexts(session, segments, page_segments) -> dict:
+    """{source text: context key} for the page's segments (ADR 0102: a stored unit approved in
+    the same context shows as a 101 % match). The keys come from the whole ordered locale list
+    so a page edge still sees its real neighbours; a source repeated on one page takes its
+    first occurrence's context (the grid is keyed by source text)."""
+    from app.services import tm_context
+
+    keys = dict(
+        zip(
+            (s.id for s in segments),
+            tm_context.segment_context_keys(session, segments),
+            strict=True,
+        )
+    )
+    out: dict = {}
+    for s in page_segments:
+        out.setdefault(s.source_text, keys.get(s.id))
+    return out
+
+
 def grid_matches(
-    session, project, target_locale, sources: list[str], min_score=75, top_k=5
+    session,
+    project,
+    target_locale,
+    sources: list[str],
+    min_score=None,
+    top_k=5,
+    contexts=None,
 ) -> dict:
-    """Best TM match per source for a grid/editor render — the batched
-    replacement for a per-segment tm.lookup() loop.
+    """Best TM match per source for a grid/editor render: the batched replacement for a
+    per-segment tm.lookup() loop.
 
-    - Uses ONE lookup_batch() call (one scoped query pair for the whole `sources` list, not one
-      pair per segment).
-    - Returns kind-tagged matches ({"kind": "fuzzy", ...}); the dict shape is the one lookup()
-      has always returned, plus the kind tag.
+    - Exact layer: ONE lookup_batch() call for the whole `sources` list (100 %, or 101 % when
+      `contexts` {source: (prev, next) or key string} names a stored in-context unit). Tagged
+      kind "exact". `min_score` is kept for old callers (ValueError below 100, ADR 0102).
+    - Returns kind-tagged matches ({"kind": "exact", ...}).
 
-    Returns {source_text: match_dict_or_None} — None entries are omitted (a
-    template does `matches.get(source_text)` and gets None on a miss, same as
-    today's per-segment tm.lookup() calls)."""
+    Returns {source_text: match_dict_or_None} - None entries are omitted (a template does
+    `matches.get(source_text)` and gets None on a miss)."""
     out: dict[str, dict] = {}
     if not project or not target_locale or target_locale == "—" or not sources:
         return out
 
-    fuzzy_map = lookup_batch(
-        session, project.id, sources, project.source_locale, target_locale, min_score=min_score
+    exact_map = lookup_batch(
+        session,
+        project.id,
+        sources,
+        project.source_locale,
+        target_locale,
+        min_score=min_score,
+        contexts=contexts,
     )
-    for src, m in fuzzy_map.items():
+    for src, m in exact_map.items():
         if m is not None:
-            out[src] = {**m, "kind": "fuzzy"}
+            out[src] = {**m, "kind": "exact"}
 
     return out

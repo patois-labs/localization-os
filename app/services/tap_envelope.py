@@ -699,19 +699,23 @@ def _finalize(model, row_id, status):
     if not row_id:
         return
     try:
+        from sqlalchemy import update
+
         from app.models import TapStatus
 
         finished = _now()  # stable across retries (re-evaluating _now() would drift)
+        values = {"status": status}
+        if status in TapStatus.TERMINAL:
+            values["finished_at"] = finished
         with _session() as s:
 
             def _stage():
-                row = s.get(model, row_id)
-                if row is None or row.status == status:
-                    return
-                row.status = status
-                if status in TapStatus.TERMINAL:
-                    row.finished_at = finished
-                s.add(row)
+                # S4 follow-up: one guarded UPDATE instead of a get then a write. The WHERE
+                # is the old in-Python check: a missing row or one already at `status`
+                # changes nothing (L3 above).
+                s.exec(
+                    update(model).where(model.id == row_id, model.status != status).values(**values)
+                )
 
             commit_tap_write(
                 s, _stage, what="finalize {} {}".format(getattr(model, "__name__", model), row_id)
@@ -734,7 +738,7 @@ def finalize_action(action_id, status):
     _finalize(TapAction, action_id, status)
 
 
-def finalize_action_if_all_runs_done(action_id):
+def finalize_action_if_all_runs_done(action_id, run_cache=None):
     """IDEMPOTENTLY re-derive the ACTION's status from its TapRun legs and RE-ROLL its
     totals, in ONE transaction, at EVERY leg finalize (D1 grain: a multi-locale action is
     done only when all its language-pair legs are).
@@ -760,6 +764,9 @@ def finalize_action_if_all_runs_done(action_id):
     path, byte-identical I/O to the round-1 defect). The re-run's FINAL leg re-rolls, which
     is all N1 needs; a non-terminal (running/paused) action never touches the file here.
 
+    `run_cache` (direct MT, S4 follow-up): the run's read cache; the roll-up keeps the
+    leg's segments on it for the enrich that follows.
+
     Best-effort; never raises."""
     if not action_id:
         return
@@ -769,10 +776,17 @@ def finalize_action_if_all_runs_done(action_id):
         from app.models import TapAction, TapRun
 
         with _session() as s:
-            action = s.get(TapAction, action_id)
-            if action is None:
+            # S4 follow-up: the action and its legs in one read (an action with no legs
+            # comes back once with run None).
+            rows = s.exec(
+                select(TapAction, TapRun)
+                .outerjoin(TapRun, TapRun.action_id == TapAction.id)
+                .where(TapAction.id == action_id)
+            ).all()
+            if not rows:
                 return
-            runs = s.exec(select(TapRun).where(TapRun.action_id == action_id)).all()
+            action = rows[0][0]
+            runs = [r for _a, r in rows if r is not None]
             statuses = [r.status for r in runs]
             new_status, is_terminal = _action_status_from_runs(statuses)
             if new_status is None:
@@ -785,7 +799,9 @@ def finalize_action_if_all_runs_done(action_id):
                 try:
                     from app.services import tap_enrich
 
-                    totals = tap_enrich.rollup_action_totals(s, action_id)
+                    totals = tap_enrich.rollup_action_totals(
+                        s, action_id, runs=runs, run_cache=run_cache
+                    )
                 except Exception:
                     totals = None
             # Decide whether anything moves (against the current snapshot) BEFORE taking the
@@ -926,14 +942,15 @@ def finalize_batch_action(
         _warn_once("tap_envelope: finalize_batch_action failed (ignored)")
 
 
-def finalize_pair(action_id, run_id, status):
+def finalize_pair(action_id, run_id, status, run_cache=None):
     """Finalize a run leg and re-derive its action's status (and, when every leg is
     terminal, roll up the action totals). `status` is the RUN's outcome; the action's
     status is mapped from ALL its legs (finalize_action_if_all_runs_done), so a single-run
     action finalizes immediately, a multi-locale action waits for every leg, and a paused
-    leg surfaces the action as paused (M2). Best-effort."""
+    leg surfaces the action as paused (M2). Best-effort. `run_cache`: a direct-MT run's
+    read cache (see finalize_action_if_all_runs_done)."""
     finalize_run(run_id, status)
-    finalize_action_if_all_runs_done(action_id)
+    finalize_action_if_all_runs_done(action_id, run_cache=run_cache)
 
 
 def stage_run_finalize_in_session(

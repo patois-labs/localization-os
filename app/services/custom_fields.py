@@ -357,17 +357,41 @@ def list_defs(
     if not enabled() or access.org_scope_blocked(org_id):
         return []
     org_id = access.org_scope_value(org_id)
-    stmt = select(CustomFieldDef).where(CustomFieldDef.entity == ENTITY_PROJECT)
+    # S9: one statement per shape (org-scoped?, customer-bound?, archived too?), built once per
+    # process; the values ride as bound parameters. The project list and project show both
+    # read the definitions on every request.
+    from app import db
+
+    params = {}
     if org_id is not None:
-        stmt = stmt.where(CustomFieldDef.org_id == org_id)
+        params["org"] = org_id
     if customer_id is not None:
+        params["cust"] = customer_id
+    shape = f"{org_id is not None}:{customer_id is not None}:{include_archived}"
+    stmt = db.prebuilt(
+        f"custom_fields.list_defs:{shape}",
+        lambda: _defs_statement("org" in params, "cust" in params, include_archived),
+    )
+    return list(session.exec(stmt, params=params).all())
+
+
+def _defs_statement(by_org: bool, by_customer: bool, include_archived: bool):
+    """The project-field definitions select for one scope shape, every value a bound parameter
+    (`org`, `cust`). list_defs builds it once per shape (db.prebuilt) AFTER its own org-scope
+    guard; this takes the shape as plain flags, so it holds no org decision of its own."""
+    from sqlalchemy import bindparam
+
+    stmt = select(CustomFieldDef).where(CustomFieldDef.entity == ENTITY_PROJECT)
+    if by_org:
+        stmt = stmt.where(CustomFieldDef.org_id == bindparam("org"))
+    if by_customer:
         stmt = stmt.where(
-            (CustomFieldDef.customer_id.is_(None)) | (CustomFieldDef.customer_id == customer_id)
+            (CustomFieldDef.customer_id.is_(None))
+            | (CustomFieldDef.customer_id == bindparam("cust"))
         )
     if not include_archived:
         stmt = stmt.where(CustomFieldDef.archived_at.is_(None))
-    stmt = stmt.order_by(CustomFieldDef.list_order, CustomFieldDef.label, CustomFieldDef.id)
-    return list(session.exec(stmt).all())
+    return stmt.order_by(CustomFieldDef.list_order, CustomFieldDef.label, CustomFieldDef.id)
 
 
 def visible(session: Session, field_id, org_id=None, customer_id=None) -> CustomFieldDef | None:
@@ -901,10 +925,15 @@ def values_for_projects(session: Session, project_ids, defs=None) -> dict:
     return out
 
 
-def payload_for_projects(session: Session, projects, org_id=None, customer_id=None) -> dict:
+def payload_for_projects(
+    session: Session, projects, org_id=None, customer_id=None, defs=None
+) -> dict:
     """``{project_id: {key: value}}`` for a list of Project rows, scoped like the
-    definitions are (a bound caller never gets another customer's field values)."""
-    defs = list_defs(session, org_id, customer_id, include_archived=False)
+    definitions are (a bound caller never gets another customer's field values). `defs`:
+    the caller's own ``list_defs(session, org_id, customer_id)`` result for the same scope,
+    when it already has it (S3c: the project list read them twice per request)."""
+    if defs is None:
+        defs = list_defs(session, org_id, customer_id, include_archived=False)
     by_id = {d.id: d for d in defs}
     vals = values_for_projects(session, [p.id for p in projects], defs)
     out = {}

@@ -753,14 +753,24 @@ def waiting_human_review(session: Session, document_id: int, target_locale: str)
     `paused_review`, so the editor, /api and the CLI see exactly what the run page shows."""
     if not target_locale:
         return None
+    from sqlalchemy import bindparam
+
+    from app import db
+
     run = session.exec(
-        select(WorkflowRun)
-        .where(
-            WorkflowRun.document_id == document_id,
-            WorkflowRun.target_locale == target_locale,
-            WorkflowRun.status == RunStatus.PAUSED,
-        )
-        .order_by(WorkflowRun.id.desc())
+        db.prebuilt(  # S7b: built once; every translate job asks this before it starts
+            "orchestrator_part3.paused_run_for_locale",
+            lambda: (
+                select(WorkflowRun)
+                .where(
+                    WorkflowRun.document_id == bindparam("document_id"),
+                    WorkflowRun.target_locale == bindparam("target_locale"),
+                    WorkflowRun.status == RunStatus.PAUSED,
+                )
+                .order_by(WorkflowRun.id.desc())
+            ),
+        ),
+        params={"document_id": document_id, "target_locale": target_locale},
     ).first()
     if run is None:
         return None

@@ -9,6 +9,7 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import UTC
 
 from app import config
 
@@ -405,7 +406,9 @@ class Provider(ABC):
             from app.services import ai_optout, pii_boundary
 
             protected = pii_boundary.wrap_callable(fn, {"prompt", "system", "payload", "messages"})
-            cls.complete = ai_optout.wrap_callable(protected, "an AI engine call")
+            cls.complete = ai_optout.wrap_callable(
+                protected, "an AI engine call", accept_hand_off=True
+            )
 
     @abstractmethod
     def complete(
@@ -1007,9 +1010,9 @@ def _sigv4_headers(
     datetime, UTC) is injectable for deterministic tests."""
     import hashlib
     import hmac
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     amz_date = now.strftime("%Y%m%dT%H%M%SZ")
     date_stamp = now.strftime("%Y%m%d")
     payload_hash = hashlib.sha256(body).hexdigest()
@@ -1102,15 +1105,15 @@ def _parse_retry_after(value) -> float | None:
         pass
     # HTTP-date form.
     try:
-        from datetime import datetime, timezone
+        from datetime import datetime
         from email.utils import parsedate_to_datetime
 
         when = parsedate_to_datetime(raw)
         if when is None:
             return None
         if when.tzinfo is None:
-            when = when.replace(tzinfo=timezone.utc)
-        delta = (when - datetime.now(timezone.utc)).total_seconds()
+            when = when.replace(tzinfo=UTC)
+        delta = (when - datetime.now(UTC)).total_seconds()
         return delta if delta > 0 else None
     except (TypeError, ValueError, OverflowError):
         return None
@@ -1238,7 +1241,7 @@ def _claude_retry_after(err) -> float | None:
             parsed = _parse_retry_after(text)  # HTTP-date form
             if parsed is not None:
                 return parsed
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         waits = []
         for name in _CLAUDE_RESET_HEADERS:
@@ -1250,8 +1253,8 @@ def _claude_retry_after(err) -> float | None:
             except ValueError:
                 continue
             if when.tzinfo is None:
-                when = when.replace(tzinfo=timezone.utc)
-            delta = (when - datetime.now(timezone.utc)).total_seconds()
+                when = when.replace(tzinfo=UTC)
+            delta = (when - datetime.now(UTC)).total_seconds()
             if delta > 0:
                 waits.append(delta)
         return max(waits) if waits else None

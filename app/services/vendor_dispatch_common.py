@@ -9,7 +9,7 @@ import logging
 import math
 import re
 import secrets
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
 import httpx
@@ -93,9 +93,8 @@ def _parse_retry_after(value) -> float | None:
         dt = parsedate_to_datetime(raw)
         if dt is None:
             return None
-        from datetime import timezone
 
-        now = datetime.now(dt.tzinfo or timezone.utc)
+        now = datetime.now(dt.tzinfo or UTC)
         delta = (dt - now).total_seconds()
         return delta if delta >= 0 else 0.0
     except Exception:

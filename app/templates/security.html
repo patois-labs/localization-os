@@ -186,7 +186,7 @@
       <span><strong>Encrypt uploads at rest</strong> - uploaded documents are AES-encrypted (Fernet) on disk.</span></label>
     <p><strong>Database encryption requires SQLCipher.</strong> The legacy shutdown vault is retired because it could omit committed data and leave plaintext behind. Configure SQLCipher at install time; see docs/SECRETS.md.</p>
     <label class="toggle"><input type="checkbox" name="pii_redaction" value="1" {% if vals.pii_redaction == '1' %}checked{% endif %}>
-      <span><strong>PII redaction before AI</strong> - strip emails / SSNs / cards / phones / IBANs from everything sent to any AI engine (translation, agent workflows, LQA and QE, glossary tools, the assistant, embeddings), restore in the output. Leave OFF for fully local models.</span></label>
+      <span><strong>PII redaction before AI</strong> - strip emails / SSNs / cards / phones / IBANs from everything sent to any AI engine (translation, agent workflows, LQA and QE, glossary tools, the assistant), restore in the output. Leave OFF for fully local models.</span></label>
     <p class="muted"><strong>PII named-entity recognition (NER)</strong> - the offline Presidio + spaCy
       layer that also strips names / locations / dates - is now configured and enabled on the
       <a href="/settings/enterprise#feature-pii_ner">Enterprise features</a> panel (with a preflight

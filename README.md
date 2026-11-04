@@ -15,7 +15,7 @@ unless you tell it to.
 
 ## Quick start (about 5 minutes)
 
-You need Python 3.10 or newer (CI and the container use 3.13).
+You need Python 3.11 or newer (CI and the container use 3.13).
 
 ```bash
 git clone https://github.com/patois-labs/localization-os.git
@@ -38,15 +38,16 @@ engine is the built-in **mock** engine, so everything works offline and free wit
 key for Claude, Gemini or OpenAI in `.env`, or point it at a local model server (LM Studio, Ollama, vLLM), and
 translations become real with no code changes.
 
-Prefer containers? `docker compose up` runs it on SQLite; see [docs/DEPLOY.md](docs/DEPLOY.md) for Postgres, TLS and
-the first-admin setup wizard.
+Prefer containers? A local trial runs with `docker compose up` on SQLite. Before an image serves anyone else, run
+the image scan gate in [docs/DEPLOY.md](docs/DEPLOY.md), which also covers Postgres, TLS, Podman and the first-admin
+setup wizard.
 
 ## What it does
 
 **Translation**
 - Configurable workflows: translate, quality check, fix and re-check loops, human review steps, pause and resume.
 - Describe a workflow in plain language and it drafts the steps for you to review.
-- Translation memory (TMX, fuzzy matching, locks), glossaries with do-not-translate and required terms, style guides,
+- Translation memory (TMX, exact and in-context matching, locks, a word leverage report), glossaries with do-not-translate and required terms, style guides,
   content types and context packages, all sent to the model and verified on the way back.
 - Automated quality checks: MQM-style scoring, tags, numbers, terms, placeholders, refusals.
 - A post-editing editor for the segments that need a person.

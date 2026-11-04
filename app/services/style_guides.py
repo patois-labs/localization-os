@@ -505,21 +505,52 @@ def resolve_style_guide(
         rungs.append((None, ct))
     rungs.append((None, None))  # org-global universal-scope guide
 
-    for want_cust, want_ct in rungs:
+    # ONE read for every rung (S4 query diet, ADR 0093), then the rungs are walked in
+    # order exactly as before: each rung's candidates are the rows whose scope columns
+    # equal that rung, in the order its own read returned them (the table's order, which
+    # _pick does not depend on: it sorts).
+    import sqlalchemy as sa
+
+    from app import db
+
+    # S7b: the statement is built once per SHAPE (which rung values are NULL,
+    # whether an org gates it) and run with the values bound; same SQL, same rows.
+    def _eq(col, value, name):
+        return (col == sa.bindparam(name)) if value is not None else col.is_(None)
+
+    org_gated = False
+    if org_id is not None:  # the org narrowing, applied inside _build
+        org_gated = True
+
+    def _build():
         stmt = select(StyleGuide).where(StyleGuide.status == StyleGuideStatus.APPROVED)
-        if org_id is not None:
-            stmt = stmt.where(StyleGuide.org_id == org_id)
-        stmt = stmt.where(
-            (StyleGuide.customer_id == want_cust)
-            if want_cust is not None
-            else StyleGuide.customer_id.is_(None)
+        if org_gated:  # decided by the enclosing function
+            stmt = stmt.where(StyleGuide.org_id == sa.bindparam("org_id"))
+        return stmt.where(
+            sa.or_(
+                *(
+                    sa.and_(
+                        _eq(StyleGuide.customer_id, c, f"c{i}"),
+                        _eq(StyleGuide.content_type_id, t, f"t{i}"),
+                    )
+                    for i, (c, t) in enumerate(rungs)
+                )
+            )
         )
-        stmt = stmt.where(
-            (StyleGuide.content_type_id == want_ct)
-            if want_ct is not None
-            else StyleGuide.content_type_id.is_(None)
-        )
-        candidates = list(session.exec(stmt).all())
+
+    shape = (org_gated, tuple((c is None, t is None) for c, t in rungs))
+    params = {"org_id": org_id} if org_id is not None else {}
+    for i, (c, t) in enumerate(rungs):
+        if c is not None:
+            params[f"c{i}"] = c
+        if t is not None:
+            params[f"t{i}"] = t
+    stmt = db.prebuilt(f"style_guides.resolve:{shape}", _build)
+    rows = list(session.exec(stmt, params=params).all())
+    for want_cust, want_ct in rungs:
+        candidates = [
+            g for g in rows if g.customer_id == want_cust and g.content_type_id == want_ct
+        ]
         if not candidates:
             continue
         best = _pick(candidates, src, tgt)

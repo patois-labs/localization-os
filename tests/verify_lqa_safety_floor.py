@@ -925,7 +925,7 @@ def test_parity():
     # CLI read surface (`workflow show --json`) + the human opts column.
     from app.cli._common import _opts_label
 
-    _base = {"tm_examples": True, "tm_examples_window": 3}
+    _base = {"tm_examples": False, "tm_examples_window": 3}
     assert _opts_label({**_base, "tm_protect": True}) == "tm-protect:on"
     assert _opts_label({**_base, "tm_protect": False}) == "tm-protect:off"
     assert _opts_label({**_base, "tm_protect": None}) == "-"

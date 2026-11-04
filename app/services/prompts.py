@@ -1047,7 +1047,7 @@ def translation_prompt(
 
     `tm_examples_block` (phase 2B, TM few-shot) is an optional PRE-RENDERED,
     injection-fenced `<tm_examples>` block (context_pkg.render_tm_examples) — the
-    top-N relevance-gated fuzzy TM matches for THIS segment. It GENERALIZES the old
+    top-N relevance-gated TM examples for THIS segment. It GENERALIZES the old
     single `tm_ref` line into up-to-N example pairs and takes its slot (after the
     glossary, before the per-segment feedback/source). When it is None/"" AND
     `tm_ref` is None, this occupies zero bytes — byte-identical to pre-2B. `tm_ref`

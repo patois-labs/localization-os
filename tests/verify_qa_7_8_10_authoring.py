@@ -324,13 +324,14 @@ def check_qa7_blank_bound_on_dead_default_and_model_cleared():
 def check_qa8_context_fact_gated():
     """Pure service check: the translate-step Context fact is OMITTED when no context is
     available and shown (per document) when it is -- mirroring the style-guide gate. The
-    glossary auto-attach + TM few-shot facts are always-on per-document MECHANISMS and stay
-    unconditional. PRE-FIX: the Context fact was appended unconditionally, so the first
+    glossary auto-attach fact is an always-on per-document MECHANISM and stays unconditional
+    (the TM few-shot fact needs a TM examples add-on, ADR 0102, so the core omits it).
+    PRE-FIX: the Context fact was appended unconditionally, so the first
     assert (default has_context=False -> omitted) fails on the old tree."""
     step = {"step_type": StepType.LLM_AGENT, "name": "T"}
     bare = {f["key"] for f in pv.step_facts(step)["package"]}  # default has_context=False
     assert "context" not in bare, ("QA-8: Context omitted when none resolves", bare)
-    assert "glossary" in bare and "tm" in bare, ("mechanisms stay unconditional", bare)
+    assert "glossary" in bare and "tm" not in bare, ("glossary unconditional, no TM fact", bare)
     shown = {f["key"]: f for f in pv.step_facts(step, has_context=True)["package"]}
     assert "context" in shown and shown["context"]["scope"] == pv.PER_DOCUMENT, shown
 

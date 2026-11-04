@@ -408,6 +408,11 @@ class _Server:
     def __exit__(self, *exc):
         self.server.should_exit = True
         self.thread.join(timeout=10)
+        # The app's shutdown hook drains the job workers (S1, jobs.drain) and a real process
+        # never resumes them; this suite keeps running, so let them claim again.
+        from app.services import jobs
+
+        jobs.resume_after_drain()
 
 
 ENGINE_DELAY_S = 6.0
@@ -520,11 +525,13 @@ TM_BUDGET_S = 3.0
 
 
 def test_tm_fuzzy_bounded():
-    """TM fuzzy matching scored every candidate with a full fuzz.ratio (O(n*m), GIL held):
-    a long source against many long TM rows held every thread for seconds per lookup."""
-    import random
+    """TM lookups of very long text stay bounded.
 
-    from rapidfuzz import fuzz
+    ADR 0102 removed the fuzzy engine whose full fuzz.ratio (O(n*m), GIL held) froze every thread
+    on a long source against many long TM rows (#599). What is left is one hash probe per source,
+    so an 80k-character source costs the same as a short one. The name is kept so the #599 history
+    stays greppable; the bound is now structural, and this pins that it stays so."""
+    import random
 
     from app.services import tm, tm_hub
 
@@ -560,26 +567,21 @@ def test_tm_fuzzy_bounded():
             ("lookup", lambda: tm.lookup(s, pid, query, "en-US", "fr-FR")),
             ("lookup_batch", lambda: tm_hub.lookup_batch(s, pid, [query], "en-US", "fr-FR")),
             (
-                "example_matches_batch",
-                lambda: tm_hub.example_matches_batch(s, pid, [query], "en-US", "fr-FR"),
+                "example_matches_hybrid",
+                lambda: tm.example_matches_hybrid(s, pid, [query], "en-US", "fr-FR"),
             ),
         ):
             _timed(f"TM {label} of an 80k-char source over 40 80k-char rows", fn, TM_BUDGET_S)
-        # ordinary fuzzy matching is unchanged
+        # an exact 80k-character source is still a 100 % hit; a near variant is not a hit
+        stored = rows[0]
+        assert tm.lookup(s, pid, stored, "en-US", "fr-FR")["match_pct"] == 100
+        assert tm.lookup(s, pid, stored + "x", "en-US", "fr-FR") is None
         near = "The quick brown fox jumped over the lazy dog."
-        hit = tm.lookup(s, pid, near, "en-US", "fr-FR")
-        assert hit and 75 <= hit["match_pct"] < 100, hit
-        assert tm_hub.lookup_batch(s, pid, [near], "en-US", "fr-FR")[near] == hit
-        assert tm_hub.example_matches_batch(s, pid, [near], "en-US", "fr-FR")[near], "no example"
-    # the cutoff is exact: a score at or over the floor is the full score, below it is dropped
-    for _ in range(3000):
-        a = "".join(rnd.choice("abc ") for _ in range(rnd.randint(1, 60)))
-        b = "".join(rnd.choice("abc ") for _ in range(rnd.randint(1, 60)))
-        floor = rnd.choice([50, 75, 90, 100])
-        full = fuzz.ratio(a, b)
-        got = tm_hub._fuzzy_ratio(a, b, floor)
-        assert (got == full) if full >= floor else (got < floor), (a, b, floor, full, got)
-    print("  TM fuzzy: 80k-char lookups bounded (exact match only past the ceiling) OK")
+        assert tm.lookup(s, pid, near, "en-US", "fr-FR") is None
+        assert tm_hub.lookup_batch(s, pid, [near], "en-US", "fr-FR")[near] is None
+    print(
+        "  TM lookups: 80k-char sources bounded (one hash probe), exact hit kept, near miss none OK"
+    )
 
 
 SAVE_BUDGET_S = 5.0

@@ -12,7 +12,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 try:
@@ -260,7 +260,7 @@ def audit_pins(label, pins, ignores, output, timeout, accepted=None):
         except ValueError:
             data = None
     if data is not None:
-        today = datetime.now(timezone.utc).date().isoformat()
+        today = datetime.now(UTC).date().isoformat()
         live = {i for i, expiry in (accepted or {}).items() if expiry >= today}
         found, warned = [], []
         for dep in data.get("dependencies", []):
@@ -332,7 +332,7 @@ def local_audit(root, output, include_optional=True, timeout=600, profile=None):
 
     try:
         content = (root / LEDGER).read_text(encoding="utf-8")
-        errors = ledger_errors(content, datetime.now(timezone.utc).date())
+        errors = ledger_errors(content, datetime.now(UTC).date())
         if errors:
             return "FAIL", [f"ledger: {error}" for error in errors]
         ids = ledger_ids(content)

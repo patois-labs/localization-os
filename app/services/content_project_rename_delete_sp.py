@@ -6,7 +6,7 @@ Documented in: docs/architecture/content-and-projects.md
 import logging
 import math
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlmodel import Session, select
 
@@ -255,7 +255,7 @@ def parse_due_date(value) -> datetime | None:
         # to naive-UTC here — convert to UTC then drop tzinfo. A naive datetime
         # (the normal case) passes through completely unchanged.
         if value.tzinfo is not None:
-            return value.astimezone(timezone.utc).replace(tzinfo=None)
+            return value.astimezone(UTC).replace(tzinfo=None)
         return value
     text = str(value).strip()
     if not text:

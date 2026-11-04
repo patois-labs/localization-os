@@ -1,9 +1,10 @@
 """Pin (or bump) the Dockerfile base images by digest (issue #236).
 
-The Dockerfile takes every base image from two ARGs declared above the first FROM:
+The Dockerfile takes every base image from three ARGs declared above the first FROM:
 
-    ARG PYTHON_BASE=python:3.13-slim               (builder AND runtime stages)
-    ARG TAILSCALE_BASE=tailscale/tailscale:v1.102.5  (the tailscale binaries stage)
+    ARG PYTHON_BASE=python:3.13-slim               (builder, native AND runtime stages)
+    ARG TAILSCALE_BASE=tailscale/tailscale:v1.104.2  (the tailscale binaries stage)
+    ARG RUST_BASE=rust:1.94.1-slim-trixie          (the Rust toolchain the native stage copies)
 
 A pinned value is ``<name>:<tag>@sha256:<64 hex>``. Docker then pulls exactly that image
 (a tag can move; a digest cannot), and the tag stays in the value as its readable name.
@@ -15,8 +16,8 @@ Usage, from the repo root (needs registry HTTPS access, but not Docker):
 
 The resolver asks the registry for the tag's current multi-platform index digest
 (Docker Hub authentication followed by a manifest HEAD). Running it again later is how a
-new Debian or Python patch release is taken on purpose: review the two-line diff,
-rebuild, commit. Offline shape rules (both stages share PYTHON_BASE, no ``latest``, a
+new Debian or Python patch release is taken on purpose: review the ARG-line diff,
+rebuild, commit. Offline shape rules (every Python stage shares PYTHON_BASE, no ``latest``, a
 well-formed digest) live in :func:`base_errors`; tests/verify_docker_image.py runs them.
 
 ASCII-only output.
@@ -39,11 +40,15 @@ DOCKERFILE = ROOT / "Dockerfile"
 BASE_ARGS = {
     "PYTHON_BASE": "python",
     "TAILSCALE_BASE": "tailscale/tailscale",
+    "RUST_BASE": "rust",
 }
-# The stages each ARG feeds. Both Python stages MUST use the same ARG.
+# The stages each ARG feeds. Every Python stage MUST use the same ARG: the native module is
+# built against the exact Python the runtime stage ships (ADR 0091).
 STAGE_BASES = {
     "builder": "PYTHON_BASE",
     "tailscale": "TAILSCALE_BASE",
+    "rust": "RUST_BASE",
+    "native": "PYTHON_BASE",
     "runtime": "PYTHON_BASE",
 }
 
@@ -79,7 +84,7 @@ def from_lines(text: str) -> list[str]:
 def base_errors(text: str, *, require_digest: bool = False) -> list[str]:
     """Every rule of the base-image mechanism; [] when the Dockerfile is right.
 
-    ``require_digest`` adds the release rule: both values carry a digest."""
+    ``require_digest`` adds the release rule: every value carries a digest."""
     errors: list[str] = []
     args = base_args(text)
     for arg, image in BASE_ARGS.items():
@@ -168,7 +173,7 @@ def pin(text: str, resolver) -> tuple[str, list[str]]:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--check", action="store_true", help="exit 1 unless both are pinned")
+    parser.add_argument("--check", action="store_true", help="exit 1 unless every base is pinned")
     parser.add_argument("--dockerfile", default=str(DOCKERFILE))
     ns = parser.parse_args(argv)
     path = Path(ns.dockerfile)

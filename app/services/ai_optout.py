@@ -25,6 +25,9 @@ ENFORCEMENT -- ONE CHOKE POINT PLUS CLEAR REFUSALS AT THE DOORS
          post, and providers.local_complete.
      `guard()` reads the AI SCOPE (a ContextVar) and refuses when it resolves to an
      opted-out project. No content has left the process when it raises.
+     run_completion's own guard hands its fresh answer ONCE to the provider
+     complete() guard it reaches next (same scopes, same call, ADR 0093), so one
+     engine call resolves once; a retry or failover attempt resolves again.
   2. The scope is set WITHOUT any caller cooperation at the outer layers:
        * web + API: a pure ASGI middleware (`AIScopeMiddleware`) records the project /
          document / run / segment ids found in the URL. It reads no database; the ids
@@ -54,6 +57,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import re
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
@@ -142,8 +146,71 @@ def opted_out_project_ids(session) -> set:
     return ids
 
 
+def _in_session(session, model, ident) -> bool:
+    """Whether `session` already holds the row, so a plain read would answer from its
+    in-session (possibly staged) state. Anything odd answers True: take the old path."""
+    try:
+        from sqlalchemy.orm.util import identity_key
+
+        return identity_key(model, ident) in session.identity_map
+    except Exception:
+        return True
+
+
+def _opt_out_lookup(session, project_id, document_id=None):
+    """(project_id, project_name, via) for ONE project, or None when there is no such
+    project, in ONE statement (S4 query diet, ADR 0093): the project and customer flags
+    are joined instead of read one after the other. With `document_id` the project is
+    found through the document in the same statement.
+
+    Answers exactly like `_project_row` + `opt_out_source` (project flag first, then the
+    customer's; via None when allowed). A customer row the session already holds is read
+    from the session, as the old path did. Autoflush is off, so the read never writes a
+    caller's staged work as a side effect."""
+    import sqlalchemy as sa
+
+    from app.models import Customer, Document, Project
+
+    stmt = sa.select(
+        Project.id, Project.name, Project.ai_opt_out, Project.customer_id, Customer.ai_opt_out
+    ).outerjoin(Customer, Customer.id == Project.customer_id)
+    if document_id is not None:
+        stmt = stmt.join(Document, Document.project_id == Project.id).where(
+            Document.id == document_id
+        )
+    else:
+        stmt = stmt.where(Project.id == project_id)
+    with session.no_autoflush:
+        row = session.execute(stmt).first()
+    if row is None:
+        return None
+    pid, name, p_off, cid, c_off = row
+    if bool(p_off):
+        return (pid, name, "project")
+    if cid:
+        if _in_session(session, Customer, cid):
+            cust = session.get(Customer, cid)
+            c_off = getattr(cust, "ai_opt_out", False) if cust is not None else False
+        if bool(c_off):
+            return (pid, name, "customer")
+    return (pid, name, None)
+
+
 def refuse(session, project_or_id, feature: str) -> None:
     """The entry-point refusal: raise AIOptOutRefused when the project opted out."""
+    from app.models import Project
+
+    if project_or_id is not None and not isinstance(project_or_id, Project):
+        try:
+            pid = int(project_or_id)
+        except (TypeError, ValueError):
+            return
+        if not _in_session(session, Project, pid):
+            # S4 (ADR 0093): project and customer in one read.
+            hit = _opt_out_lookup(session, pid)
+            if hit is not None and hit[2]:
+                raise AIOptOutRefused(feature, hit[0], hit[1], hit[2])
+            return
     project = _project_row(session, project_or_id)
     if project is None:
         return
@@ -153,14 +220,24 @@ def refuse(session, project_or_id, feature: str) -> None:
 
 
 def refuse_for_document(session, document_or_id, feature: str) -> None:
-    from app.models import Document
+    from app.models import Document, Project
 
     doc = document_or_id
     if doc is not None and not isinstance(doc, Document):
         try:
-            doc = session.get(Document, int(doc))
+            did = int(doc)
         except (TypeError, ValueError):
-            doc = None
+            return
+        if not _in_session(session, Document, did):
+            # S4 (ADR 0093): document -> project -> customer in one read. A project the
+            # session already holds keeps the old path (its in-session state wins).
+            hit = _opt_out_lookup(session, None, document_id=did)
+            if hit is not None and _in_session(session, Project, hit[0]):
+                refuse(session, hit[0], feature)
+            elif hit is not None and hit[2]:
+                raise AIOptOutRefused(feature, hit[0], hit[1], hit[2])
+            return
+        doc = session.get(Document, did)
     if doc is not None:
         refuse(session, getattr(doc, "project_id", None), feature)
 
@@ -430,13 +507,74 @@ def scope(*, project_id=None, document_id=None, run_id=None, segment_id=None, ev
             _SCOPES.set(tuple(s for s in _SCOPES.get() if s is not sc))
 
 
+#: S7b: _resolve's reads as fixed SQL text on a core connection. This runs before
+#: EVERY engine call (once per segment), and the ORM session plus a freshly built select cost
+#: about 1.7 ms of CPU per call; the same reads as text cost a fraction of that. Same rows,
+#: same answer as `_opt_out_lookup` on a fresh session (which holds no rows, so its in-session
+#: branch never applies there).
+_FAST_SQL = {
+    "project": (
+        "SELECT p.id, p.name, p.ai_opt_out, p.customer_id, c.ai_opt_out FROM project p "
+        "LEFT OUTER JOIN customer c ON c.id = p.customer_id WHERE p.id = :pid"
+    ),
+    "document": (
+        "SELECT p.id, p.name, p.ai_opt_out, p.customer_id, c.ai_opt_out FROM project p "
+        "LEFT OUTER JOIN customer c ON c.id = p.customer_id "
+        "JOIN document d ON d.project_id = p.id WHERE d.id = :did"
+    ),
+    "run": "SELECT document_id FROM workflowrun WHERE id = :rid",
+    "segment": "SELECT document_id FROM segment WHERE id = :sid",
+}
+_FAST_STMTS: dict = {}
+
+
+def _fast(name: str):
+    stmt = _FAST_STMTS.get(name)
+    if stmt is None:
+        from sqlalchemy import text
+
+        stmt = _FAST_STMTS[name] = text(_FAST_SQL[name])
+    return stmt
+
+
+def _resolve_fast(sc: _Scope) -> tuple:
+    """`_resolve` for a scope without an eval dataset: the same reads on a fresh connection."""
+    from app.db import engine
+
+    with engine.connect() as cx:
+        pid = sc.project_id
+        doc_id = sc.document_id
+        if doc_id is None and sc.run_id is not None:
+            doc_id = cx.execute(_fast("run"), {"rid": sc.run_id}).scalar()
+        if doc_id is None and sc.segment_id is not None:
+            doc_id = cx.execute(_fast("segment"), {"sid": sc.segment_id}).scalar()
+        row = None
+        if pid is not None:
+            row = cx.execute(_fast("project"), {"pid": pid}).first()
+        elif doc_id is not None:
+            row = cx.execute(_fast("document"), {"did": doc_id}).first()
+    if row is None:
+        return ()
+    pid, name, p_off, cid, c_off = row
+    if bool(p_off):
+        return (pid, name, "project")
+    if cid and bool(c_off):
+        return (pid, name, "customer")
+    return ()
+
+
 def _resolve(sc: _Scope) -> tuple:
     if sc.resolved is not None:
         return sc.resolved
+    if sc.eval_dataset_id is None:
+        out = _resolve_fast(sc)
+        if out:
+            sc.resolved = out
+        return out
     from sqlmodel import Session
 
     from app.db import engine
-    from app.models import Document, EvalDataset, Project, Segment, WorkflowRun
+    from app.models import EvalDataset, Segment, WorkflowRun
 
     out: tuple = ()
     with Session(engine) as s:
@@ -459,22 +597,57 @@ def _resolve(sc: _Scope) -> tuple:
         if doc_id is None and sc.segment_id is not None:
             seg = s.get(Segment, sc.segment_id)
             doc_id = seg.document_id if seg is not None else None
-        if pid is None and doc_id is not None:
-            doc = s.get(Document, doc_id)
-            pid = doc.project_id if doc is not None else None
-        project = s.get(Project, pid) if pid is not None else None
-        if project is not None:
-            via = opt_out_source(s, project)
-            if via:
-                out = (project.id, project.name, via)
+        # S4 (ADR 0093): document -> project -> customer in ONE read on this fresh session,
+        # at every resolution (an allowed answer is still never cached).
+        hit = None
+        if pid is not None:
+            hit = _opt_out_lookup(s, pid)
+        elif doc_id is not None:
+            hit = _opt_out_lookup(s, None, document_id=doc_id)
+        if hit is not None and hit[2]:
+            out = hit
     if out:
         sc.resolved = out
     return out
 
 
-def guard(feature: str = "an AI engine call") -> None:
+# ONE-SHOT HAND-OFF (S4 query diet, ADR 0093). providers.run_completion runs guard() at its
+# top and then, a few milliseconds later with no I/O that could change the answer in between,
+# reaches the provider's own guarded complete(): the same scopes were resolved twice per
+# engine call. run_completion's guard now leaves a marker for EXACTLY the scopes tuple it
+# just found allowed; the next provider complete() guard on that same tuple takes it instead
+# of resolving again. One use only (a retry or failover attempt resolves afresh), the same
+# scopes OBJECT only (every scope() entry builds a new tuple), within _HAND_OFF_SECONDS, and
+# only by the Provider.complete wrapper (wrap_callable accept_hand_off). A refusal is never
+# handed off: guard() raises before it sets the marker. The marker never outlives the call
+# that set it: run_completion is wrapped so `clear_hand_off()` runs when it returns or raises,
+# and a call that ends before any complete() (spend block, dead engine) leaves nothing behind
+# for a later engine call (gate M1).
+_HAND_OFF: contextvars.ContextVar[tuple | None] = contextvars.ContextVar(
+    "loc_ai_hand_off", default=None
+)
+_HAND_OFF_SECONDS = 1.0
+
+
+def clear_hand_off() -> None:
+    """Drop any unused hand-off in the current context (providers.run_completion's exit)."""
+    _HAND_OFF.set(None)
+
+
+def _take_hand_off(scopes) -> bool:
+    marker = _HAND_OFF.get()
+    if marker is None:
+        return False
+    _HAND_OFF.set(None)
+    return marker[0] is scopes and time.monotonic() - marker[1] <= _HAND_OFF_SECONDS
+
+
+def guard(feature: str = "an AI engine call", *, hand_off: bool = False) -> None:
     """THE CHOKE POINT. Raise AIOptOutRefused when the current scope belongs to an
-    opted-out project. Called before any byte of content leaves for an AI engine."""
+    opted-out project. Called before any byte of content leaves for an AI engine.
+
+    `hand_off=True` (providers.run_completion only): when allowed, the next provider
+    complete() guard on the same scopes takes this answer once (see _HAND_OFF)."""
     scopes = _SCOPES.get()
     if not scopes:
         return
@@ -489,6 +662,8 @@ def guard(feature: str = "an AI engine call") -> None:
             raise AIOptOutRefused(feature, via="unknown") from None
         if hit:
             raise AIOptOutRefused(feature, hit[0], hit[1], hit[2])
+    if hand_off:
+        _HAND_OFF.set((scopes, time.monotonic()))
 
 
 def scoped_stream(stream, **ids):
@@ -515,9 +690,10 @@ def submit(pool, fn, *args, **kwargs):
     return pool.submit(contextvars.copy_context().run, fn, *args, **kwargs)
 
 
-def wrap_callable(fn, feature: str):
+def wrap_callable(fn, feature: str, *, accept_hand_off: bool = False):
     """Wrap an engine method so guard() runs before it (used by the Provider and
-    Embedder base classes on every subclass)."""
+    Embedder base classes on every subclass). `accept_hand_off` (Provider.complete only):
+    take run_completion's one-shot hand-off instead of resolving the same scopes again."""
     import functools
 
     if getattr(fn, "_ai_optout_guarded", False):
@@ -525,7 +701,8 @@ def wrap_callable(fn, feature: str):
 
     @functools.wraps(fn)
     def _guarded(self, *args, **kwargs):
-        guard(feature)
+        if not (accept_hand_off and _take_hand_off(_SCOPES.get())):
+            guard(feature)
         return fn(self, *args, **kwargs)
 
     _guarded._ai_optout_guarded = True  # type: ignore[attr-defined]

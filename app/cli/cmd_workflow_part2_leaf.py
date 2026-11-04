@@ -136,16 +136,13 @@ def _wf_show(args, emit) -> int:
                 # headless operator can see that two checks run together (Issue #19 rule:
                 # anything add/edit-step can set, `show --json` echoes back).
                 "parallel_group": getattr(st, "parallel_group", None),
-                # Batch 15 T1 (SPEC-tm-match-step-config §8.D): the six tm_match config
+                # Batch 15 T1 (SPEC-tm-match-step-config §8.D): the tm_match config
                 # overrides on the CLI read surface. MUST land on BOTH this CLI row AND the
                 # /api show row (§8.C) in one diff or the key-set parity guards
                 # (verify_package_view / verify_headless_qa6_qa9 check 7) go RED. None on a
                 # non-tm_match step; a concrete snapshot on a tm_match step (NULL = inherit).
-                "tm_fill_threshold": getattr(st, "tm_fill_threshold", None),
-                "tm_fuzzy_lock_mode": getattr(st, "tm_fuzzy_lock_mode", None),
                 "tm_lock_ice": getattr(st, "tm_lock_ice", None),
                 "tm_hundreds_enter_lqa": getattr(st, "tm_hundreds_enter_lqa", None),
-                "tm_context_floor": getattr(st, "tm_context_floor", None),
                 "tm_pool_selection": getattr(st, "tm_pool_selection", None),
             }
             for st in steps
@@ -344,7 +341,7 @@ def _wf_add_step(args, emit) -> int:
                 # feat/lqa-configurable-threshold: the lqa step's pass bar (None -> the
                 # built-in default 90; refused on a non-lqa step in add_step).
                 lqa_threshold=getattr(args, "lqa_threshold", None),
-                tm_examples=getattr(args, "tm_examples", True),
+                tm_examples=getattr(args, "tm_examples", False),
                 tm_examples_window=getattr(args, "tm_examples_window", 3),
                 use_image_context=getattr(args, "use_image_context", True),  # Batch 14 T2 §25.5-D
                 # Terminology T3 (SPEC §9-T3): the renderer toggle + caps (add_step coerces
@@ -356,10 +353,12 @@ def _wf_add_step(args, emit) -> int:
                 # run-190 Item D / M5: the over-translation guard opt-out ("auto"->inherit).
                 over_translation_guard=getattr(args, "over_translation_guard", "auto"),
                 memory_mode=getattr(args, "memory_mode", "auto"),
-                # Batch 15 T1 (SPEC-tm-match-step-config §8.D): the six tm_match config
+                # Batch 15 T1 (SPEC-tm-match-step-config §8.D): the tm_match config
                 # overrides. Defaults (auto/None/"") mean inherit, which SEEDS a concrete
                 # snapshot on a NEW tm_match step; add_step coerces + refuses a value forged
-                # onto a non-tm_match step.
+                # onto a non-tm_match step. ADR 0102: tm_fill_threshold, tm_fuzzy_lock_mode
+                # and tm_context_floor are removed; a value passed through a hidden legacy
+                # flag is refused by add_step with the clear "was removed" message.
                 tm_fill_threshold=getattr(args, "tm_fill_threshold", None),
                 tm_fuzzy_lock_mode=getattr(args, "tm_fuzzy_lock_mode", None),
                 tm_lock_ice=getattr(args, "tm_lock_ice", "auto"),
@@ -487,16 +486,18 @@ def _wf_edit_step(args, emit) -> int:
             # (absent leaves it unchanged; "auto"->inherit, "off"->opt out).
             "over_translation_guard",
             "memory_mode",
-            # Batch 15 T1 (SPEC-tm-match-step-config §8.D): the six tm_match config
+            # Batch 15 T1 (SPEC-tm-match-step-config §8.D): the tm_match config
             # overrides enter kw only when supplied (partial contract). An "auto"/"" value
             # clears the override back to inherit; a concrete value overrides. update_step
             # refuses a value on a non-tm_match step and force-clears on a type switch.
-            "tm_fill_threshold",
-            "tm_fuzzy_lock_mode",
             "tm_lock_ice",
             "tm_hundreds_enter_lqa",
-            "tm_context_floor",
             "tm_pool_selection",
+            # ADR 0102: removed flags, forwarded so update_step refuses them with the clear
+            # "was removed" message (a threshold of 100 is an accepted no-op).
+            "tm_fill_threshold",
+            "tm_fuzzy_lock_mode",
+            "tm_context_floor",
             # PROPOSAL-external-processing-step §9: external-step live config;
             # update_step re-validates fail-closed on either.
             "vendor_id",

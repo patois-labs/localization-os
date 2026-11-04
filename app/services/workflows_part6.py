@@ -24,16 +24,18 @@ from app.services.workflows_common import (
     _coerce_glossary_cap,
     _coerce_memory_mode,
     _coerce_pt_id,
-    _coerce_tm_fuzzy_lock_mode,
     _coerce_tm_pool_selection,
     _coerce_tm_protect,
-    _coerce_tm_scalar_int,
     _coerce_vendor_id,
     _new_graph_errors,
     _resolve_provider_edit,
     _step_attr,
 )
-from app.services.workflows_common_leaf import _require_whole_number
+from app.services.workflows_common_leaf import (
+    _REMOVED_TM_PARAMS,
+    _require_whole_number,
+    reject_removed_tm_params,
+)
 from app.services.workflows_part2 import (
     _GRAPH_FIELDS,
     _GRAPH_SHAPING_FIELDS,
@@ -44,7 +46,6 @@ from app.services.workflows_part2 import (
     _ordered,
     _require_valid_lqa_threshold,
     _require_valid_tm_pool_selection,
-    _require_valid_tm_scalar,
     _tm_first_note,
     _validate_step_vendor,
     _variant_report_entry,
@@ -53,7 +54,6 @@ from app.services.workflows_part2 import (
 )
 from app.services.workflows_part2_leaf import MAX_STEP_INT_OVERRIDE
 from app.services.workflows_part3 import (
-    _DEAD_FIELD_LABELS,
     _group_span,
     _pre_group_prior,
     validate_branch,
@@ -459,6 +459,11 @@ def update_step(
     ):
         if key in supplied:
             supplied[key] = _require_whole_number(supplied[key], label, low, high, default)
+    # ADR 0102: the removed tm_match parameters get a clear error (None / blank / a threshold
+    # of 100 are accepted no-ops and dropped), never the generic "unknown step field".
+    reject_removed_tm_params(**{k: supplied[k] for k in _REMOVED_TM_PARAMS if k in supplied})
+    for _k in _REMOVED_TM_PARAMS:
+        supplied.pop(_k, None)
     unknown = set(supplied) - set(_EDIT_FIELDS)
     if unknown:
         raise WorkflowError(f"unknown step field(s): {sorted(unknown)}.")
@@ -472,9 +477,6 @@ def update_step(
     # anywhere below (parity with add_step + lqa_threshold), so a junk edit is refused
     # cleanly instead of silently clearing the override. The normalised value is stored back
     # so the mutation block / dead-field check read the validated form.
-    for _f in ("tm_fill_threshold", "tm_context_floor"):
-        if _f in supplied:
-            supplied[_f] = _require_valid_tm_scalar(supplied[_f], _DEAD_FIELD_LABELS.get(_f, _f))
     if "tm_pool_selection" in supplied:
         supplied["tm_pool_selection"] = _require_valid_tm_pool_selection(
             supplied["tm_pool_selection"]
@@ -668,10 +670,6 @@ def update_step(
                 _dead_candidates[_f] = _coerce_vendor_id(_cur("vendor_id"))
             elif _f == "external_wait_hours":
                 _dead_candidates[_f] = _coerce_wait_hours(_cur("external_wait_hours"))
-            elif _f in ("tm_fill_threshold", "tm_context_floor"):
-                _dead_candidates[_f] = _coerce_tm_scalar_int(_cur(_f))
-            elif _f == "tm_fuzzy_lock_mode":
-                _dead_candidates[_f] = _coerce_tm_fuzzy_lock_mode(_cur(_f))
             elif _f in ("tm_lock_ice", "tm_hundreds_enter_lqa"):
                 _dead_candidates[_f] = _coerce_tm_tristate_bool(_cur(_f))
             elif _f == "tm_pool_selection":
@@ -818,16 +816,10 @@ def update_step(
     # coerced to its nullable form (an explicit None/blank clears the override back to
     # inherit); a set on a non-tm_match step was refused above, a type switch off tm_match
     # force-clears afterward.
-    if "tm_fill_threshold" in supplied:
-        step.tm_fill_threshold = _coerce_tm_scalar_int(_cur("tm_fill_threshold"))
-    if "tm_fuzzy_lock_mode" in supplied:
-        step.tm_fuzzy_lock_mode = _coerce_tm_fuzzy_lock_mode(_cur("tm_fuzzy_lock_mode"))
     if "tm_lock_ice" in supplied:
         step.tm_lock_ice = _coerce_tm_tristate_bool(_cur("tm_lock_ice"))
     if "tm_hundreds_enter_lqa" in supplied:
         step.tm_hundreds_enter_lqa = _coerce_tm_tristate_bool(_cur("tm_hundreds_enter_lqa"))
-    if "tm_context_floor" in supplied:
-        step.tm_context_floor = _coerce_tm_scalar_int(_cur("tm_context_floor"))
     if "tm_pool_selection" in supplied:
         step.tm_pool_selection = _coerce_tm_pool_selection(_cur("tm_pool_selection"))
     if "run_condition" in supplied:

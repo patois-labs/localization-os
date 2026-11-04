@@ -579,15 +579,22 @@ def new_system_kinds() -> list[dict]:
     return out
 
 
-def source_labels(session: Session, project_ids) -> dict[int, dict]:
+def source_labels(session: Session, project_ids, connected_ids=None) -> dict[int, dict]:
     """For the Projects list: project id -> {intake, kind, label, bound} for CONNECTED projects
-    only. `label` is the connector kind name of the bound source, or "Not connected yet"."""
+    only. `label` is the connector kind name of the bound source, or "Not connected yet".
+    `connected_ids`: the subset of `project_ids` the caller already knows is connected (it just
+    read their `intake`), which saves the read that finds them; None = look them up."""
     ids_ = [i for i in (project_ids or []) if i is not None]
     if not ids_:
         return {}
-    projects = session.exec(
-        select(Project.id).where(Project.id.in_(ids_), Project.intake == ProjectIntake.CONNECTED)
-    ).all()
+    if connected_ids is not None:
+        projects = [i for i in ids_ if i in set(connected_ids)]
+    else:
+        projects = session.exec(
+            select(Project.id).where(
+                Project.id.in_(ids_), Project.intake == ProjectIntake.CONNECTED
+            )
+        ).all()
     if not projects:
         return {}
     from app.models import Connection

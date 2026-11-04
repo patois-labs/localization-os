@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import base64
 import re
+from datetime import UTC
 
 import httpx
 
@@ -695,7 +696,7 @@ class ZendeskConnector(Connector, ConnectorPlugin):
 # Zendesk signs timestamp + body with HMAC-SHA256, encoded as base64.
 def _verify_zendesk(secret: str, body: bytes, headers: dict) -> bool:
     """Zendesk signs timestamp + body; require freshness within five minutes of UTC."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     normalized = {k.lower(): v for k, v in (headers or {}).items()}
     timestamp = normalized.get("x-zendesk-webhook-signature-timestamp", "")
@@ -703,7 +704,7 @@ def _verify_zendesk(secret: str, body: bytes, headers: dict) -> bool:
         sent = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
         if sent.tzinfo is None:
             return False
-        if abs((datetime.now(timezone.utc) - sent).total_seconds()) > 300:
+        if abs((datetime.now(UTC) - sent).total_seconds()) > 300:
             return False
     except (ValueError, TypeError, AttributeError):
         return False

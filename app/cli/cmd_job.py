@@ -19,7 +19,7 @@ Documented in: docs/architecture/jobs-and-scheduler.md
 import json
 import os
 
-from . import _remote_impl
+from . import _leverage_out, _remote_impl
 from ._common import (
     EXIT_USAGE,
     CliError,
@@ -58,6 +58,15 @@ def register(subparsers) -> None:
     p = sub.add_parser("status", help="Show one job by id.")
     p.add_argument("job_id", type=bounded_id, help="job id.")
     p.set_defaults(func=_job_status)
+
+    p = sub.add_parser(
+        "leverage",
+        help="Word leverage for the documents and languages one job covered "
+        "(101 %% in-context, repetitions, 100 %% exact, new).",
+    )
+    p.add_argument("job_id", type=bounded_id, help="job id.")
+    _leverage_out.add_flags(p)
+    p.set_defaults(func=_job_leverage)
 
     p = sub.add_parser(
         "list",
@@ -277,6 +286,29 @@ def _job_status(args, emit) -> int:
         if d.get("result"):
             emit.say(f"  result: {json.dumps(d['result'], default=str)}")
     return 0
+
+
+# --- job leverage ------------------------------------------------------------
+def _job_leverage(args, emit) -> int:
+    """The leverage report (ADR 0102) for the documents and target languages one job covered.
+    A job that covers no documents (a connector run, an export) exits 2 with the
+    reason. Same seam as GET /api/jobs/{id}/leverage and the MCP job_status view."""
+    if remote_mode(args):
+        return _remote_impl.job_leverage(args, emit)
+    require_org_scope(args, emit)
+    from app.kernel import jobs, leverage
+
+    job = jobs.get(args.job_id)
+    if job is None or (op_org_id(args) is not None and jobs.job_org_id(job) != op_org_id(args)):
+        raise CliError(f"no such job: {args.job_id}", EXIT_USAGE)
+    with _session() as session:
+        try:
+            report = leverage.analyze(session, None, job_id=job.id)
+        except leverage.LeverageError as exc:
+            raise CliError(str(exc), EXIT_USAGE) from exc
+    if _leverage_out.wants_csv(args):
+        return _leverage_out.deliver_csv(args, emit, leverage.to_csv(report))
+    return _leverage_out.deliver_report(emit, report)
 
 
 # --- job list ----------------------------------------------------------------

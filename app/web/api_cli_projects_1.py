@@ -5,8 +5,10 @@ Documented in: docs/architecture/surfaces-and-parity.md
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import and_, case, func
 from sqlmodel import Session, select
 
+from app import db as _db
 from app.db import engine
 from app.kernel import (
     access,
@@ -26,11 +28,10 @@ from app.kernel import (
 )
 from app.kernel import custom_fields as cf_service
 from app.kernel import ids as ids
-from app.kernel import keys as keys_svc
 from app.models import (
     Customer,
-    Document,
     Project,
+    ProjectIntake,
     TargetLocale,
 )
 from app.web import deps
@@ -49,6 +50,8 @@ from app.web.api_cli_common import (
     _list_window,
     _manage_block,
     _org_list,
+    _preload_project_and_customer,
+    _project_documents_listed,
     _project_in_org,
     _scoped_customers,
     _write_block,
@@ -110,6 +113,226 @@ def _count(s: Session, stmt) -> int:
 # ============================================================================
 # Projects
 # ============================================================================
+def _page_columns():
+    return (
+        Project.id,
+        Project.name,
+        Project.source_locale,
+        Project.archived_at,
+        Project.status,
+        Project.intake,
+        Project.customer_id,
+        Customer.name.label("customer_name"),
+    )
+
+
+def _projects_page_general(
+    s, request, ident, org_id, intake, archived, status, limit, offset, cf_by_key
+):
+    """The project list rows and `hidden` counts for a request with a custom-field filter or sort,
+    which needs a statement built for it. Returns (rows, hidden), or a JSONResponse for a clean
+    400. The plain shape is _projects_page_fast (same rows, same counts, built once)."""
+    from app.models import ProjectStatus
+
+    stmt = _scoped_projects(ident, org_id)
+    base_stmt = stmt
+    if intake:
+        stmt = stmt.where(Project.intake == intake)
+    # Archive (residual sweep): a list feeding pickers hides ARCHIVED projects by
+    # default (parity with the web /projects list). `?archived=all` shows both,
+    # `?archived=only` just the archived (the retire/restore view).
+    if archived == "only":
+        stmt = stmt.where(Project.archived_at.is_not(None))
+    elif archived != "all":
+        stmt = content.project_active_only(stmt)  # shipped seam (M4)
+    if status in ("", "default"):
+        stmt = stmt.where(Project.status.notin_(ProjectStatus.HIDDEN_BY_DEFAULT))
+    elif status != "all":
+        stmt = stmt.where(Project.status == status)
+    # Unknown keys and bad expressions are a clean 400, never ignored.
+    for qname, qraw in request.query_params.multi_items():
+        if not qname.startswith("field.") or not (qraw or "").strip():
+            continue
+        fdef = cf_by_key.get(qname[6:].lower())
+        if fdef is None:
+            return JSONResponse(
+                {"ok": False, "error": f"unknown custom field {qname[6:]!r}."}, status_code=400
+            )
+        try:
+            stmt = stmt.where(Project.id.in_(cf_service.project_ids_matching(s, fdef, qraw)))
+        except cf_service.FieldError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    sort_raw = (request.query_params.get("sort") or "").strip()
+    sort_def = None
+    if sort_raw:
+        sort_def = cf_by_key.get(sort_raw[6:].lower()) if sort_raw.startswith("field.") else None
+        if sort_def is None:
+            return JSONResponse(
+                {"ok": False, "error": f"cannot sort by {sort_raw!r} (use field.<key>)."},
+                status_code=400,
+            )
+    # L8: (created_at, id) so the LIMIT/OFFSET window is deterministic on Postgres
+    # (a bare created_at can tie; CI smokes Postgres, whose scan order is unpinned).
+    if sort_def is not None:
+        stmt = cf_service.apply_sort(
+            stmt.order_by(None),
+            sort_def,
+            descending=(request.query_params.get("dir") or "").lower() == "desc",
+        )
+    else:
+        stmt = stmt.order_by(Project.created_at.desc(), Project.id.desc())
+    # S9: only the columns the payload reads (not the whole Project row), as rows, and the
+    # customer's name in the same statement: a LEFT JOIN limited to the customers the
+    # caller may see (_scoped_customers' own org / bound-customer filters), so a project
+    # of a customer outside that scope still reads "" exactly as the old customer map did.
+    cust_scope = _scoped_customers(ident, org_id).whereclause
+    on = Customer.id == Project.customer_id
+    if cust_scope is not None:
+        on = and_(on, cust_scope)
+    page = stmt.with_only_columns(*_page_columns()).outerjoin(Customer, on)
+    # (connection().execute: a select(Project) narrowed to columns is still a SelectOfScalar,
+    # which s.exec would unwrap to its first column.)
+    rows = s.connection().execute(page.offset(offset).limit(limit + 1)).all()
+    hidden = {"archived": 0, "finished": 0}
+    # S9: both counts in ONE statement (each is a conditional sum over the same scoped base
+    # set; the conditions are the two the separate counts used).
+    exprs = _hidden_count_exprs(archived, status)
+    if exprs:
+        counts = s.connection().execute(base_stmt.order_by(None).with_only_columns(*exprs)).one()
+        _fill_hidden(hidden, counts, archived, status)
+    return rows, hidden
+
+
+def _hidden_count_exprs(archived, status, *, bind_status=False):
+    """The SQL sums behind `hidden` (#607): how many in-scope projects the DEFAULT archive /
+    status filters left out. [] when neither default applies. `bind_status`: a specific status
+    rides as the bound parameter `hidden_status` (the built-once statement) not as a literal."""
+    from sqlalchemy import bindparam
+
+    from app.models import ProjectStatus
+
+    exprs = []
+    count_arch = archived not in ("all", "only")
+    count_fin = status in ("", "default")
+    if count_arch:
+        arch_cond = Project.archived_at.is_not(None)
+        if status not in ("", "default", "all"):  # only what THIS query hid
+            arch_cond = and_(
+                arch_cond,
+                Project.status == (bindparam("hidden_status") if bind_status else status),
+            )
+        exprs.append(func.sum(case((arch_cond, 1), else_=0)))
+    if count_fin:
+        fin_cond = Project.status.in_(ProjectStatus.HIDDEN_BY_DEFAULT)
+        if count_arch:  # content.project_active_only: archived_at IS NULL
+            fin_cond = and_(fin_cond, Project.archived_at.is_(None))
+        exprs.append(func.sum(case((fin_cond, 1), else_=0)))
+    return exprs
+
+
+def _fill_hidden(hidden, counts, archived, status):
+    counts = list(counts)
+    if archived not in ("all", "only"):
+        hidden["archived"] = int(counts.pop(0) or 0)
+    if status in ("", "default"):
+        hidden["finished"] = int(counts.pop(0) or 0)
+
+
+def _scope_conditions(org: bool, cust: bool, allowed: bool):
+    """The base scope of the list, as _scoped_projects builds it, with bound values: the org
+    ring, the bound customer, the visible-id set (`org_id`, `cust_id`, `allowed`)."""
+    from sqlalchemy import bindparam
+
+    conds = []
+    if org:
+        conds.append(Project.org_id == bindparam("org_id"))
+    if cust:
+        conds.append(Project.customer_id == bindparam("cust_id"))
+    if allowed:
+        conds.append(Project.id.in_(bindparam("allowed", expanding=True)))
+    return conds
+
+
+def _page_stmt_for(
+    org: bool, cust: bool, allowed: bool, intake: bool, arch_mode: str, stat_mode: str
+):
+    """The list page for one request SHAPE, with every value a bound parameter. Same filters,
+    order and customer join as _projects_page_general. `arch_mode`: active | all | only.
+    `stat_mode`: default | all | x (one specific status)."""
+    from sqlalchemy import bindparam
+
+    from app.models import ProjectStatus
+
+    conds = _scope_conditions(org, cust, allowed)
+    if intake:
+        conds.append(Project.intake == bindparam("intake"))
+    if arch_mode == "only":
+        conds.append(Project.archived_at.is_not(None))
+    elif arch_mode == "active":
+        conds.append(Project.archived_at.is_(None))  # content.project_active_only
+    if stat_mode == "default":
+        conds.append(Project.status.notin_(ProjectStatus.HIDDEN_BY_DEFAULT))
+    elif stat_mode == "x":
+        conds.append(Project.status == bindparam("status"))
+    on = Customer.id == Project.customer_id
+    if org:
+        on = and_(on, Customer.org_id == bindparam("org_id"))
+    if cust:
+        on = and_(on, Customer.id == bindparam("cust_id"))
+    return (
+        select(*_page_columns())
+        .select_from(Project)
+        .outerjoin(Customer, on)
+        .where(*conds)
+        .order_by(Project.created_at.desc(), Project.id.desc())
+        .offset(bindparam("offset"))
+        .limit(bindparam("limit"))
+    )
+
+
+def _projects_page_fast(s, ident, org_id, intake, archived, status, limit, offset):
+    """The project list rows and `hidden` counts for a plain request (no custom-field filter or
+    sort): two statements built once per request shape instead of several built per call. The
+    scope is the one _scoped_projects applies: org, bound customer, visible ids."""
+    cust = _cust_of(ident)
+    with Session(engine) as session:
+        allowed = access.visible_project_ids(session, (ident or {}).get("user"))
+    stat_mode = "default" if status in ("", "default") else ("all" if status == "all" else "x")
+    arch_mode = archived if archived in ("all", "only") else "active"
+    org_on, cust_on, allowed_on = org_id is not None, cust is not None, allowed is not None
+    params = {}
+    if org_on:
+        params["org_id"] = org_id
+    if cust_on:
+        params["cust_id"] = cust
+    if allowed_on:
+        params["allowed"] = list(allowed)
+    page_params = dict(params, offset=offset, limit=limit + 1)
+    if intake:
+        page_params["intake"] = intake
+    if stat_mode == "x":
+        page_params["status"] = status
+    page = _db.prebuilt(
+        f"api_cli_projects_1.page:{org_on}:{cust_on}:{allowed_on}:{bool(intake)}:{arch_mode}:{stat_mode}",
+        lambda: _page_stmt_for(org_on, cust_on, allowed_on, bool(intake), arch_mode, stat_mode),
+    )
+    rows = s.connection().execute(page, page_params).all()
+    hidden = {"archived": 0, "finished": 0}
+    if (arch_mode != "all" and arch_mode != "only") or stat_mode == "default":
+        count_stmt = _db.prebuilt(
+            f"api_cli_projects_1.hidden:{org_on}:{cust_on}:{allowed_on}:{arch_mode}:{stat_mode}",
+            lambda: select(*_hidden_count_exprs(archived, status, bind_status=True)).where(
+                *_scope_conditions(org_on, cust_on, allowed_on)
+            ),
+        )
+        count_params = dict(params)
+        if stat_mode == "x":
+            count_params["hidden_status"] = status
+        counts = s.connection().execute(count_stmt, count_params).one()
+        _fill_hidden(hidden, counts, archived, status)
+    return rows, hidden
+
+
 @router.get("/api/projects")
 def api_projects_list(
     request: Request,
@@ -165,79 +388,39 @@ def api_projects_list(
             {"ok": False, "error": f"unknown intake {intake!r} (choose connected or upload)."},
             status_code=400,
         )
+    archived = archived.strip().lower()
     with Session(engine) as s:
-        stmt = _scoped_projects(ident, org_id)
-        base_stmt = stmt
-        if intake:
-            stmt = stmt.where(Project.intake == intake)
-        # Archive (residual sweep): a list feeding pickers hides ARCHIVED projects by
-        # default (parity with the web /projects list). `?archived=all` shows both,
-        # `?archived=only` just the archived (the retire/restore view).
-        archived = archived.strip().lower()
-        if archived == "only":
-            stmt = stmt.where(Project.archived_at.is_not(None))
-        elif archived != "all":
-            stmt = content.project_active_only(stmt)  # shipped seam (M4)
-        if status in ("", "default"):
-            stmt = stmt.where(Project.status.notin_(ProjectStatus.HIDDEN_BY_DEFAULT))
-        elif status != "all":
-            stmt = stmt.where(Project.status == status)
-        # Custom project fields: `?field.<key>=<expr>` filters and `?sort=field.<key>`
-        # (&dir=desc). Unknown keys and bad expressions are a clean 400, never ignored.
         cf_defs = cf_service.list_defs(s, org_id, _cust_of(ident))
         cf_by_key = cf_service.group_by_key(cf_defs)
-        for qname, qraw in request.query_params.multi_items():
-            if not qname.startswith("field.") or not (qraw or "").strip():
-                continue
-            fdef = cf_by_key.get(qname[6:].lower())
-            if fdef is None:
-                return JSONResponse(
-                    {"ok": False, "error": f"unknown custom field {qname[6:]!r}."}, status_code=400
-                )
-            try:
-                stmt = stmt.where(Project.id.in_(cf_service.project_ids_matching(s, fdef, qraw)))
-            except cf_service.FieldError as exc:
-                return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
         sort_raw = (request.query_params.get("sort") or "").strip()
-        sort_def = None
-        if sort_raw:
-            sort_def = (
-                cf_by_key.get(sort_raw[6:].lower()) if sort_raw.startswith("field.") else None
+        field_params = [
+            (qname, qraw)
+            for qname, qraw in request.query_params.multi_items()
+            if qname.startswith("field.") and (qraw or "").strip()
+        ]
+        if field_params or sort_raw:
+            # Custom project fields: `?field.<key>=<expr>` filters and `?sort=field.<key>`
+            # (&dir=desc) need a statement built for this request.
+            general = _projects_page_general(
+                s, request, ident, org_id, intake, archived, status, limit, offset, cf_by_key
             )
-            if sort_def is None:
-                return JSONResponse(
-                    {"ok": False, "error": f"cannot sort by {sort_raw!r} (use field.<key>)."},
-                    status_code=400,
-                )
-        # L8: (created_at, id) so the LIMIT/OFFSET window is deterministic on Postgres
-        # (a bare created_at can tie; CI smokes Postgres, whose scan order is unpinned).
-        if sort_def is not None:
-            stmt = cf_service.apply_sort(
-                stmt.order_by(None),
-                sort_def,
-                descending=(request.query_params.get("dir") or "").lower() == "desc",
-            )
+            if isinstance(general, JSONResponse):
+                return general
+            rows, hidden = general
         else:
-            stmt = stmt.order_by(Project.created_at.desc(), Project.id.desc())
-        rows = s.exec(stmt.offset(offset).limit(limit + 1)).all()
+            rows, hidden = _projects_page_fast(
+                s, ident, org_id, intake, archived, status, limit, offset
+            )
         projects, truncated = _list_truncate(list(rows), limit)
-        # #607: the default archive/status filters are the ONLY reason this list can be
-        # shorter than what GET /api/projects/{id} allows the same key (scope itself is
-        # one shared authority). Say how many in-scope projects the defaults hid.
-        hidden = {"archived": 0, "finished": 0}
-        if archived not in ("all", "only"):
-            arch_q = base_stmt.where(Project.archived_at.is_not(None))
-            if status not in ("", "default", "all"):
-                arch_q = arch_q.where(Project.status == status)  # only what THIS query hid
-            hidden["archived"] = _count(s, arch_q)
-        if status in ("", "default"):
-            fin = base_stmt.where(Project.status.in_(ProjectStatus.HIDDEN_BY_DEFAULT))
-            if archived not in ("all", "only"):
-                fin = content.project_active_only(fin)
-            hidden["finished"] = _count(s, fin)
-        cust_by_id = {c.id: c.name for c in s.exec(_scoped_customers(ident, org_id)).all()}
-        cf_vals = cf_service.payload_for_projects(s, projects, org_id, _cust_of(ident))
-        src_labels = connected_projects.source_labels(s, [p.id for p in projects])
+        cf_vals = cf_service.payload_for_projects(
+            s, projects, org_id, _cust_of(ident), defs=cf_defs
+        )
+        # S9: the page rows carry `intake`, so the connected ones need no second look-up.
+        src_labels = connected_projects.source_labels(
+            s,
+            [p.id for p in projects],
+            connected_ids=[p.id for p in projects if p.intake == ProjectIntake.CONNECTED],
+        )
         payload = [
             {
                 "id": p.id,
@@ -249,7 +432,7 @@ def api_projects_list(
                 # project its source (kind, label; "Not connected yet" until bound).
                 "intake": p.intake,
                 **({"source": src_labels[p.id]} if p.id in src_labels else {}),
-                "customer": cust_by_id.get(p.customer_id, "") if p.customer_id else "",
+                "customer": (p.customer_name or "") if p.customer_id else "",
                 # Custom project fields {key: value}; empty when none is set.
                 "custom_fields": cf_vals.get(p.id, {}),
             }
@@ -463,33 +646,47 @@ async def api_projects_create(request: Request):
     return JSONResponse(out)
 
 
+def _locales_stopped_stmt():
+    from sqlalchemy import bindparam
+
+    return (
+        select(TargetLocale.locale, TargetLocale.stopped_at)
+        .where(TargetLocale.project_id == bindparam("pid"))
+        .order_by(TargetLocale.id)
+    )
+
+
 @router.get("/api/projects/{pid}")
 def api_projects_show(pid: int, request: Request):
     ident, org_id, blocked = _gate(request)
     if blocked:
         return blocked
     with Session(engine) as s:
+        # S9: the project and its customer in one statement (a missing id is a 404 right here,
+        # exactly what _project_in_org answers for it).
+        preloaded = _preload_project_and_customer(s, pid)  # held: the identity map is weak
+        if preloaded is None:
+            return JSONResponse(_NOT_FOUND, status_code=404)
         project = _project_in_org(s, pid, org_id, ident)
         if project is None:
             return JSONResponse(_NOT_FOUND, status_code=404)
-        locales = content.active_target_locales(s, project.id)
-        stopped_locales = content.stopped_target_locales(s, project.id)
-        docs = s.exec(
-            select(Document)
-            .where(
-                Document.project_id == project.id,
-                # SPEC-key-based-projects 2.5: internal key documents stay invisible.
-                Document.fmt != keys_svc.KEY_DOC_FMT,
-            )
-            .order_by(Document.created_at.desc())
+        # S3c (ADR 0097): active and stopped languages in ONE read (content.active_target_locales
+        # + stopped_target_locales split the same rows, in the same id order).
+        tl_rows = s.exec(
+            _db.prebuilt("api_cli_projects_1.locales_stopped", _locales_stopped_stmt),
+            params={"pid": project.id},
         ).all()
-        _doc_status = lifecycle.document_status_map(s, [d.id for d in docs])
+        locales = [loc for loc, stopped in tl_rows if stopped is None]
+        stopped_locales = [loc for loc, stopped in tl_rows if stopped is not None]
+        # S9: the listed columns and each document's derived status in ONE statement (never
+        # the documents' `skeleton` JSON). Internal key documents stay invisible.
+        docs = _project_documents_listed(s, project.id)
         customer = s.get(Customer, project.customer_id) if project.customer_id else None
         # Issue #17/#19 (remote read-back parity): content type + segmentation
         # profile, mirroring the in-process `project show` CLI path so --remote
         # never drops fields the local path has.
         ct = content_types.get(s, project.content_type_id) if project.content_type_id else None
-        seg_resolved = segmentation_profiles.resolve_profile(s, project)
+        seg_resolved = segmentation_profiles.resolve_profile_summary(s, project)
         out = {
             "ok": True,
             "id": project.id,
@@ -499,7 +696,7 @@ def api_projects_show(pid: int, request: Request):
             # AI opt-out (DPAI-08): the effective value plus which level set it.
             **ai_optout.status(s, project),
             # #690: the per-project "translate comments" option (Office comments).
-            **comment_option.status(project),
+            **comment_option.status(project, s),
             "customer_id": project.customer_id,
             "customer": customer.name if customer else "",
             "default_provider": project.default_provider,
@@ -516,20 +713,20 @@ def api_projects_show(pid: int, request: Request):
             "content_type_id": project.content_type_id,
             "content_type_name": ct.name if ct else None,
             "segmentation_profile_id": project.segmentation_profile_id,
-            "segmentation_profile_resolved_id": seg_resolved.id if seg_resolved else None,
-            "segmentation_profile_resolved_name": seg_resolved.name if seg_resolved else None,
+            "segmentation_profile_resolved_id": seg_resolved[0] if seg_resolved else None,
+            "segmentation_profile_resolved_name": seg_resolved[1] if seg_resolved else None,
             "documents": [
                 {
                     "id": d.id,
                     "filename": d.filename,
                     "fmt": d.fmt,
                     "mode": d.mode,
-                    "status": _doc_status.get(d.id, "new"),
+                    "status": d.status,
                 }
                 for d in docs
             ],
-            "tm_count": tm.count(s, project.id),
-            "ft_tm_count": tm.ft_count(s, project.id),
+            "tm_count": tm.cached_count(s, project.id),
+            "ft_tm_count": tm.cached_ft_count(s, project.id),
             "glossary_count": glossary.count(s, project.id),
             # Custom project fields {key: value} (a bound caller only sees the global
             # fields and its own customer's, the same ring as the definitions).
@@ -545,7 +742,7 @@ def api_projects_show(pid: int, request: Request):
         if (not security.auth_required()) or security.can_manage((ident or {}).get("user")):
             from app.kernel import project_budgets
 
-            out["budget"] = project_budgets.budget_state(s, project.id)
+            out["budget"] = project_budgets.budget_state_cached(s, project.id)
     return JSONResponse(out)
 
 
@@ -641,14 +838,38 @@ def api_project_budget_delete(pid: int, request: Request):
     return JSONResponse({"ok": True, "project_id": pid, "deleted": True})
 
 
+def _leverage_response(report: dict, fmt: str):
+    """JSON (default) or CSV for a leverage report; one shape for the project and job doors."""
+    from fastapi.responses import Response
+
+    from app.kernel import leverage
+
+    fmt = (fmt or "").strip().lower()
+    if fmt not in ("", "json", "csv"):
+        return JSONResponse({"ok": False, "error": "format must be json or csv."}, status_code=400)
+    if fmt == "csv":
+        scope = (
+            f"job-{report['job_id']}"
+            if report.get("job_id") is not None
+            else (f"project-{report['project_id']}")
+        )
+        return Response(
+            leverage.to_csv(report),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="leverage-{scope}.csv"'},
+        )
+    return JSONResponse({"ok": True, **report})
+
+
 @router.get("/api/projects/{pid}/leverage")
-def api_projects_leverage(pid: int, request: Request):
-    """CV-1: the 7-band WORD-based TM-leverage breakdown for a project (repetitions/
-    context/exact/fuzzy hi-mid-lo/new) — the real vendor-cost model surfaced project-wide.
-    A READ endpoint (no write-role gate, like the other project reads); the caller's org/
-    customer confinement rides on _project_in_org. On-demand (a dedicated route, not folded
-    into GET /api/projects/{id}) so its O(n) segment scan is paid only when asked for."""
-    from app.kernel import vendor_cost
+def api_projects_leverage(pid: int, request: Request, format: str = Query("")):
+    """The leverage report (ADR 0102): words per target language in four bands (101 %
+    in-context, repetitions, 100 % exact, new), key-based content included. `?format=csv`
+    returns a CSV for quoting (scope, language, band, segments, words). A READ endpoint (no
+    write-role gate, like the other project reads); the caller's org/customer confinement
+    rides on _project_in_org. On-demand (a dedicated route, not folded into GET
+    /api/projects/{id}): it looks the unfilled segments up in the TM."""
+    from app.kernel import leverage
 
     ident, org_id, blocked = _gate(request)
     if blocked:
@@ -657,40 +878,42 @@ def api_projects_leverage(pid: int, request: Request):
         project = _project_in_org(s, pid, org_id, ident)
         if project is None:
             return JSONResponse(_NOT_FOUND, status_code=404)
-        estimate = vendor_cost.project_leverage(s, project.id)
-        rows = vendor_cost.estimate_band_rows(estimate)
-        # M6: a key-based project's catalogue values live in internal KEY documents, which
-        # this (like every project surface) excludes — so an empty/partial result is not
-        # "no content". Surface it as a note rather than silently zeroing.
-        note = None
-        if vendor_cost.project_has_key_docs(s, project.id):
-            note = (
-                "this project has key-based content; leverage covers only its "
-                "non-key documents (key catalogue values are excluded)."
-            )
-    return JSONResponse(
-        {
-            "ok": True,
-            "project_id": project.id,
-            "total_words": estimate.get("total_words", 0),
-            "total_segments": estimate.get("segment_count", 0),
-            "billable_words": estimate.get("billable_words", 0),
-            "covered_words": estimate.get("covered_words", 0),
-            # one row per band, best-leverage-first: {band,label,words,segments,covered,billable}
-            "bands": [
-                {
-                    "band": r["band"],
-                    "label": r["label"],
-                    "words": r["words"],
-                    "segments": r["segments"],
-                    "covered": r["covered"],
-                    "billable": r["billable"],
-                }
-                for r in rows
-            ],
-            "note": note,
-        }
-    )
+        report = leverage.analyze(s, project.id)
+    return _leverage_response(report, format)
+
+
+@router.get("/api/jobs/{jid}/leverage")
+def api_job_leverage(jid: int, request: Request, format: str = Query("")):
+    """The leverage report for the documents and target languages one job covered (a
+    translate_document job: its document and language). A job that covers no documents is a
+    400. A foreign, unreadable or missing job (and a job whose project is outside the caller's
+    org/customer ring) is the same 404 as GET /api/jobs/{id}."""
+    from app.kernel import jobs, leverage
+    from app.web.api_discovery import _job_readable
+
+    ident = deps.api_identity(request)
+    if ident is None:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    blocked = deps._api_org_block(request, ident)
+    if blocked:
+        return blocked
+    job = jobs.get(jid)
+    if not job or not _job_readable(ident, job):
+        return JSONResponse(_NOT_FOUND, status_code=404)
+    org_id = deps._ident_org_id(ident)
+    ident["_cust_id"] = deps._ident_customer_id(ident)
+    with Session(engine) as s:
+        try:
+            scope = leverage.job_scope(s, job)
+        except leverage.LeverageError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=exc.status)
+        if _project_in_org(s, scope["project_id"], org_id, ident) is None:
+            return JSONResponse(_NOT_FOUND, status_code=404)
+        try:
+            report = leverage.analyze(s, scope["project_id"], job_id=job.id)
+        except leverage.LeverageError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=exc.status)
+    return _leverage_response(report, format)
 
 
 def _locale_add_block(ident):
@@ -1197,7 +1420,6 @@ async def api_projects_status(pid: int, request: Request):
     if blocked:
         return blocked
     body = await _json(request)
-    from app.kernel import lifecycle
     from app.models import ProjectStatus
 
     status = str(body.get("status") or "").strip().lower()

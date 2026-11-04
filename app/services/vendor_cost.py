@@ -11,9 +11,8 @@ covered (100%+ matches, ICE/context, repetitions, hard locks — priced by TM-ma
 BAND VOCABULARY. The rate-card band keys are aligned 1:1 to the standard localization
 pricing tiers AND to XLIFF 1.2's `state-qualifier` vocabulary
 `leveraged-inherited` (repetitions),
-`exact-match` (ICE/context/101%), `leveraged-tm` (100%), `fuzzy-match` (the three fuzzy
-tiers), `mt-suggestion` (new / no match). So when the vendor XLIFF profile lands (Wave
-B/C), the rate card is a rename, not a redesign.
+`exact-match` (ICE/context/101%), `leveraged-tm` (100%), `mt-suggestion` (new / no match).
+ADR 0102: the three fuzzy tiers were removed with the fuzzy TM engine, so there are four bands.
 
 This module is PURE + offline: `estimate_from_segments` takes segment-like objects (ORM
 Segment rows OR plain dicts) and a rate card, and returns a fully-broken-down estimate.
@@ -31,6 +30,7 @@ import math
 from sqlmodel import Session, select
 
 from app.models import Document, Segment
+from app.services import leverage
 
 
 class RateCardError(ValueError):
@@ -45,15 +45,17 @@ class RateCardError(ValueError):
 # --- the canonical rate-card bands -------------------------------------------
 # Ordered best-leverage-first (cheapest human work first). Every classified segment
 # lands in EXACTLY one band, so the per-band segment counts partition the packaging.
-BANDS: tuple[str, ...] = (
-    "repetitions",  # XLIFF leveraged-inherited: a source repeated within this packaging
-    "context",  # XLIFF exact-match: ICE / 101% / in-context (lock_band ice/101)
-    "exact",  # XLIFF leveraged-tm: a byte-exact 100% match (lock_band 100 / pct 100)
-    "fuzzy_high",  # XLIFF fuzzy-match: 95-99%
-    "fuzzy_mid",  # XLIFF fuzzy-match: 85-94%
-    "fuzzy_low",  # XLIFF fuzzy-match: 75-84%
-    "new",  # XLIFF mt-suggestion: no usable match (< 75% or none)
-)
+# ADR 0102: 101 % > repetitions > 100 % > new (standard CAT order). app.services.leverage owns
+# the vocabulary (it must work with vendors off); this module prices it:
+#   context      XLIFF exact-match: ICE / 101% / in-context (lock_band ice/101)
+#   repetitions  XLIFF leveraged-inherited: a source repeated earlier in the scope
+#   exact        XLIFF leveraged-tm: a byte-exact 100% match (lock_band 100 / pct 100)
+#   new          XLIFF mt-suggestion: no usable match (MT, human, old fuzzy fills)
+BANDS: tuple[str, ...] = leverage.BANDS
+
+# The three fuzzy keys a rate card or a persisted estimate written before ADR 0102 may carry.
+# Read tolerantly (dropped; their words price and count as `new`), refused on write.
+LEGACY_FUZZY_BANDS: tuple[str, ...] = ("fuzzy_high", "fuzzy_mid", "fuzzy_low")
 
 # "Already covered" (decision 5b + Wave A scope: "strings NOT already covered, i.e.
 # 100%+/reps/locked"). These bands are EXCLUDED from the billable human-work scope: a
@@ -65,17 +67,14 @@ COVERED_BANDS: frozenset[str] = frozenset({"repetitions", "context", "exact"})
 # --- VP-0 dispatch-package enrichment vocabulary (PROPOSAL-vendor-platform §3) -----
 # The per-segment `provenance` a band maps onto, in the contract's own 4-value vocabulary
 # (tools/vendor_studio/vstudio/contract.py): the three COVERED bands are exact-equivalent
-# leverage ("tm_exact"), the three fuzzy tiers are "tm_fuzzy" (and carry a match_score),
-# and `new` is either "mt" (the current value came from MT) or "new" (nothing usable yet) --
-# that last split is target-presence-dependent and is decided by the caller (vendor_dispatch),
-# so this map returns "new" for the `new` band and the caller upgrades it to "mt".
+# leverage ("tm_exact") and `new` is either "mt" (the current value came from MT) or "new"
+# (nothing usable yet) -- that last split is target-presence-dependent and is decided by the
+# caller (vendor_dispatch), so this map returns "new" for the `new` band and the caller
+# upgrades it to "mt".
 PROVENANCE_BY_BAND: dict[str, str] = {
     "repetitions": "tm_exact",
     "context": "tm_exact",
     "exact": "tm_exact",
-    "fuzzy_high": "tm_fuzzy",
-    "fuzzy_mid": "tm_fuzzy",
-    "fuzzy_low": "tm_fuzzy",
     "new": "new",
 }
 
@@ -92,9 +91,6 @@ XLIFF_STATE_QUALIFIER: dict[str, str] = {
     "repetitions": "leveraged-inherited",
     "context": "exact-match",
     "exact": "leveraged-tm",
-    "fuzzy_high": "fuzzy-match",
-    "fuzzy_mid": "fuzzy-match",
-    "fuzzy_low": "fuzzy-match",
     "new": "mt-suggestion",
 }
 
@@ -121,6 +117,11 @@ def validate_rate_card(card: dict | None) -> None:
     if not isinstance(raw, dict):
         raise RateCardError("rate card 'bands' must be an object of band -> cost/word.")
     for band, val in raw.items():
+        if band in LEGACY_FUZZY_BANDS:
+            raise RateCardError(
+                "fuzzy rate bands were removed: TM leverage is 101 % / 100 % / repetitions / new "
+                "(ADR 0102)"
+            )
         if band not in BANDS:
             raise RateCardError(f"unknown rate band {band!r}; valid bands: {', '.join(BANDS)}.")
         try:
@@ -164,8 +165,8 @@ def normalize_rate_card(card: dict | None) -> dict:
 def word_count(text: str) -> int:
     """Whitespace-tokenized word count — the deterministic, offline approximation loc
     pricing uses (per-word billing). Good enough for an ESTIMATE; the vendor reconciles
-    the actual on return (decision 5c)."""
-    return len((text or "").split())
+    the actual on return (decision 5c). The one counter lives in app.services.leverage."""
+    return leverage.word_count(text)
 
 
 def _seg_fields(seg) -> tuple[str, object, object]:
@@ -185,49 +186,24 @@ def _seg_fields(seg) -> tuple[str, object, object]:
     )
 
 
+normalize_source = leverage.normalize_source
+
+
 def classify_band(source_text: str, tm_match_pct, lock_band, seen: set) -> str:
-    """The band ONE (segment, locale) unit falls in. `seen` is the running set of source
-    texts already classified in THIS packaging — the 2nd+ occurrence of an identical
-    source is a `repetitions` unit (standard CAT internal-repetition accounting: the
-    first occurrence is priced at its own band, later identical ones are repetitions).
+    """The band ONE (segment, locale) unit falls in, from its PERSISTED fields (vendor dispatch
+    never does a live TM lookup). `seen` is the running set of normalized source texts already
+    classified in THIS packaging.
 
-    A LOCKED segment (lock_band set — the TM-matching step's persisted lock) is covered
-    and mapped to its XLIFF-aligned band FIRST, before repetition: ice/101/context ->
-    `context`, 100 (or any other/legacy covered band) -> `exact`.
-
-    Batch 15 T1 (H1, LAW-TM-19, spec §13/N15): a `"fuzzy"` lock_band is a below-100 fuzzy
-    fill's soft/policy lock -- it is NOT an exact/covered match, so it FALLS THROUGH to the
-    tm_match_pct ladder below and is priced + provenanced by its REAL score
-    (fuzzy_high/mid/low) and stays BILLABLE. A fuzzy fill always stamps its real pct, so
-    the ladder classifies it correctly; treating it as `exact` would exclude an 85% fill
-    from billable_words, stamp it tm_exact, and tell a vendor it needs no review.
-
-    Otherwise the first occurrence is priced by its TM match percentage; a non-first
-    occurrence is a repetition."""
-    if lock_band:
-        lb = str(lock_band).strip().lower()
-        if lb in ("ice", "101", "context"):
-            return "context"
-        if lb != "fuzzy":
-            return "exact"
-        # lb == "fuzzy": fall through to the tm_match_pct ladder (below).
-    key = (source_text or "").strip()
-    if key and key in seen:
-        return "repetitions"
-    if tm_match_pct is not None:
-        try:
-            pct = int(tm_match_pct)
-        except (TypeError, ValueError):
-            pct = -1
-        if pct >= 100:
-            return "exact"
-        if pct >= 95:
-            return "fuzzy_high"
-        if pct >= 85:
-            return "fuzzy_mid"
-        if pct >= 75:
-            return "fuzzy_low"
-    return "new"
+    ADR 0102, the same rule as app.services.leverage: 101 % (tm_match_pct >= 101 or lock_band
+    ice/101/context) is `context`; otherwise a repeated source is `repetitions`; otherwise
+    tm_match_pct == 100 or any other non-fuzzy lock_band is `exact`; everything else (no stamp,
+    old 75-99 stamps, a 'fuzzy' lock) is `new`."""
+    band = leverage.filled_band(tm_match_pct, lock_band)
+    if band != "context":
+        key = normalize_source(source_text)
+        if key and key in seen:
+            return "repetitions"
+    return band
 
 
 def estimate_from_segments(segments, rate_card: dict | None = None) -> dict:
@@ -236,9 +212,9 @@ def estimate_from_segments(segments, rate_card: dict | None = None) -> dict:
     Returns a fully-broken-down estimate:
       {
         "currency": "USD",
-        "bands": {<band>: {"segments": n, "words": w, "cost": c}, ...},   # all 7 bands
+        "bands": {<band>: {"segments": n, "words": w, "cost": c}, ...},   # all 4 bands
         "billable_words" / "billable_cost":  the NOT-already-covered scope (the human-
-                                             work headline: new + the three fuzzy tiers),
+                                             work headline: new),
         "covered_words" / "covered_cost":    100%+/context/repetitions (0 cost by default),
         "total_words" / "total_cost":        billable + covered (the full MSA figure),
         "segment_count":                     total units priced,
@@ -260,7 +236,7 @@ def estimate_from_segments(segments, rate_card: dict | None = None) -> dict:
         cell["segments"] += 1
         cell["words"] += w
         cell["cost"] = round(cell["cost"] + w * float(rates.get(band) or 0.0), 6)
-        key = (src or "").strip()
+        key = normalize_source(src)
         if key:
             seen.add(key)
 
@@ -329,15 +305,7 @@ def _sum_estimates(parts: list[dict], currency: str) -> dict:
 
 
 # Human-readable band labels for the surfaces (the TM-leverage story, interop R6).
-BAND_LABELS: dict[str, str] = {
-    "repetitions": "Repetitions",
-    "context": "Context / ICE (101%)",
-    "exact": "Exact (100%)",
-    "fuzzy_high": "Fuzzy 95-99%",
-    "fuzzy_mid": "Fuzzy 85-94%",
-    "fuzzy_low": "Fuzzy 75-84%",
-    "new": "New / no match",
-}
+BAND_LABELS: dict[str, str] = leverage.BAND_LABELS
 
 
 def estimate_band_rows(estimate: dict | None) -> list[dict]:
@@ -350,7 +318,15 @@ def estimate_band_rows(estimate: dict | None) -> list[dict]:
     bands = (estimate or {}).get("bands") or {}
     rows = []
     for b in BANDS:
-        cell = bands.get(b) or {}
+        cell = dict(bands.get(b) or {})
+        if b == "new":
+            # A dispatch estimate persisted before ADR 0102 carries fuzzy_* cells; they were
+            # human post-edit work, and are `new` now.
+            for fb in LEGACY_FUZZY_BANDS:
+                old = bands.get(fb) or {}
+                cell["segments"] = int(cell.get("segments") or 0) + int(old.get("segments") or 0)
+                cell["words"] = int(cell.get("words") or 0) + int(old.get("words") or 0)
+                cell["cost"] = float(cell.get("cost") or 0.0) + float(old.get("cost") or 0.0)
         rows.append(
             {
                 "band": b,
@@ -366,85 +342,12 @@ def estimate_band_rows(estimate: dict | None) -> list[dict]:
     return rows
 
 
-# --- CV-1: project-wide 7-band WORD leverage (the real model, surfaced) ----------
-def leverage_over_segments(segments) -> dict:
-    """A 7-band WORD-based TM-leverage breakdown over segment-like objects, grouped by
-    target locale so repetitions are counted WITHIN a locale (the vendor-cost semantics:
-    the same source translated to de-DE and to fr-FR is two distinct units, not one
-    repetition — mirrors _sum_estimates' per-locale `seen`-set rule). PURE + offline: no
-    query, the zero-rate default card (word/segment counts only — cost is 0.0, so the
-    leverage story stands alone from any pricing). Returns the estimate_from_segments
-    shape summed across locales; feed it to estimate_band_rows for a render-ready table.
-
-    This is the SAME classify_band model vendor dispatch prices a leg with (repetitions/
-    context/exact/fuzzy_high/fuzzy_mid/fuzzy_low/new) — CV-1 just surfaces it project-wide
-    from the segments' PERSISTED tm_match_pct / lock_band, so a reader sees the true
-    7-band, word-based leverage rather than the coarse 4-band segment-count bar."""
-    by_locale: dict[str, list] = {}
-    for seg in segments:
-        if isinstance(seg, dict):
-            loc = seg.get("target_locale") or ""
-        else:
-            loc = getattr(seg, "target_locale", "") or ""
-        by_locale.setdefault(loc, []).append(seg)
-    parts = [estimate_from_segments(segs) for segs in by_locale.values()]
-    return _sum_estimates(parts, DEFAULT_CURRENCY)
-
-
+# --- project-wide WORD leverage: ONE seam, app.services.leverage ---------------------------
 def project_leverage(session: Session, project_id: int) -> dict:
-    """The 7-band word-based TM-leverage breakdown for a whole project — the ONE seam the
-    project page, GET /api/projects/{id}/leverage and `project leverage` all call (the
-    parity law, so every surface reports byte-identical bands). Loads the project's
-    NON-INTERNAL document segments (fmt != KEY_DOC_FMT, matching every other project
-    surface) and classifies each by its PERSISTED tm_match_pct / lock_band — NO live TM
-    lookup, so it is O(n) over the project's segments, the same cost the project page's
-    existing status / 4-band leverage rollup already pays for the same segment set.
-
-    This is the LOADER seam the /api + CLI callers use; the WEB project page instead
-    feeds its already-loaded segment list straight to leverage_over_segments (M4: no
-    second load per render). Both collect across chunks then sort ONCE globally by
-    (order_index, id) — NOT per-chunk — so the seen-set repetition split is stable
-    run-to-run AND byte-identical across the two paths even past the 150-doc chunk
-    boundary and regardless of the doc-id order each caller starts from (N1)."""
-    from app.models import Segment
-    from app.services import keys as keys_svc
-
-    doc_ids = [  # noqa: C416
-        row
-        for row in session.exec(
-            select(Document.id).where(
-                Document.project_id == project_id, Document.fmt != keys_svc.KEY_DOC_FMT
-            )
-        ).all()
-    ]
-    if not doc_ids:
-        return leverage_over_segments([])
-    segs: list = []
-    CHUNK = 150  # stay under SQLite's IN() expression-tree limit on big projects
-    for i in range(0, len(doc_ids), CHUNK):
-        batch = doc_ids[i : i + CHUNK]
-        segs.extend(session.exec(select(Segment).where(Segment.document_id.in_(batch))).all())
-    # ONE global sort after collection — a per-chunk ORDER BY would leave a chunk-ordered
-    # concatenation that diverges from a caller that loads/sorts differently (N1).
-    segs.sort(key=lambda s: (s.order_index, s.id))
-    return leverage_over_segments(segs)
-
-
-def project_has_key_docs(session: Session, project_id: int) -> bool:
-    """True when the project owns internal KEY documents (fmt == KEY_DOC_FMT), whose
-    catalogue values project_leverage deliberately excludes (matching every other project
-    surface). Callers surface a note so an empty/partial key-project leverage isn't read
-    as 'no content' (M6)."""
-    from app.services import keys as keys_svc
-
-    return (
-        session.exec(
-            select(Document.id).where(
-                Document.project_id == project_id, Document.fmt == keys_svc.KEY_DOC_FMT
-            )
-        ).first()
-        is not None
-    )
+    """The four-band word leverage report for a whole project (ADR 0102). Delegates to
+    app.services.leverage.analyze, the ONE seam every surface calls (project page, /api, CLI,
+    MCP, quotes), so they all report the same numbers."""
+    return leverage.analyze(session, project_id)
 
 
 def scoping_estimate(session: Session, document: Document, locales, vendor) -> dict:

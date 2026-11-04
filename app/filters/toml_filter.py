@@ -37,7 +37,6 @@ Documented in: docs/architecture/translation-pipeline.md
 from __future__ import annotations
 
 import re
-
 import tomllib
 
 from app import config

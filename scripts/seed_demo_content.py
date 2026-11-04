@@ -17,7 +17,7 @@ WHAT IT CREATES (all deterministic, authored INLINE below -- no LLM/provider/net
     Do-Not-Translate brand terms), plus the en-US->target language pairs;
   * exactly 100 English source strings, each written into the segment TM in all 5
     locales (500 SegmentTM rows), via the same write seam the CAT editor/approve path
-    uses -- some carry {placeholders} and some are near-duplicates (fuzzy fodder).
+    uses -- some carry {placeholders} and some are near-duplicates (semantic-retrieval fodder).
 
 SERVICE SEAMS ONLY (never raw SQL for writes):
   content.project_create / content.delete_project, glossary_module.create / set_pairs /

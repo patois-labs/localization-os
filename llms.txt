@@ -245,6 +245,14 @@ TM import also takes a Trados Studio file-based memory (.sdltm, a SQLite databas
 manage_tm file_path). It is opened read-only, its units go through the same TMX import (dedupe,
 integrity gate, report), Trados tags become inline tokens (so tagged units are withheld as
 tagged_source), and units it cannot read are counted in skipped_unreadable with sdltm_* codes.
+Large TMX imports run in the background (ADR 0094): send the file as multipart/form-data to
+POST /api/projects/{pid}/tm/import (fields file, source, target, optional acknowledge_placeholder_loss=true)
+and it answers 202 {job_id, status_url} at once; GET /api/jobs/{id} shows progress (message, done/total) and,
+when completed, the same counts as the JSON import in result. The file is streamed to disk and parsed
+incrementally (flat memory), up to TMX_IMPORT_MAX_BYTES (default 2 GiB) and TMX_IMPORT_MAX_UNITS (default
+5,000,000 units); same dedupe, integrity gate, chunked writes and re-import resume. The web form does this
+for a file over TMX_IMPORT_INLINE_MAX_BYTES (8 MiB) and shows progress on the project page; CLI `tm import`
+(remote) uploads a file over 8 MiB this way and follows the job; MCP manage_tm returns the job_id for job_status.
 Approving a segment (web editor, POST /api/segments/{id}/approve, `doc approve-segment`, MCP approve_segment) also copies
 the target onto the document's other repeats of the same source (Issue #617, Trados/memoQ style): only same document and
 language, only repeats that are not approved, not edited by a person, not TM-locked and not unlinked; they become edited
@@ -595,7 +603,7 @@ segments are collapsed by default.
   - [browser-surface](docs/architecture/browser-surface.md): the app-wide HTTP
     security-header middleware, framing, and HSTS.
   - [incident-response-and-observability](docs/architecture/incident-response-and-observability.md):
-    the audit-chain health gauges and email notifications (Prometheus/OTel metrics are a paid add-on).
+    the audit-chain health gauges and email notifications.
   - [kernel-and-ports](docs/architecture/kernel-and-ports.md): the named-port registry and the
     kernel alias facade, plus the import-direction law.
   - [modules-and-flags](docs/architecture/modules-and-flags.md): the feature kill-switch law, the
@@ -709,6 +717,9 @@ segments are collapsed by default.
     and the style A/B harness.
   - [segmentation](docs/architecture/segmentation.md): sentence segmentation, inline-tag
     extraction, the SRX engine, and named segmentation profiles.
+  - [native-module](docs/architecture/native-module.md): the optional Rust module locos_native
+    (normalize, hash_text, tag_damage, the built-in splitter) and the loader that keeps the
+    Python functions unless the module is present and stamped for the exact Python source.
   - [collaboration-and-review](docs/architecture/collaboration-and-review.md): threaded queries,
     the reviewer worklist, and the approve-and-write-TM seam.
   - [reporting-and-dashboard](docs/architecture/reporting-and-dashboard.md): the CSV report builder
@@ -726,6 +737,10 @@ segments are collapsed by default.
   SemIf on a GPU box, on the same PC or over Tailscale, Kev notes, auto-fix, troubleshooting.
 - [Deployment](docs/DEPLOY.md); the generic hosted-instance kit is in
   [deploy/aws-hosted](deploy/aws-hosted/README.md).
+- [Upgrading to 1.1](docs/releases/1.1.0.md): the DB job queue becomes the default, process roles
+  (LOC_TMS_ROLE all/web/worker, LOC_TMS_WEB_PROCESSES, LOC_TMS_WORKER_PROCESSES), runs that resume
+  after a restart, the optional native module, new migrations and changed settings.
+  [Moving to Postgres](docs/guides/postgres-migration.md) (`db copy-to-postgres`).
 - [Backup & restore](docs/BACKUP.md)
 - [Secrets](docs/SECRETS.md)
 - [Translation governance mapping](docs/governance.md)
@@ -857,7 +872,7 @@ GET/PUT/DELETE /api/account/layouts/{page_key} act on the token's OWN layout onl
 (invalid layouts are a 400, nothing stored). CLI: layout list / show / set --rows / reset
 (--remote capable). The web edit mode is keyboard operable. MCP excludes it as a human
 UI preference. See docs/architecture/surfaces-and-parity.md.
-FULL_TEXT workflows accept tm_match by default. Exact (100%) sentence matches from the step's selected readable TM pools are OFFERED, unverified, beside the glossary; {tm_offers} controls placement. The source body is unchanged. This is an offer, not a guarantee. Offers are WITHHELD from each step that redacts PII, because an offer reproduces the document's own sentence verbatim; the run message says so. If a string must be exact, FULL_TEXT is the wrong mode. The run summary, GET /api/runs/{id}, MCP work_status and workflow show-run expose tm_offers with sentences_examined, matches_offered and message after a FULL_TEXT tm_match step. These describe the latest offer list, not applied translations. SSE tm_match carries the counts for that step visit. A SEGMENTED workflow's tm_match step also leaves a tally on the run: the run page, GET /api/runs/{id} (tm_match), MCP work_status and workflow show-run report filled (genuine TM fills), relocked (already held the exact TM text), unmatched (not taken from the TM at the step's fill threshold, so sent on to the next step) and total segments. Fuzzy suggestions below the fill threshold are not counted.
+FULL_TEXT workflows accept tm_match by default. Exact (100%) sentence matches from the step's selected readable TM pools are OFFERED, unverified, beside the glossary; {tm_offers} controls placement. The source body is unchanged. This is an offer, not a guarantee. Offers are WITHHELD from each step that redacts PII, because an offer reproduces the document's own sentence verbatim; the run message says so. If a string must be exact, FULL_TEXT is the wrong mode. The run summary, GET /api/runs/{id}, MCP work_status and workflow show-run expose tm_offers with sentences_examined, matches_offered and message after a FULL_TEXT tm_match step. These describe the latest offer list, not applied translations. SSE tm_match carries the counts for that step visit. A SEGMENTED workflow's tm_match step also leaves a tally on the run: the run page, GET /api/runs/{id} (tm_match), MCP work_status and workflow show-run report filled (genuine TM fills), relocked (already held the exact TM text), unmatched (no exact TM entry, so sent on to the next step) and total segments.
 
 Every later llm_agent step receives the TM offer block, except steps that redact PII. The tm_match step honors tm_pool_selection within the readable pools; an empty selection offers nothing.
 The segment text is automatically wrapped in <content> markers unless the template already wraps the placeholder itself (for example <text>{text}</text> or a code fence), which is how an author opts out.
@@ -910,6 +925,7 @@ MCP local files (#755): over stdio a tool's file_path is read only inside the al
 (LOC_STUDIO_INPUT_DIRS, default Documents and Downloads, plus LOC_STUDIO_OUTPUT_DIR); hidden files and
 folders, extensions the receiving route does not accept, and files over LOC_STUDIO_MAX_INPUT_BYTES
 (default 100 MiB; images 8 MiB) are refused before reading. Remote (streamable-http) never reads files.
+Leverage report (ADR 0102): words per target language in four bands, 101 % in-context, repetitions, 100 % exact and new, for a project or for the documents and languages one translate job covered. Segments already filled keep the band they were filled with; unfilled ones are looked up in the TM now (a quote before translation). Web: the project page table and Download CSV, and the job page /jobs/{id}/leverage (with /jobs/{id}/leverage.csv). API: GET /api/projects/{pid}/leverage and GET /api/jobs/{jid}/leverage, both with ?format=csv (columns scope, language, band, segments, words). CLI: `project leverage <id>` and `job leverage <id>`, each with --csv or -o FILE, local and --remote. MCP: list_projects view=leverage and job_status view=leverage. Vendor rate cards price the same four bands; the fuzzy_* rates were removed (a stored card loads with them dropped, saving one is refused).
 CMS via MCP (#754): the mcp_cms connector speaks MCP 2026-07-28 (stateless: server/discover, per-request
 _meta, Mcp-Method / Mcp-Name / Mcp-Param-* headers, no session) and falls back to the initialize
 handshake for older servers. Connection settings mcp_protocol (auto, legacy, 2026-07-28) and

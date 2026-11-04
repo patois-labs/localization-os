@@ -108,9 +108,6 @@ def main():
         data={
             "currency": "USD",
             "band_new": "0.20",
-            "band_fuzzy_high": "0.10",
-            "band_fuzzy_mid": "0.12",
-            "band_fuzzy_low": "0.08",
             "band_exact": "0.0",
             "band_context": "0.0",
             "band_repetitions": "0.0",
@@ -123,7 +120,9 @@ def main():
         card = vendors.rate_card_for(v)
         assert card["currency"] == "USD", card
         assert abs(card["bands"]["new"] - 0.20) < 1e-9, card["bands"]
-        assert abs(card["bands"]["fuzzy_mid"] - 0.12) < 1e-9, card["bands"]
+        assert set(card["bands"]) == {"context", "repetitions", "exact", "new"}, card[
+            "bands"
+        ]  # ADR 0102
 
     # --- link a customer -----------------------------------------------------
     cust_id = _customer()

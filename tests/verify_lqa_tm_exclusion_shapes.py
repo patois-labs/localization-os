@@ -1,4 +1,6 @@
-"""#159 gate regressions: provenance, per-check repair policy, and empty routing."""
+"""#159 gate regressions: provenance, per-check repair policy, and empty routing.
+
+ADR 0102: the `fuzzy_none` shape (a below-100 fill, lock mode none) went with the fuzzy engine."""
 
 import os
 import sys
@@ -125,7 +127,6 @@ def exercise(shape, *, identity=False):
             "approved",
             "passed_guard",
             "scope",
-            "fuzzy_none",
             "two_checks",
             "opt_out",
             "end",
@@ -161,7 +162,6 @@ def exercise(shape, *, identity=False):
                     "parallel_end",
                     "parallel_guard",
                     "no_tm_step",
-                    "fuzzy_none",
                     "locks_off",
                 }:
                     st.branch["on_pass"] = "end"
@@ -181,25 +181,11 @@ def exercise(shape, *, identity=False):
                 st.parallel_group = "checks"
             if shape == "parallel_guard" and key == "peer":
                 st.run_condition = {"ref": "prev_lqa", "op": "passed"}
-            if shape == "fuzzy_none" and key == "tm":
-                st.tm_fill_threshold = 80
-                st.tm_fuzzy_lock_mode = "none"
             s.add(st)
             steps[key] = st
         s.commit()
         if shape == "locks_off":
             stack.enter_context(patch.object(config, "TM_LOCKS_ENABLED", False))
-        if shape == "fuzzy_none":
-            lookup = tm.lookup_batch
-
-            def fuzzy(*args, **kwargs):
-                hits = lookup(*args, **kwargs)
-                for hit in hits.values():
-                    if hit:
-                        hit["match_pct"] = 85
-                return hits
-
-            stack.enter_context(patch.object(tm, "lookup_batch", side_effect=fuzzy))
         stack.enter_context(patch.object(lqa, "score_text", side_effect=score))
         events = list(orchestrator.run_workflow_stream(s, w.id, d.id, "fr-FR"))
         run_id = next(e["run_id"] for e in events if e["type"] == "run_started")
@@ -231,7 +217,6 @@ def exercise(shape, *, identity=False):
             "approved",
             "scope",
             "no_tm_step",
-            "fuzzy_none",
             "locks_off",
         }:
             assert calls and calls[0][0] == "Fresh line.", f"protected TM was judged: {calls}"
@@ -257,9 +242,6 @@ def exercise(shape, *, identity=False):
                 assert orchestrator._gate_release_mask(
                     s, s.get(WorkflowRun, run_id), ["Enregistrer.", calls[0][1]]
                 ) == [False, True]
-
-            if shape == "fuzzy_none":
-                assert filled.tm_match_pct == 85, filled
         elif shape == "prior_soft":
             assert calls and "Save changes." in calls[0][0], (
                 f"editable prior soft lock was unjudged: {calls}"
@@ -374,7 +356,6 @@ for shape in (
     "passed_guard",
     "scope",
     "no_tm_step",
-    "fuzzy_none",
     "locks_off",
     "prior_soft",
     "two_checks",

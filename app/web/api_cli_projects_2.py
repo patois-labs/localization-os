@@ -11,7 +11,7 @@ import urllib.parse
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from app.db import engine
 from app.kernel import (
@@ -19,10 +19,7 @@ from app.kernel import (
     content,
     glossary,
     tm,
-)
-from app.kernel import keys as keys_svc
-from app.models import (
-    Document,
+    tm_import_job,
 )
 from app.web import deps
 from app.web.api_cli_common import (
@@ -36,8 +33,11 @@ from app.web.api_cli_common import (
     _int_id,
     _json,
     _manage_block,
+    _project_documents_listed,
     _project_in_org,
+    _project_ring_and_documents,
     _resolve_user_ref,
+    _ring_light,
     _write_block,
     glossary_import_error_response,
 )
@@ -417,28 +417,25 @@ def api_documents_list(pid: int, request: Request):
     if blocked:
         return blocked
     with Session(engine) as s:
-        if _project_in_org(s, pid, org_id, ident) is None:
-            return JSONResponse(_NOT_FOUND, status_code=404)
-        docs = s.exec(
-            select(Document)
-            .where(
-                Document.project_id == pid,
-                # SPEC-key-based-projects 2.5: internal key documents stay invisible.
-                Document.fmt != keys_svc.KEY_DOC_FMT,
-            )
-            .order_by(Document.created_at.desc())
-        ).all()
-        # #563: the derived lifecycle, the same value `doc list` prints in-process.
-        from app.kernel import lifecycle
-
-        doc_status = lifecycle.document_status_map(s, [d.id for d in docs])
+        # S9: the listed columns, the derived lifecycle status (#563, the same value `doc
+        # list` prints in-process) and the ZIP-batch stamp, never the documents' `skeleton`
+        # JSON. An unrestricted caller's visibility check rides the same statement (the
+        # project's ring columns); anyone else loads the project first, as before.
+        if _ring_light(ident):
+            found, p_org, p_cust, docs = _project_ring_and_documents(s, pid)
+            if not found or (_project_in_org(s, pid, org_id, ident, ring=(p_org, p_cust)) is None):
+                return JSONResponse(_NOT_FOUND, status_code=404)
+        else:
+            if _project_in_org(s, pid, org_id, ident) is None:
+                return JSONResponse(_NOT_FOUND, status_code=404)
+            docs = _project_documents_listed(s, pid)
         payload = [
             {
                 "id": d.id,
                 "filename": d.filename,
                 "fmt": d.fmt,
                 "mode": d.mode,
-                "status": doc_status.get(d.id, "new"),
+                "status": d.status,
             }
             for d in docs
         ]
@@ -453,6 +450,71 @@ def api_documents_list(pid: int, request: Request):
 # ============================================================================
 # Translation Memory (import / export)
 # ============================================================================
+async def _api_tm_import_background(pid: int, request: Request, ident, org_id):
+    """S6 (ADR 0094): a MULTIPART import (fields `file`, `source`, `target`, optional
+    `acknowledge_placeholder_loss` = "true") is streamed to disk under TMX_IMPORT_MAX_BYTES and
+    imported by a background `tm_import` job. Answers 202 with the job id at once; the result
+    (the same counts as the JSON import) is on GET /api/jobs/{id} when it completes."""
+    try:
+        form = await request.form()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "could not read the multipart form."}, 400)
+    upload = form.get("file")
+    source, target = str(form.get("source") or ""), str(form.get("target") or "")
+    if upload is None or isinstance(upload, str) or not source or not target:
+        return JSONResponse(
+            {"ok": False, "error": "file, source and target are required."}, status_code=400
+        )
+    # #567: only an explicit "true" acknowledges a placeholder loss (the form spelling of the
+    # JSON boolean the base64 door requires); anything but true/false/empty is refused.
+    ack_raw = str(form.get("acknowledge_placeholder_loss") or "").strip().lower()
+    if ack_raw not in ("", "true", "false"):
+        return JSONResponse(
+            {"ok": False, "error": "acknowledge_placeholder_loss must be true or false."},
+            status_code=400,
+        )
+    with Session(engine) as s:
+        if _project_in_org(s, pid, org_id, ident) is None:
+            return JSONResponse(_NOT_FOUND, status_code=404)
+        try:
+            # Refuse a pair this project does not translate now, not minutes later in the job.
+            await deps.offload_parse(tm.resolve_import_locales, s, pid, source, target)
+        except deps.WorkerBusy as exc:
+            return deps.busy_response(str(exc))
+        except tm.LocaleMismatchError as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"could not import TMX: {exc}"}, status_code=400
+            )
+    try:
+        token, size = await deps.offload_parse(tm_import_job.stage_upload, b"", upload.file)
+    except deps.WorkerBusy as exc:
+        return deps.busy_response(str(exc))
+    except tm_import_job.UploadTooLarge as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=413)
+    jid = tm_import_job.submit(
+        pid,
+        token,
+        source,
+        target,
+        acknowledge_placeholder_loss=ack_raw == "true",
+        filename=getattr(upload, "filename", "") or "",
+        size=size,
+        actor=ident.get("actor") or "",
+    )
+    return JSONResponse(
+        {
+            "ok": True,
+            "background": True,
+            "job_id": jid,
+            "status_url": f"/api/jobs/{jid}",
+            "bytes": size,
+            "source": source,
+            "target": target,
+        },
+        status_code=202,
+    )
+
+
 @router.post("/api/projects/{pid}/tm/import")
 async def api_tm_import(pid: int, request: Request):
     ident, org_id, blocked = _gate(request)
@@ -461,6 +523,8 @@ async def api_tm_import(pid: int, request: Request):
     blocked = _write_block(ident)  # web /projects/{id}/tm/import is a write action
     if blocked:
         return blocked
+    if (request.headers.get("content-type") or "").lower().startswith("multipart/form-data"):
+        return await _api_tm_import_background(pid, request, ident, org_id)
     body = await _json(request)
     source, target = str(body.get("source") or ""), str(body.get("target") or "")
     data = _b64(body.get("tmx_b64"))

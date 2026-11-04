@@ -3,6 +3,7 @@
 Documented in: docs/architecture/tm-and-glossary.md
 """
 
+import contextlib
 import hashlib
 
 import sqlalchemy as sa
@@ -10,6 +11,7 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.models import FullTextTM, SegmentTM
+from app.services import native
 
 
 def _content_type_name(session, content_type_id):
@@ -58,12 +60,44 @@ def _tm_source_project_ids(session, project_id):
     (the safe direction — fewer matches, never more)."""
     if session is None or project_id is None:
         return ()
+    memo = session.info.get(_SOURCE_IDS_MEMO)
+    if memo is not None and project_id in memo:
+        return memo[project_id]
     try:
         from app.services import project_sources
 
-        return project_sources.allowed_tm_source_ids(session, project_id)
+        ids = project_sources.allowed_tm_source_ids(session, project_id)
     except Exception:
         return ()
+    if memo is not None:
+        memo[project_id] = ids
+    return ids
+
+
+_SOURCE_IDS_MEMO = "tm_source_ids_memo"
+
+
+@contextlib.contextmanager
+def source_ids_memo(session, run_cache=None):
+    """Resolve each project's attached TM sources at most ONCE on `session` inside the
+    block (S4 follow-up: the plain-MT path's batched lookup and its TM few-shot pull ran
+    back to back and each re-read the links). Outside the block every lookup re-validates
+    at read time exactly as before. The answers are also put on `run_cache` (when given)
+    for the run envelope's manifest (tap_enrich_part1._tm_manifest)."""
+    if session is None or _SOURCE_IDS_MEMO in session.info:
+        yield
+        return
+    memo: dict = {}
+    session.info[_SOURCE_IDS_MEMO] = memo
+    try:
+        yield
+    finally:
+        session.info.pop(_SOURCE_IDS_MEMO, None)
+        if run_cache is not None:
+            from app.services import run_cache as _rc
+
+            for pid, ids in memo.items():
+                run_cache[_rc.tm_source_ids_key(pid)] = ids
 
 
 def _tm_scope(col, project_id, source_ids=(), restrict_ids=None):
@@ -223,6 +257,19 @@ def _content_type_scope(model, content_type_id):
     return sa.or_(model.content_type_id == content_type_id, model.content_type_id.is_(None))
 
 
+def _tm_read_project_ids(session, project_id) -> list[int]:
+    """The concrete project ids a MATCH lookup for `project_id` can read: its own plus the
+    attached TM sources that pass the live scope check (the same set `_tm_scope` builds its
+    predicate from). An add-on retriever may narrow its candidates with this list; `_tm_read_scope`
+    still decides the final rows."""
+    if project_id is None:
+        return []
+    return [
+        int(project_id),
+        *(int(i) for i in _tm_source_project_ids(session, project_id) if i is not None),
+    ]
+
+
 def _tm_read_scope(model, project_id, session, *, include_sources=True, restrict_project_ids=None):
     """The full read scope for a TM/embedding lookup: PROJECT layer AND CONTENT-TYPE
     layer (SPEC-content-types §4) — the single seam every one of the four lookup paths
@@ -298,6 +345,15 @@ def hash_text(text: str, source_locale: str, target_locale: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
+# Native fast paths (ADR 0091): the two functions above stay the reference and the fallback.
+# `locos_native` replaces them only when it is installed and stamped for this exact source;
+# editing either one switches its native twin off until native/locos_native is updated.
+normalize_py = normalize
+hash_text_py = hash_text
+normalize = native.bind("normalize", normalize_py)
+hash_text = native.bind("hash_text", hash_text_py)
+
+
 def _lang_match(a: str, b: str) -> bool:
     if not a or not b:
         return False
@@ -315,7 +371,7 @@ def _pick(langs: dict, locale: str):
 
 
 # --- import locale coercion (QA BUG-03) ----------------------------------------
-# The READ path (lookup / lookup_batch / example_matches_batch / semantic_lookup)
+# The READ path (lookup / lookup_batch / lookup_segments / semantic_lookup)
 # matches source_locale/target_locale by EXACT EQUALITY, and hash_text keys on them,
 # so the locales a row is STORED under are the only ones that can ever match it. The
 # WRITE path took the caller's locale arguments verbatim. Reproduced in production
@@ -479,46 +535,30 @@ def resolve_export_locales(
         return source_locale, target_locale
 
 
-LEVERAGE_BANDS = ("exact", "fuzzy", "new", "untranslated")
+# ADR 0102: the provenance bar has four bands: context (101 %), exact (100 %), new, untranslated.
+LEVERAGE_BANDS = ("context", "exact", "new", "untranslated")
 
 
-# --- TM-leverage rollup (viz quick-win) ----------------------------------------
-# Bands the persisted data actually supports. `Segment.tm_match_pct` is written in
-# exactly two shapes (translate.py:559/629, content.py:1351, orchestrator.py:2176):
-#   100   -> the exact-hash short-circuit (segment TM 100% hit)
-#   75-99 -> a fuzzy TM reference was found and cited (tm.lookup's floor is 75 -
-#            see the module docstring, "100% exact + 75-99% fuzzy" - so no stored
-#            value ever lands below 75)
-#   None  -> NO TM reference was ever cited for this segment, for ANY reason: an
-#            MT call with no fuzzy match to draw on, a HUMAN-TYPED/edited target
-#            (the CAT editor never stamps tm_match_pct on a manual edit), or an
-#            IMPORTED translation (bulk import writes target_text without ever
-#            touching tm_match_pct). The write sites above are the ONLY ones that
-#            ever set this field - every other path that fills target_text simply
-#            leaves it None. So this band's honest label is "No TM match", NEVER
-#            "New (MT)" - labeling it as machine-translated would misreport real
-#            translator work (typed/edited/imported) as MT, including in the
-#            aria-label/sr-only text an accessibility user relies on verbatim.
-#            The internal key stays "new" (nothing reads the key as UI text - only
-#            the label strings in _viz_macros.html do, and those say "No TM match").
-# Semantic-TM matches (tm.semantic_lookup, kind="semantic") are surfaced live as
-# CAT-editor suggestions but are NEVER persisted back onto tm_match_pct anywhere in
-# the codebase (grep confirms only the four exact/fuzzy write sites above exist) -
-# so a true 4th "semantic" band would require a schema change (out of scope here).
-# These 4 bands are therefore what the data actually has, and they partition every
-# segment exactly once (an untranslated segment counts as "untranslated", not "new").
+# --- TM-provenance rollup (the bar on the project overview and the dashboard) ------------------
+# `Segment.tm_match_pct` is written in two shapes since ADR 0102:
+#   101   -> an in-context TM match (the segment's context key equalled the stored one)
+#   100   -> an exact TM match
+#   None  -> NO TM reference was cited, for ANY reason: an MT call, a HUMAN-TYPED/edited target
+#            or an IMPORTED translation (those never touch tm_match_pct). Rows written before
+#            ADR 0102 may still hold 75-99 (a fuzzy fill); they are not leverage any more and
+#            count as `new`. So this band's honest label is "No TM match", NEVER "New (MT)".
+# These four bands partition every segment exactly once (an untranslated segment counts as
+# "untranslated", not "new"). This is the coarse per-segment bar; the word-based report with
+# repetitions is app.services.leverage.
 def leverage_bands(segs) -> dict[str, int]:
-    """Bucket a list of Segment rows (or dicts with the same 2 fields) into the TM
-    -leverage bands for the leverage-bar viz. Pure/offline - no query, just a
-    rollup over segments the CALLER already loaded (project Overview / reports
-    both already fetch the full segment list for their existing KPIs; this reuses
-    that list rather than issuing a new scoped query). Every segment lands in
-    exactly one band, so sum(bands.values()) == len(segs) always.
+    """Bucket a list of Segment rows (or dicts with the same 2 fields) into the TM-provenance
+    bands for the leverage-bar viz. Pure/offline - no query, just a rollup over segments the
+    CALLER already loaded. Every segment lands in exactly one band, so
+    sum(bands.values()) == len(segs) always.
 
-    The "new" band (tm_match_pct is None, target_text present) covers ANY
-    translated segment with no cited TM reference - net-new MT AND human-typed/
-    edited/imported segments alike (none of those write tm_match_pct). Render it
-    as "No TM match", never "New (MT)" - see the LEVERAGE_BANDS comment above."""
+    The "new" band (target present, tm_match_pct None or an old 75-99 stamp) covers ANY translated
+    segment with no exact TM reference - MT and human-typed/edited/imported segments alike. Render
+    it as "No TM match", never "New (MT)"."""
     bands = dict.fromkeys(LEVERAGE_BANDS, 0)
     for s in segs:
         if isinstance(s, dict):
@@ -527,10 +567,10 @@ def leverage_bands(segs) -> dict[str, int]:
             pct, target = s.tm_match_pct, s.target_text
         if not target:
             bands["untranslated"] += 1
+        elif pct is not None and pct >= 101:
+            bands["context"] += 1
         elif pct == 100:
             bands["exact"] += 1
-        elif pct is not None:
-            bands["fuzzy"] += 1
         else:
             bands["new"] += 1
     return bands
@@ -611,3 +651,24 @@ def ft_count(session: Session, project_id: int | None) -> int:
     return session.exec(
         select(func.count()).select_from(FullTextTM).where(FullTextTM.project_id == project_id)
     ).one()
+
+
+# --- 101 % in-context keys (ADR 0102) -------------------------------------------
+# Appended AFTER the native twins are bound: nothing above is touched (native-module rule).
+_CTX_SEP = "\x1f"  # U+001F, the same separator hash_text uses
+
+
+def context_key(prev_source: str | None, next_source: str | None) -> str:
+    """The in-context key of a document segment: the previous and next SOURCE segments.
+
+    "ctx:" + sha256(normalize(prev) + US + normalize(next)); a missing neighbour (the first or
+    last segment of a document) is the empty string, so the same sentence at a document edge
+    matches another edge occurrence only on the side that is also an edge. None is accepted."""
+    raw = f"{normalize(prev_source or '')}{_CTX_SEP}{normalize(next_source or '')}"
+    return "ctx:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def key_context_key(key_name: str | None) -> str:
+    """The in-context key of a string-key (software) segment: "key:" + sha256 of the key's
+    full name (namespace and name, see tm_context.key_full_name)."""
+    return "key:" + hashlib.sha256((key_name or "").encode("utf-8")).hexdigest()

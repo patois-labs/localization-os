@@ -770,6 +770,9 @@ _IDENTITY_NOT_SWEPT = {
     ),
     "auditlog.actor": "Append-only keyed hash chain (audit.verify_chain); retention is a "
     "legal obligation, GDPR Art. 17(3)(b). Export masks third parties instead.",
+    "workflowrun.owner": "The execution that holds a run: <host>:<pid>:<uuid8>/<nonce> (ADR 0090). "
+    "A process-instance token for restart-resume ownership, never a person; the launching user "
+    "is WorkflowRun.created_by, which is swept.",
     "databricksexportrun.actor_hash_key_version": "The version label of the key used to "
     "pseudonymize actors in a lakehouse export; never a person.",
     "querythread.author_kind": "Enum naming the KIND of author (human/vendor).",
@@ -904,6 +907,10 @@ _JSON_NO_IDENTITY = {
     "workflowbatch.requested_locales": _R_CFG,
     "workflowbatch.reopened_members": _R_IDS,
     "workflowrun.context": _R_OPS,
+    "steprun.checkpoint": (
+        "Resumable run state after a step visit (ADR 0090): next cursor, working texts, run-local "
+        "records and run context; content-typed like workflowrun.context. " + _R_OPS
+    ),
     "workflowrun.formality": (
         "The MT formality register stamped on the run (register, document/project/customer "
         "level it came from, target locale, label); configuration, no person. Attribution "

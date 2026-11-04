@@ -1,6 +1,8 @@
 """Streaming bodies use their own bounded workers, never sync-route capacity.
 
 Each synchronous producer is driven and finalized by one admitted worker thread.
+The module also holds the other reviewed worker offload: the security middleware's audit
+append in the split roles (`run_audit`, S3c, ADR 0097), on its own small limiter.
 Session exits never run on the event loop. Cleanup signals that existing worker;
 it does not acquire capacity. An in-flight next() finishes before cleanup/release.
 Documented in: docs/architecture/configuration.md
@@ -22,6 +24,15 @@ from starlette.responses import StreamingResponse as _StreamingResponse
 from app import config
 
 _limiter = RunVar("loc_stream_limiter")
+_audit_limiter = RunVar("loc_audit_limiter")
+#: Threads for the middleware audit append in the split roles. They never take tokens from
+#: the shared sync-route pool, and route handlers never wait behind an audit append. The
+#: appends waiting at the same moment are written as ONE group (ADR 0100, bookkeeping lane
+#: since ADR 0104), so this caps a process's group size: a request whose row has no thread
+#: waits for one, and each save's response waits for its row. 4 capped the save ladder at
+#: about 93 req/s on the PC; 32 measured 146 req/s, p95 1.0 s (ADR 0104). The threads hold no
+#: database connection while they wait for their group, and are not in memory_estimate_mb.
+AUDIT_WORKERS = 32
 _end = object()
 _lease = ContextVar("loc_stream_lease", default=None)
 CAPACITY_MESSAGE = "Stream capacity is busy. Retry shortly; existing work continues."
@@ -38,6 +49,19 @@ def stream_limiter():
         limiter = anyio.CapacityLimiter(config.STREAM_WORKERS)
         _limiter.set(limiter)
         return limiter
+
+
+async def run_audit(func, *args, **kwargs):
+    """Run the middleware audit append `func` on a worker thread of its own limiter (S3c, ADR
+    0097): a web process that waits its turn for the cross-process audit lock no longer
+    blocks its event loop. Context variables travel with the call (anyio copies the context);
+    the result and any exception come back unchanged."""
+    try:
+        limiter = _audit_limiter.get()
+    except LookupError:
+        limiter = anyio.CapacityLimiter(AUDIT_WORKERS)
+        _audit_limiter.set(limiter)
+    return await anyio.to_thread.run_sync(partial(func, *args, **kwargs), limiter=limiter)
 
 
 class _Lease:

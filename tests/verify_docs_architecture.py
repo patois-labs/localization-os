@@ -577,6 +577,8 @@ _DOCUMENTED_FLOOR: frozenset = frozenset(
         "app/services/secrets_scrub.py",
         "app/services/storage.py",
         "app/services/vault.py",
+        # native-module (1)
+        "app/services/native.py",
         # segmentation (4)
         "app/cli/cmd_segprofile.py",
         "app/services/segment.py",

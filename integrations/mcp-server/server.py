@@ -271,6 +271,11 @@ _HTTP_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 # slower than this, the honest failure is the timeout message naming the tool,
 # not a longer wait the client would kill silently anyway.
 _SLOW_TIMEOUT = httpx.Timeout(210.0, connect=10.0)
+# S6 (ADR 0094): manage_tm import of a file over _TM_STREAM_OVER bytes streams it as multipart
+# to the background TM import; such a file may be up to _TM_STREAM_CAP (the server applies its
+# own TMX_IMPORT_MAX_BYTES).
+_TM_STREAM_OVER = 8 * 1024 * 1024
+_TM_STREAM_CAP = 2 * 1024**3
 _WORKFLOW_WAIT_S = 45.0
 
 # job_status long-poll shape: total budget per CALL and the gap between polls.
@@ -1401,15 +1406,21 @@ _FORMATS_CACHE: dict = {}
 _FORMATS_TTL_S = 300.0
 
 
-def _local_read_guard(file_path: str, what: str, exts=None, *, read: bool = True):
+def _local_read_guard(
+    file_path: str, what: str, exts=None, *, read: bool = True, cap_floor: int = 0
+):
     """The #755 guard in front of every caller-supplied path: stdio only, inside the
-    allowed input folders, no hidden parts, an accepted extension, under the cap."""
+    allowed input folders, no hidden parts, an accepted extension, under the cap.
+    `cap_floor` raises the cap for a file that is STREAMED, never read into memory (only
+    with read=False: the S6 background TM import)."""
     if not _LOCAL_FILE_READS:
         raise ToolError(
             "file_path is only available to a local stdio server. Use inline data instead."
         )
     roots = loc_file_guard.configured_roots(OUTPUT_DIR, _INPUT_ROOTS)
     cap = loc_file_guard.max_bytes()
+    if cap_floor and not read:
+        cap = max(cap, int(cap_floor))
     if what == "image":
         cap = min(cap, _IMAGE_MAX_BYTES)
     if exts is None:
@@ -1569,7 +1580,7 @@ async def list_projects(
                 }
             )
         if mode == "leverage":
-            # CV-1: the 7-band word-based TM-leverage breakdown for the project.
+            # ADR 0102: the four-band word leverage report (per target language) for the project.
             body = await _get_json(client, "/api/projects/%d/leverage" % int(project_id))  # noqa: UP031
             body.pop("ok", None)
             # project_id top-level (aligning with view=documents), not nested.
@@ -2149,7 +2160,19 @@ async def job_status(
     document_id: int | None = None,
     include_runs: bool = False,
     limit: int = 20,
+    view: str = "status",
 ) -> str:
+    mode = str(view or "status").strip().lower() or "status"
+    if mode not in ("status", "leverage"):
+        raise ToolError(f"unknown view {mode!r}; use status or leverage.")
+    if mode == "leverage":
+        # ADR 0102: the leverage report for the documents and languages this job covered.
+        if job_id is None:
+            raise ToolError("view=leverage needs a job_id.")
+        async with _client() as client:
+            body = await _get_json(client, "/api/jobs/%d/leverage" % int(job_id))  # noqa: UP031
+        body.pop("ok", None)
+        return json.dumps({"job_id": int(job_id), "leverage": body})
     if job_id is None:
         params: dict = {"limit": int(limit or 20)}
         if str(status or "").strip():
@@ -3008,15 +3031,19 @@ _WORKFLOW_STEP_FIELDS: frozenset = frozenset(
         # the step objects (llm_agent-only tristate; the service refuses it elsewhere).
         "over_translation_guard",
         "memory_mode",
-        # Batch 15 T1 (SPEC-tm-match-step-config §8.E): the six tm_match config fields
+        # Batch 15 T1 (SPEC-tm-match-step-config §8.E): the tm_match config fields
         # flow generically through create_workflow's step objects (tm_match-only; the
         # service refuses one set on a non-tm_match step).
-        "tm_fill_threshold",
-        "tm_fuzzy_lock_mode",
         "tm_lock_ice",
         "tm_hundreds_enter_lqa",
-        "tm_context_floor",
         "tm_pool_selection",
+        # ADR 0102: tm_fill_threshold, tm_fuzzy_lock_mode and tm_context_floor were removed.
+        # They stay on the allowlist ONLY so a caller that still sends one is answered by the
+        # server with "<name> was removed: TM fills exact matches only (ADR 0102)." instead
+        # of a generic unknown-field refusal.
+        "tm_fill_threshold",
+        "tm_fuzzy_lock_mode",
+        "tm_context_floor",
         "glossary_id",
         "run_condition",
         "key",
@@ -3068,14 +3095,16 @@ _WORKFLOW_EDIT_FIELDS: frozenset = frozenset(
         # run-190 Item D / M5: the over-translation guard opt-out on the edit surface too.
         "over_translation_guard",
         "memory_mode",
-        # Batch 15 T1 (SPEC-tm-match-step-config §8.E): the six tm_match config fields on
+        # Batch 15 T1 (SPEC-tm-match-step-config §8.E): the tm_match config fields on
         # the edit surface too (edit_workflow action=edit_step).
-        "tm_fill_threshold",
-        "tm_fuzzy_lock_mode",
         "tm_lock_ice",
         "tm_hundreds_enter_lqa",
-        "tm_context_floor",
         "tm_pool_selection",
+        # ADR 0102: removed fields, kept so the server answers with the clear "was removed"
+        # error (see the add surface above).
+        "tm_fill_threshold",
+        "tm_fuzzy_lock_mode",
+        "tm_context_floor",
         "glossary_id",
         "assignee_email",
         "run_condition",
@@ -3937,6 +3966,32 @@ async def manage_tm(
     async with _client() as client:
         if act == "import":
             if str(file_path or "").strip():
+                # S6 (ADR 0094): a big TMX is streamed as a multipart upload (never read into
+                # memory here) and imported by a background job; the reply is its job_id.
+                real = _local_read_guard(
+                    file_path, "TMX or SDLTM file", read=False, cap_floor=_TM_STREAM_CAP
+                )
+                if real.stat().st_size > _TM_STREAM_OVER:
+                    with open(real, "rb") as fh:
+                        resp = await _call(
+                            client,
+                            "POST",
+                            "/api/projects/%d/tm/import" % int(project_id),  # noqa: UP031
+                            data={
+                                "source": src_loc,
+                                "target": tgt_loc,
+                                "acknowledge_placeholder_loss": "true" if ack else "false",
+                            },
+                            files={"file": (real.name, fh)},
+                            timeout=_SLOW_TIMEOUT,
+                        )
+                    out = resp.json()
+                    out.pop("ok", None)
+                    out["next"] = (
+                        "The import runs in the background. Call job_status with this job_id; "
+                        "the counts are in its result when it completes."
+                    )
+                    return json.dumps({"action": act, **out})
                 raw = _read_local_file(file_path, "TMX or SDLTM file")
             elif data is not None:
                 raw = str(data).encode("utf-8")

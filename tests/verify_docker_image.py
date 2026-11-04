@@ -55,7 +55,7 @@ DOCKERFILE = (_ROOT / "Dockerfile").read_text(encoding="utf-8")
 DOCKERIGNORE = (_ROOT / ".dockerignore").read_text(encoding="utf-8")
 
 # What may reach the builder: whole folders, and single files.
-_ALLOWED_DIRS = ("app/", "alembic/", "assets/")
+_ALLOWED_DIRS = ("app/", "alembic/", "assets/", "native/locos_native/src/")
 _ALLOWED_FILES = {
     "alembic.ini",
     "docker-entrypoint.sh",
@@ -69,6 +69,9 @@ _ALLOWED_FILES = {
     "scripts/locks/requirements-build.lock",
     "scripts/saml_smoke.py",
     "scripts/convert_db_encryption.py",
+    "scripts/sqlite_to_postgres.py",
+    "native/locos_native/Cargo.toml",
+    "native/locos_native/Cargo.lock",
     "LICENSE",
     "NOTICE",
     "THIRD_PARTY_NOTICES.md",
@@ -316,6 +319,9 @@ def _allow_list_mutations():
         "nested databases no longer excluded": base.replace("**/*.db\n", "", 1),
         "migrations dropped": base.replace("!alembic/\n", "", 1),
         "db encrypt helper dropped": base.replace("!scripts/convert_db_encryption.py\n", "", 1),
+        "db copy-to-postgres helper dropped": base.replace(
+            "!scripts/sqlite_to_postgres.py\n", "", 1
+        ),
         "SAML smoke dropped": base.replace("!scripts/saml_smoke.py\n", "", 1),
         "locks dropped": base.replace("!requirements-saml.lock\n", "", 1),
         "old deny-list (base a3a45f2f shape)": (
@@ -474,10 +480,82 @@ def _ownership_holds():
     print("  sh: the ownership check passes read-only /app, fails writable /app or no /data")
 
 
+# ------------------------------------------------------------- S3b web + N workers
+def _worker_supervisor_holds():
+    """docker-entrypoint.sh: LOC_TMS_WORKER_PROCESSES>0 supervises web + workers; 0 is unchanged.
+
+    No docker needed: the real supervisor functions are cut out of the entrypoint and run under
+    sh with `sleep` stand-ins for the workers and the web server.
+    """
+    entry = (_ROOT / "docker-entrypoint.sh").read_bytes().decode("utf-8")
+    assert "\r" not in entry, "docker-entrypoint.sh must be LF"
+    assert entry.count('exec "$@"') == 1, "the default path keeps ONE exec of the command"
+    gate = (
+        'if [ "${LOC_TMS_WORKER_PROCESSES:-0}" != "0" ]; then\n    run_web_and_workers "$@"\nfi\n'
+    )
+    assert gate in entry, "the supervisor must be gated on LOC_TMS_WORKER_PROCESSES != 0"
+    assert entry.index(gate) < entry.index('exec "$@"')
+    assert "LOC_TMS_ROLE=worker" in entry and "LOC_TMS_ROLE=web" in entry
+    assert "python -m app.worker" in entry
+    start = entry.index("_alive() {")
+    end = entry.index("# Disable uvicorn proxy headers")
+    funcs = entry[start:end]
+    sh = _sh()
+    if sh is None:
+        print("  SKIP: no sh on PATH; the supervisor was not executed")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_sh = tmp.replace("\\", "/")
+        (Path(tmp) / "funcs.sh").write_bytes(funcs.encode("utf-8"))
+        (Path(tmp) / "dying.sh").write_bytes(b"sleep 1\nexit 7\n")
+
+        def run(driver, **env_extra):
+            script = f". {tmp_sh}/funcs.sh\n{driver}\n"
+            (Path(tmp) / "case.sh").write_bytes(script.encode("utf-8"))
+            env = dict(
+                os.environ,
+                LOC_TMS_STOP_WAIT_SECONDS="4",
+                **{k: str(v) for k, v in env_extra.items()},
+            )
+            proc = subprocess.run(
+                [sh, f"{tmp_sh}/case.sh"],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=90,
+            )
+            return proc.returncode, proc.stdout + proc.stderr
+
+        # bad values are refused before anything starts
+        for bad in ("abc", "-1", "65"):
+            rc, out = run("run_web_and_workers sleep 1", LOC_TMS_WORKER_PROCESSES=bad)
+            assert rc == 2, ("bad LOC_TMS_WORKER_PROCESSES must exit 2", bad, rc, out)
+
+        # SIGTERM: forwarded to every child, the group exits 0
+        term = (
+            "(run_web_and_workers sleep 300) &\nsup=$!\nsleep 2\nkill -TERM $sup\nwait $sup\n"
+            'echo "rc=$?"'
+        )
+        rc, out = run(term, LOC_TMS_WORKER_PROCESSES=2, LOC_TMS_WORKER_CMD="sleep 300")
+        assert "rc=0" in out and "worker 2/2 started" in out and "web started" in out, out
+        assert "stop requested" in out, out
+
+        # a worker that dies: the group is stopped and its status (7) is the exit status
+        rc, out = run(
+            'run_web_and_workers sleep 300\necho "rc=$?"',
+            LOC_TMS_WORKER_PROCESSES=1,
+            LOC_TMS_WORKER_CMD=f"sh {tmp_sh}/dying.sh",
+        )
+        assert rc == 7, ("a dead child ends the supervisor with its status", rc, out)
+        assert "stopping the group" in out, out
+    print("  entrypoint: 0 = single exec; N>0 supervises web + workers (TERM, dead child)")
+
+
 # --------------------------------------------------------------------------- #236
 _FAKE = {  # test-only digests for the resolver stub; never written to the Dockerfile
     "python:3.13-slim": "sha256:" + "a" * 64,
-    "tailscale/tailscale:v1.102.5": "sha256:" + "b" * 64,
+    "tailscale/tailscale:v1.104.2": "sha256:" + "b" * 64,
+    "rust:1.94.1-slim-trixie": "sha256:" + "f" * 64,
 }
 
 
@@ -488,6 +566,7 @@ def _base_pins_hold():
     py = pins.REF_RE.match(args["PYTHON_BASE"])
     assert py and py["tag"] == "3.13-slim", args["PYTHON_BASE"]
     assert pins.REF_RE.match(args["TAILSCALE_BASE"])["tag"].startswith("v")
+    assert pins.REF_RE.match(args["RUST_BASE"])["tag"].endswith("-slim-trixie"), args["RUST_BASE"]
     for arg in pins.unpinned(DOCKERFILE):
         print(f"  PENDING: {arg}={args[arg]} has no digest yet (run pin_base_images.py)")
     mutants = {
@@ -495,10 +574,16 @@ def _base_pins_hold():
             "FROM ${PYTHON_BASE} AS runtime", "FROM python:3.13-slim AS runtime"
         ),
         "literal tailscale FROM (base)": DOCKERFILE.replace(
-            "FROM ${TAILSCALE_BASE} AS tailscale", "FROM tailscale/tailscale:v1.102.5 AS tailscale"
+            "FROM ${TAILSCALE_BASE} AS tailscale", "FROM tailscale/tailscale:v1.104.2 AS tailscale"
         ),
         "stages drift onto two ARGs": DOCKERFILE.replace(
             "FROM ${PYTHON_BASE} AS builder", "FROM ${TAILSCALE_BASE} AS builder"
+        ),
+        "native module built on another Python": DOCKERFILE.replace(
+            "FROM ${PYTHON_BASE} AS native", "FROM ${RUST_BASE} AS native"
+        ),
+        "literal rust FROM (base)": DOCKERFILE.replace(
+            "FROM ${RUST_BASE} AS rust", "FROM rust:1.94.1-slim-trixie AS rust"
         ),
         "floating latest": re.sub(
             r"(?m)^ARG TAILSCALE_BASE=tailscale/tailscale:v[0-9.]+",
@@ -521,17 +606,17 @@ def _base_pins_hold():
         assert mutant != DOCKERFILE, f"mutation {name!r} did not apply"
         assert pins.base_errors(mutant), f"base-image mutation not caught: {name}"
 
-    # The pin script, with a fake resolver: both ARGs pinned, tag kept, nothing else moved.
+    # The pin script, with a fake resolver: every ARG pinned, tag kept, nothing else moved.
     unpinned_text = re.sub(r"(?m)^(ARG \w+_BASE=[^@\s]+)@\S+$", r"\1", DOCKERFILE)
     pinned, changes = pins.pin(unpinned_text, _FAKE.__getitem__)
-    assert len(changes) == 2 and not pins.base_errors(pinned, require_digest=True), changes
+    assert len(changes) == 3 and not pins.base_errors(pinned, require_digest=True), changes
     assert pins.base_args(pinned)["PYTHON_BASE"] == "python:3.13-slim@" + _FAKE["python:3.13-slim"]
     before = [ln for ln in unpinned_text.splitlines() if not re.match(r"ARG \w+_BASE=", ln)]
     after = [ln for ln in pinned.splitlines() if not re.match(r"ARG \w+_BASE=", ln)]
-    assert before == after, "pinning must change only the two ARG lines"
+    assert before == after, "pinning must change only the base ARG lines"
     assert pins.pin(pinned, _FAKE.__getitem__)[1] == [], "re-pinning the same digest is a no-op"
     bumped, changes = pins.pin(pinned, lambda ref: "sha256:" + "d" * 64)
-    assert len(changes) == 2 and "d" * 64 in pins.base_args(bumped)["TAILSCALE_BASE"]
+    assert len(changes) == 3 and "d" * 64 in pins.base_args(bumped)["TAILSCALE_BASE"]
     for bad in ("sha256:xyz", "", "md5:" + "a" * 32):
         try:
             pins.pin(unpinned_text, lambda ref, bad=bad: bad)
@@ -575,13 +660,13 @@ def _base_pins_hold():
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             assert pins.main(["--check", "--dockerfile", str(path)]) == 1
-        assert out.getvalue().count("is not pinned by digest") == 2, out.getvalue()
+        assert out.getvalue().count("is not pinned by digest") == 3, out.getvalue()
         path.write_bytes(pinned.encode("utf-8"))
         with contextlib.redirect_stdout(io.StringIO()):
             assert pins.main(["--check", "--dockerfile", str(path)]) == 0
         assert b"\r\n" not in path.read_bytes()
-    print(f"  base images via PYTHON_BASE/TAILSCALE_BASE; {len(mutants)} mutations caught;")
-    print("      pin_base_images: pins both, keeps tags, touches only the ARG lines,")
+    print(f"  base images via PYTHON/TAILSCALE/RUST_BASE; {len(mutants)} mutations caught;")
+    print("      pin_base_images: pins all three, keeps tags, touches only the ARG lines,")
     print("      rejects malformed digests, --check fails unpinned and passes pinned")
 
 
@@ -811,6 +896,7 @@ def main():
     _working_tree_probe()
     _allow_list_mutations()
     _ownership_holds()
+    _worker_supervisor_holds()
     _base_pins_hold()
     _docs_name_the_mechanism()
     print("DOCKER IMAGE OK")

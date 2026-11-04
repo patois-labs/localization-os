@@ -1775,7 +1775,7 @@ form[aria-busy="true"] { cursor: progress; }
 }
 .card .tmlev-seg { height: 100%; }
 .card .tmlev-seg.tmlev-exact { background: var(--success); }
-.card .tmlev-seg.tmlev-fuzzy { background: var(--warn); }
+.card .tmlev-seg.tmlev-context { background: var(--success); opacity: .8; }
 .card .tmlev-seg.tmlev-new { background: var(--muted); }
 .card .tmlev-seg.tmlev-untranslated { background: var(--border); }
 .card .tmlev-legend {
@@ -1786,25 +1786,20 @@ form[aria-busy="true"] { cursor: progress; }
 .card .tmlev-key b { margin-left: 2px; color: var(--text); font-weight: 700; }
 .card .tmlev-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: none; }
 .card .tmlev-key.tmlev-exact .tmlev-swatch { background: var(--success); }
-.card .tmlev-key.tmlev-fuzzy .tmlev-swatch { background: var(--warn); }
+.card .tmlev-key.tmlev-context .tmlev-swatch { background: var(--success); opacity: .8; }
 .card .tmlev-key.tmlev-new .tmlev-swatch { background: var(--muted); }
 .card .tmlev-key.tmlev-untranslated .tmlev-swatch { background: var(--border); }
 
-/* CV-1: the 7-band WORD-based leverage bar. Three hue FAMILIES (covered=leverage
-   green, fuzzy=amber, new=muted), the covered/fuzzy tiers separated by opacity so
-   seven labelled bands stay legible without inventing seven distinct hues. Reuses
-   the tmlev-bar geometry. */
+/* The WORD-based leverage report (ADR 0102): four bands, one hue family for the leveraged
+   bands (green, separated by opacity) and muted for new. Reuses the tmlev-bar geometry. */
 .card .lev7-bar {
   display: flex; height: 14px; border-radius: 4px; overflow: hidden;
   background: var(--panel-2); border: 1px solid var(--border-soft);
 }
 .card .lev7-seg { height: 100%; }
-.card .lev7-seg.lev7-repetitions { background: var(--success); opacity: .6; }
 .card .lev7-seg.lev7-context     { background: var(--success); opacity: .8; }
+.card .lev7-seg.lev7-repetitions { background: var(--success); opacity: .55; }
 .card .lev7-seg.lev7-exact       { background: var(--success); }
-.card .lev7-seg.lev7-fuzzy_high  { background: var(--warn); opacity: .55; }
-.card .lev7-seg.lev7-fuzzy_mid   { background: var(--warn); opacity: .75; }
-.card .lev7-seg.lev7-fuzzy_low   { background: var(--warn); }
 .card .lev7-seg.lev7-new         { background: var(--muted); }
 .card .lev7-legend {
   list-style: none; display: flex; flex-wrap: wrap; gap: 6px 16px;
@@ -1813,13 +1808,14 @@ form[aria-busy="true"] { cursor: progress; }
 .card .lev7-key { display: inline-flex; align-items: center; gap: 6px; }
 .card .lev7-key b { margin-left: 2px; color: var(--text); font-weight: 700; }
 .card .lev7-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: none; }
-.card .lev7-key.lev7-repetitions .lev7-swatch { background: var(--success); opacity: .6; }
 .card .lev7-key.lev7-context .lev7-swatch     { background: var(--success); opacity: .8; }
+.card .lev7-key.lev7-repetitions .lev7-swatch { background: var(--success); opacity: .55; }
 .card .lev7-key.lev7-exact .lev7-swatch       { background: var(--success); }
-.card .lev7-key.lev7-fuzzy_high .lev7-swatch  { background: var(--warn); opacity: .55; }
-.card .lev7-key.lev7-fuzzy_mid .lev7-swatch   { background: var(--warn); opacity: .75; }
-.card .lev7-key.lev7-fuzzy_low .lev7-swatch   { background: var(--warn); }
 .card .lev7-key.lev7-new .lev7-swatch         { background: var(--muted); }
+.card .lev-table { margin-top: 10px; }
+.card .lev-table th, .card .lev-table td { text-align: right; }
+.card .lev-table th:first-child, .card .lev-table td:first-child { text-align: left; }
+.card .lev-table .lev-total td, .card .lev-table .lev-total th { font-weight: 700; }
 
 /* ============================================================================
    Visualization quick-wins — the spend-cap meter (DESIGN.md §5 "Control Surfaces"

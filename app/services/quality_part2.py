@@ -1403,13 +1403,15 @@ def _segment_rebuilds_escapes(segment) -> bool:
 
     from app.models import Document
 
-    stmt = select(Document.fmt).where(Document.id == doc_id)
+    def _stmt():  # S7b: built only on a memo miss (it cost more than the memoised answer)
+        return select(Document.fmt).where(Document.id == doc_id)
+
     s = object_session(segment)
     if s is not None:
         memo = s.info.setdefault("quality_doc_fmt_703", {})
         if doc_id not in memo:
             with s.no_autoflush:
-                memo[doc_id] = s.exec(stmt).first()
+                memo[doc_id] = s.exec(_stmt()).first()
         fmt = memo[doc_id]
     else:
         from sqlmodel import Session
@@ -1417,7 +1419,7 @@ def _segment_rebuilds_escapes(segment) -> bool:
         from app.db import engine
 
         with Session(engine) as s2:
-            fmt = s2.exec(stmt).first()
+            fmt = s2.exec(_stmt()).first()
     return _fmt_rebuilds_escapes(fmt)
 
 

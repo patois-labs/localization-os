@@ -26,7 +26,7 @@ Documented in: docs/architecture/identity-and-access.md
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Form, Request
@@ -172,7 +172,7 @@ def _to_login(reason: str):
 
 def _deadline(pending: dict) -> str:
     """When the pending step ends, as HH:MM UTC, for the page to announce."""
-    end = datetime.fromtimestamp(pending["issued"] + mfa.PENDING_MAX_SECONDS, tz=timezone.utc)
+    end = datetime.fromtimestamp(pending["issued"] + mfa.PENDING_MAX_SECONDS, tz=UTC)
     return end.strftime("%H:%M UTC")
 
 

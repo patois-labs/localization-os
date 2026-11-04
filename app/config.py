@@ -8,6 +8,7 @@ Documented in: docs/architecture/configuration.md
 """
 
 import contextlib
+import functools
 import ipaddress
 import logging
 import os
@@ -67,16 +68,76 @@ def _get_num(key: str, default, *, cast=int, minimum=None, refuse_below=None):
 # --- App ---
 QUEUE_DRAIN_WAIT_S = _get_num("LOC_TMS_QUEUE_DRAIN_WAIT_S", 600.0, cast=float, minimum=0.1)
 
+# S2 step hand-off (ADR 0092, app/services/run_segments.py): a run that has executed for at least
+# STEP_QUANTUM_S seconds hands its execution slot back at the next completed step visit when other
+# work is waiting, and continues when the fair admission scheduler picks it again. "off" disables
+# it; "always" hands off at every step boundary (a test knob that proves the hand-off is invisible).
+STEP_HANDOFF = (_get("LOC_TMS_STEP_HANDOFF", "auto") or "auto").strip().lower()
+if STEP_HANDOFF not in ("auto", "off", "always"):
+    STEP_HANDOFF = "auto"
+# 30 s (was 10 s; flood 2026-10-23): one real LLM step under load takes about 15 s, so a
+# 10 s quantum made almost every run park at every step boundary. 30 s is about two real steps:
+# short runs never park, and an arriving run from another customer still waits at most about
+# one step plus the quantum for a slot held by long runs.
+STEP_QUANTUM_S = _get_num("LOC_TMS_STEP_QUANTUM_S", 30.0, cast=float, minimum=0.0)
+# The hard cap on how long a parked run waits for its next turn: past it the run goes first,
+# whatever the customer rotation says (starvation fix).
+STEP_PARK_MAX_WAIT_S = _get_num("LOC_TMS_STEP_PARK_MAX_WAIT_S", 60.0, cast=float, minimum=1.0)
+# How long the admission scheduler holds the slots it has gathered for one document's languages
+# while it waits for the rest (batch admission, ADR 0099). Past it the languages it has
+# slots for start and the rest follow as slots free. 0 starts whatever fits at once.
+BATCH_GANG_WAIT_S = _get_num("LOC_TMS_BATCH_GANG_WAIT_S", 30.0, cast=float, minimum=0.0)
+
+# S3 process roles (ADR 0095, app/worker.py): "all" (default) is the single process that serves
+# HTTP AND runs the job pools, the run admission scheduler and the sweeps, exactly as before.
+# "web" serves HTTP only: it starts no job worker, no run execution and no scheduler; launches
+# and resumes become durable QUEUED rows that a worker takes. "worker" (`python -m app.worker`)
+# serves no HTTP and runs all of the background work. Split roles need the DB job queue.
+ROLE = (_get("LOC_TMS_ROLE", "all") or "all").strip().lower()
+if ROLE not in ("all", "web", "worker"):
+    raise SystemExit(f"LOC_TMS_ROLE must be all, web or worker (got {ROLE!r})")
+
+
+def runs_background_work() -> bool:
+    """True in the roles that execute jobs and workflow runs ("all" and "worker")."""
+    return ROLE != "web"
+
+
+# S3c multi-process web (ADR 0097): how many web processes serve HTTP for this install (the
+# container entrypoint passes it to uvicorn as --workers). 1 (default) keeps every in-process
+# store (rate-limit windows, SAML replay ids, the one-time stash) in memory exactly as before;
+# above 1 those stores move to the shared `sharedstate` table so every web process sees the same
+# state, and boot cleanups only touch rows whose owning web process is gone. More than one web
+# process needs LOC_TMS_ROLE=web with worker processes; the HTTP startup of the `all` role refuses
+# it (app/main.py::_startup). It is NOT refused here: the container's alembic run and every
+# one-shot CLI import this module with the default role and must keep working (gate HIGH-1).
+WEB_PROCESSES = _get_num("LOC_TMS_WEB_PROCESSES", 1, minimum=1)
+
+
+def multi_web() -> bool:
+    """True when more than one web process serves this install (S3c, ADR 0097)."""
+    return WEB_PROCESSES > 1
+
+
 HOST = _get("HOST", "127.0.0.1")
 PORT = int(_get("PORT", "8000"))
 
 
 def loopback_bind() -> bool:
-    """Only literal loopback addresses and localhost are local binds."""
-    if HOST.lower() == "localhost":
+    """Only literal loopback addresses and localhost are local binds.
+
+    Answered once per HOST value (save path, 2026-10-26): the auth check calls this on every
+    request, and parsing the address each time was about 1 % of a save's GIL time. Keyed on
+    the value, so a test or tool that rebinds `config.HOST` still gets the right answer."""
+    return _loopback(HOST)
+
+
+@functools.lru_cache(maxsize=8)
+def _loopback(host: str) -> bool:
+    if host.lower() == "localhost":
         return True
     try:
-        return ipaddress.ip_address(HOST).is_loopback
+        return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
 
@@ -975,6 +1036,25 @@ OVER_TRANSLATION_MAX_RATIO = _over_translation_max_ratio()
 #     measured before/after peaks on a synthetic ~100k-term TBX and CSV. Pinned by
 #     tests/verify_glossary_import_bounded_memory.py.
 MAX_UPLOAD_BYTES = int(_get("MAX_UPLOAD_BYTES", str(100 * 1024 * 1024)))
+
+# S6 (ADR 0094): a TMX translation memory is the one upload that is routinely far bigger than
+# a document (a 2M-unit TMX is about 600 MB), so it has its own caps. A TMX upload over
+# TMX_IMPORT_INLINE_MAX_BYTES is streamed to disk (never into memory) and imported by a
+# background job (kind "tm_import") that parses it incrementally and writes it in short
+# chunks; the app process stays at a few hundred MB whatever the file size. Still bounded:
+#   * TMX_IMPORT_MAX_BYTES (default 2 GiB): the largest TMX accepted. Only multipart TMX
+#     imports (web form, POST /api/projects/{id}/tm/import as a file) get this cap; a JSON
+#     base64 import stays under MAX_UPLOAD_BYTES. Disk, not memory, scales with the file: the
+#     web framework first spools a multipart upload to the OS temp dir (TMPDIR / TEMP), the
+#     route copies it to the data dir, and the import's plan file is about as big again while
+#     it runs, so allow about three times the file in free disk across those two places.
+#   * TMX_IMPORT_MAX_UNITS (default 5,000,000): the most <tu> elements one TMX may hold
+#     (refused before anything is stored). MAX_DOCUMENT_ROWS still caps the in-memory path.
+#   * TMX_IMPORT_INLINE_MAX_BYTES (default 8 MiB): a web form TMX at or under this size is
+#     imported in the request, as before, with the counts on the page at once.
+TMX_IMPORT_MAX_BYTES = _get_num("TMX_IMPORT_MAX_BYTES", 2 * 1024**3, minimum=1)
+TMX_IMPORT_MAX_UNITS = _get_num("TMX_IMPORT_MAX_UNITS", 5_000_000, minimum=1)
+TMX_IMPORT_INLINE_MAX_BYTES = _get_num("TMX_IMPORT_INLINE_MAX_BYTES", 8 * 1024 * 1024, minimum=0)
 
 # Hard cap on a fetched connector ATTACHMENT before it is read into memory and
 # routed through the file-filter pipeline (Jira outbound attachments, SPEC-

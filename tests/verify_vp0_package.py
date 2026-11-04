@@ -105,10 +105,12 @@ def test_enrichment_fields_per_band():
     assert by[1]["provenance"] == "tm_exact"
     assert by[1]["locked"] is True and by[1]["locked_reason"] == "100% TM match"
     assert "match_score" not in by[1]
-    # fuzzy tiers -> tm_fuzzy + match_score, NOT locked
-    assert by[2]["provenance"] == "tm_fuzzy" and by[2]["match_score"] == 88
-    assert "locked" not in by[2]
-    assert by[3]["provenance"] == "tm_fuzzy" and by[3]["match_score"] == 97
+    # ADR 0102: an old 88 / 97 stamp is not a TM match any more: new band with a target ->
+    # "mt", no tm_fuzzy provenance, no match_score, no tm_match_pct shipped, NOT locked
+    for sid in (2, 3):
+        assert by[sid]["provenance"] == "mt", by[sid]
+        assert "locked" not in by[sid] and "match_score" not in by[sid]
+        assert "tm_match_pct" not in by[sid]
     # new band, target present -> "mt"; empty target -> "new"; neither locked
     assert by[4]["provenance"] == "mt" and "locked" not in by[4] and "match_score" not in by[4]
     assert by[5]["provenance"] == "new"
@@ -161,7 +163,7 @@ def test_omit_locked_targets():
     # the LOCKED segment keeps its source + marker but ships NO target
     assert on[1]["source"] == "Locked src." and on[1]["locked"] is True
     assert on[1]["target"] == "", "omit_locked_targets must blank a locked segment's target"
-    # the non-locked (fuzzy) segment is untouched
+    # the non-locked segment is untouched
     assert on[2]["target"] == "OPEN-TGT", "a non-locked target must never be omitted"
     # the vendors service helper agrees
     assert vendors.omit_locked_targets(vendor_on) is True

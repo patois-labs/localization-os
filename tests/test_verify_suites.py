@@ -33,6 +33,7 @@ on top of the shard.
 import glob
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -116,6 +117,40 @@ def _purge_stale_temp_dirs():
 
 # Runs once per pytest process, at collection time.
 _purge_stale_temp_dirs()
+
+
+def _kill_strays(suite_tmp):
+    """Linux: SIGKILL every process the suite left behind, then report how many.
+
+    Killing a suite's child does not kill ITS children: `uvicorn --workers 2` spawns its
+    workers through multiprocessing, and verify_multi_web's old kill of the supervisor
+    alone orphaned 2 of them per run, for good (96 orphans, 7.5 of 8 GB swap on a test server,
+    2026-10-28). A timeout here kills only the suite process, too. Every descendant
+    inherits TMPDIR=<suite_tmp> (unique to this suite), even one that calls setsid, so
+    /proc environ finds them all. Best-effort; a no-op without /proc (Windows, macOS).
+    """
+    if not os.path.isdir("/proc/self"):
+        return
+    marker = f"TMPDIR={suite_tmp}".encode()
+    me = os.getpid()
+    killed = 0
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit() or int(entry) == me:
+            continue
+        try:
+            with open(f"/proc/{entry}/environ", "rb") as f:
+                if marker not in f.read().split(b"\0"):
+                    continue
+            os.kill(int(entry), signal.SIGKILL)
+            killed += 1
+        except OSError:
+            continue  # gone already, or not ours
+    if killed:
+        print(
+            f"[test_verify_suites] killed {killed} stray process(es) left by the suite",
+            file=sys.stderr,
+        )
+
 
 # One subprocess per script; generous per-suite timeout. This is a SHARED cap
 # across every verify_*.py, sized for the genuinely slow suites — verify_migrations
@@ -243,8 +278,9 @@ def test_verify_suite(suite_path):
             env=env,
         )
     finally:
-        # After the child (and its own children) have exited, the run-scoped
-        # temp root can be removed cleanly — no live handles remain.
+        # Reap anything the suite left running (pass, fail or timeout), then the
+        # run-scoped temp root can be removed cleanly — no live handles remain.
+        _kill_strays(suite_tmp)
         shutil.rmtree(suite_tmp, ignore_errors=True)
 
     # A useful tail of combined output for failure diagnosis.

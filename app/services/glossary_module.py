@@ -205,7 +205,13 @@ def set_pairs(session: Session, glossary_id: int, pairs) -> list[GlossaryPair]:
 
 
 def build_glossary_plan(
-    session: Session, project, source_locale, target_locale, pinned_glossary_id=None, notes=None
+    session: Session,
+    project,
+    source_locale,
+    target_locale,
+    pinned_glossary_id=None,
+    notes=None,
+    run_cache: dict | None = None,
 ) -> GlossaryPlan:
     """Resolve the glossary sources for a translation of `project` on (src, tgt).
 
@@ -254,7 +260,8 @@ def build_glossary_plan(
     # keeps both branches below byte-identical for existing installs.
     from app.services import project_sources
 
-    pinned = project_sources.pinned_glossary_ids(session, project)
+    # `run_cache` (S4 follow-up): a translate run's cache; the pins are resolved once per run.
+    pinned = project_sources.pinned_glossary_ids(session, project, run_cache=run_cache)
 
     project_ct = getattr(project, "content_type_id", None)
     if project_ct is None:
@@ -336,8 +343,12 @@ def match_terms_merged(
     provider=None,
     conflict_state=None,
     disambig=None,
+    entry_cache: dict | None = None,
 ) -> list[dict]:
     """Merge the glossary term constraints for ONE segment across a GlossaryPlan.
+
+    `entry_cache` (S4 query diet, ADR 0093): a translate run's own dict, handed to every
+    source's match_terms so each glossary's entries are read once per run, not per segment.
 
     `disambig` (Gap D, SPEC-context-metadata phase 2A): a short, sanitized
     domain/audience hint from the run's resolved context package, forwarded verbatim
@@ -388,6 +399,7 @@ def match_terms_merged(
                 provider=provider,
                 glossary_id=gid,
                 disambig=disambig,
+                entry_cache=entry_cache,
             )
         )
     if plan.include_legacy:
@@ -400,6 +412,7 @@ def match_terms_merged(
                 target_locale,
                 provider=provider,
                 disambig=disambig,
+                entry_cache=entry_cache,
             )
         )
     merged = list(out.values())

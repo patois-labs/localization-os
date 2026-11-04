@@ -357,21 +357,36 @@ def _tm_import(args, emit) -> int:
     if remote_mode(args):
         return _remote_impl.tm_import(args, emit)
     require_org_scope(args, emit)
+    import os
+
     from app.kernel import tm
 
-    data = _read_bytes(args.tmx)
+    if not os.path.isfile(args.tmx):
+        raise CliError(f"file not found: {args.tmx}", EXIT_USAGE)
+
+    def _parse(done: int, total: int, units: int) -> None:
+        pct = int(done * 100 / total) if total else 100
+        emit.detail(f"reading the file: {pct}% ({units} units so far)")
+
+    def _write(done: int, total: int) -> None:
+        emit.detail(f"writing to the TM: {done} of {total} rows")
+
     with _session() as session:
         _get_project(session, args.project_id, op_org_id(args))
         try:
-            res = tm.import_tmx(
+            # S6 (ADR 0094): imported straight from the file (a TMX is never read into
+            # memory, TMX_IMPORT_MAX_BYTES / TMX_IMPORT_MAX_UNITS apply).
+            res = tm.import_tmx_file(
                 session,
                 args.project_id,
-                data,
+                args.tmx,
                 args.source,
                 args.target,
                 acknowledge_placeholder_loss=bool(
                     getattr(args, "acknowledge_placeholder_loss", False)
                 ),
+                progress=_write,
+                parse_progress=_parse,
             )
         except Exception as exc:
             raise CliError(f"could not import TMX: {exc}") from exc

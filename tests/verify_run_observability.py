@@ -517,6 +517,11 @@ def test_p5_flush_never_waits_on_an_exhausted_pool():
                 "a SKIPPED write marked the throttle satisfied: the counter would then be "
                 "stale until the next unit moved it (H1: stamp flushed_at only on success)"
             )
+        # Let the background writer try its write WHILE the pool is still exhausted. Left until
+        # after `finally`, a writer delayed by a loaded box (the S8 release sweep) wrote the row
+        # through a freed connection, which is correct behaviour and made this cell red.
+        if not orchestrator.progress_drain(10.0):
+            _fail("the background progress writer never settled on the exhausted pool")
     finally:
         for c in held:
             with contextlib.suppress(Exception):
@@ -864,7 +869,11 @@ def _assert_the_reopen_is_bounded_and_watched(body):
             f"{hours:g} hours: the 'live updates stopped' line and the cap have drifted "
             "apart (round 4, LOW-1)"
         )
-    src = inspect.getsource(orchestrator.observe_run)
+    # S3 (ADR 0095): observe_run is a thin wrapper (the web role's event waits); the reads and
+    # this note live in its body, _observe_run.
+    from app.services import orchestrator_part10
+
+    src = inspect.getsource(orchestrator_part10._observe_run)
     note = src.split("max_seconds bounds", 1)[-1].split("from app.db import engine", 1)[0]
     for needle in (str(cap), f"{hours:g} h", "visible"):
         if needle not in note:

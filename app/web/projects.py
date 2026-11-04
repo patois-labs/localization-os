@@ -39,6 +39,7 @@ from app.kernel import (
     ids,
     languages,
     languages_catalog,
+    leverage,
     lifecycle,
     pair_providers,
     project_automation,
@@ -47,6 +48,7 @@ from app.kernel import (
     security,
     settings,
     tm,
+    tm_import_job,
     vendors,
 )
 from app.kernel import connectors as connectors_registry
@@ -506,14 +508,11 @@ def project_detail(project_id: int, request: Request, session: Session = Depends
         .where(Document.project_id == project_id, Document.fmt != keys_svc.KEY_DOC_FMT)
         .order_by(Document.created_at.desc())
     ).all()
-    # CV-1: the 7-band WORD-based TM-leverage breakdown (the real vendor-cost model),
-    # alongside the coarse 4-band bar — computed from the SAME segments _project_stats
-    # already loads (M4: no second full segment load per render). Ordered identically to
-    # the vendor_cost.project_leverage loader seam that /api + CLI use, so the numbers are
-    # byte-identical across surfaces.
-    stats = _project_stats(session, [d.id for d in documents], with_leverage7=True)
-    leverage7 = stats["leverage7"]
-    leverage7_rows = stats["leverage7_rows"]
+    stats = _project_stats(session, [d.id for d in documents])
+    # ADR 0102: the word-based leverage report (101 % / repetitions / 100 % / new per language),
+    # from the same seam /api, the CLI and MCP use. Key-based content is included, so it loads
+    # its own column-only segment rows (no JSON blobs) rather than reusing the stats list.
+    leverage_report = leverage.analyze(session, project_id)
     # Locale-removal permanence: the chip x is only offered for a
     # locale still removable — untranslated (no target text, no run of its own) AND
     # not the project's last remaining locale. translated_target_locales is ONE
@@ -617,10 +616,13 @@ def project_detail(project_id: int, request: Request, session: Session = Depends
             # Batch 13: ZIP batch uploads, each offered back as a per-language ZIP.
             "zip_batches": delivery.zip_batches(session, project_id, documents=documents),
             "modes": [TransMode.SEGMENTED, TransMode.FULL_TEXT],
-            "leverage7": leverage7,
-            "leverage7_rows": leverage7_rows,
-            "tm_count": tm.count(session, project_id),
-            "ft_count": tm.ft_count(session, project_id),
+            "leverage_report": leverage_report,
+            "tm_count": tm.cached_count(session, project_id),
+            "ft_count": tm.cached_ft_count(session, project_id),
+            # S6 (ADR 0094): background TM imports of this project (progress polled on the page).
+            "tm_import_jobs": tm_import_job.recent_for_project(
+                session, project_id, owner=_tm_import_owner(request)
+            ),
             "glossary_count": glossary.count(session, project_id),
             "glossary_entries": glossary_page["entries"],
             "glossary_next_cursor": glossary_page["next_cursor"],
@@ -725,7 +727,7 @@ def project_detail(project_id: int, request: Request, session: Session = Depends
             # (no stub). budget_state is safe even with no ProjectBudget row (has_budget
             # False), so a manager always sees the section (with a "set a budget" prompt).
             "budget_state": (
-                project_budgets.budget_state(session, project_id)
+                project_budgets.budget_state_cached(session, project_id)
                 if ((not security.auth_required()) or security.can_manage(me))
                 else None
             ),
@@ -1093,3 +1095,33 @@ def glossary_add(
         )
         return RedirectResponse(f"/projects/{project_id}?gl_added=1", status_code=303)
     return RedirectResponse(f"/projects/{project_id}?err=glossary_add", status_code=303)
+
+
+def _tm_import_owner(request: Request) -> str | None:
+    """Whose TM import jobs the project page lists: the same rule as /jobs/{id}/status, which
+    the page polls (None = every job)."""
+    from app.web.jobs_ui import _owner_filter
+
+    return _owner_filter(request)
+
+
+@router.get("/projects/{project_id}/leverage.csv")
+def project_leverage_csv(
+    project_id: int, request: Request, session: Session = Depends(get_session)
+):
+    """The leverage report as a CSV for quoting (the project page's Download CSV link; the
+    /api twin is GET /api/projects/{id}/leverage?format=csv). Same visibility rule as the page."""
+    project = session.get(Project, project_id)
+    if not project:
+        return _missing_block(request, session)
+    blocked = _visibility_block(request, session, project)
+    if blocked:
+        return blocked
+    report = leverage.analyze(session, project_id)
+    return Response(
+        leverage.to_csv(report),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="leverage-project-{project_id}.csv"'
+        },
+    )

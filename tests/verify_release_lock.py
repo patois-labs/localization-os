@@ -636,14 +636,17 @@ def test_saml_lxml_fallback_is_audited_and_non_blocking():
 
 
 def _repo_lock_files():
-    """Every *.lock in the checkout (repo-relative, posix). Git lists the tracked ones; CI runs
-    this suite inside the shipped image (python:3.13-slim, no git, read-only /repo), so walk
-    the tree there, skipping dot directories (.git, .venv, .ci-check-tools) and node_modules."""
+    """Every Python *.lock in the checkout (repo-relative, posix). Git lists the tracked ones; CI
+    runs this suite inside the shipped image (python:3.13-slim, no git, read-only /repo), so walk
+    the tree there, skipping dot directories (.git, .venv, .ci-check-tools) and node_modules.
+
+    Cargo.lock (native/locos_native, ADR 0091) is not a pip inventory: cargo builds only what it
+    pins (`--locked`) and checks every crate's checksum; it is left out of the pip audit here."""
     try:
         result = subprocess.run(
             ["git", "ls-files", "*.lock"], cwd=ROOT, capture_output=True, text=True, check=True
         )
-        return result.stdout.split()
+        return [p for p in result.stdout.split() if Path(p).name != "Cargo.lock"]
     except (OSError, subprocess.CalledProcessError):
         found = []
         for current, dirs, files in os.walk(ROOT):
@@ -653,7 +656,7 @@ def _repo_lock_files():
                 if not d.startswith(".") and d not in {"node_modules", "__pycache__"}
             ]
             for name in files:
-                if name.endswith(".lock"):
+                if name.endswith(".lock") and name != "Cargo.lock":
                     found.append((Path(current) / name).relative_to(ROOT).as_posix())
         return sorted(found)
 
@@ -673,7 +676,7 @@ def test_every_install_lock_is_audited_and_triggers_ci():
     missing = sorted(t for t in tracked if t != "requirements-dev.lock" and t not in audited)
     assert not missing, f"locks absent from the audit inventory: {missing}"
     pins = {pin for inv in audit.aux_inventories(ROOT).values() for pin in inv}
-    assert {"lxml==6.0.0", "setuptools==84.0.0"} <= pins, pins
+    assert {"lxml==6.0.0", "setuptools==84.1.0"} <= pins, pins
     # One shared list: hash_locks and the audit derive from the same function.
     assert set(hash_locks.lock_paths(ROOT)) == set(install_lock_paths(ROOT))
     assert set(hash_locks.lock_paths(ROOT)) - {ROOT / "requirements-dev.lock"} == {

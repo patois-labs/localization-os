@@ -6,11 +6,10 @@ Documented in: docs/architecture/deployment.md
 import contextlib
 import os
 import re
+import tomllib
 from functools import lru_cache
 from importlib import metadata
 from pathlib import Path
-
-import tomllib
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 

@@ -9,8 +9,7 @@ licensed under CC BY 4.0 (see the repository root).
 | `architecture/` | L1 architecture docs, one per subsystem, plus the authoring contract and template (start at `architecture/README.md`; the root map is `../ARCHITECTURE.md`). A doc-truth guard checks every reference in them. | Edit in place with the code. |
 | `specs/` | `mcp-server.md`: the design record for the MCP server. | Edit in place. |
 | `research/` | Background notes on CAT tools, vendor interoperability and quality-estimation research that informed the design. | Edit in place. |
-| `guides/` | User-facing guides. | Edit in place. |
-| `notebooks/` | The Databricks training walkthrough notebook. | Edit in place. |
+| `guides/` | Operator guides: moving an install to Postgres (`postgres-migration.md`), building the optional native module (`native-module.md`), a Jev-compatible judge server. | Edit in place. |
 | `releases/` | Release notes per version (`<version>.md`) and `README.md`. | One file per release; fix errors in place. |
 | top-level `*.md` | Operator and user docs: `DEPLOY.md`, `BACKUP.md`, `SECRETS.md`, `CLI.md`, `LOCAL-INSTALL-SECURITY.md`, `governance.md` and others. | Edit in place. |
 

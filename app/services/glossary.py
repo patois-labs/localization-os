@@ -187,6 +187,7 @@ def match_terms(
     provider=None,
     glossary_id: int | None = None,
     disambig: str | None = None,
+    entry_cache: dict | None = None,
 ) -> list[dict]:
     """Return the glossary constraints that apply to this segment, with the
     context-correct sense chosen for any multi-sense terms.
@@ -201,14 +202,29 @@ def match_terms(
 
     Now a thin composition over the shared selection/emission core
     (`_select_matched_entries` + `_emit_for_entry`) that `glossary_concepts.match_concepts`
-    reuses, so the concept selector cannot drift from what this returns (LAW-TERM-1)."""
+    reuses, so the concept selector cannot drift from what this returns (LAW-TERM-1).
+
+    `entry_cache` (S4, ADR 0093): a translate run's own cache dict; the entries and senses
+    are then read once per run instead of once per segment. None: read per call."""
     entries = _select_matched_entries(
-        session, project_id, segment_text, source_locale, target_locale, glossary_id
+        session,
+        project_id,
+        segment_text,
+        source_locale,
+        target_locale,
+        glossary_id,
+        entry_cache=entry_cache,
     )
     out: list[dict] = []
     for e in entries:
         emitted, _chosen, provider = _emit_for_entry(
-            session, e, segment_text, provider, disambig, project_id=project_id
+            session,
+            e,
+            segment_text,
+            provider,
+            disambig,
+            project_id=project_id,
+            entry_cache=entry_cache,
         )
         if emitted is not None:
             out.append(emitted)

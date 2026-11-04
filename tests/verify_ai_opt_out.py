@@ -729,6 +729,44 @@ def test_opt_out_wording():
     print("Opt-out wording ok: project, customer and help explain the export boundary")
 
 
+def test_L_hand_off_ends_with_its_call():
+    """ADR 0093 (S4 gate M1): run_completion's guard hands its fresh answer to the provider
+    complete() it reaches next. A call that ends BEFORE any complete() (here the engine
+    lookup raises) must leave nothing behind: switch AI off, and the very next direct engine
+    call in the same scope is refused, not waved through on the stale hand-off."""
+    import contextlib
+
+    from app.services import providers as _providers
+
+    register_provider("failprov", FailIfCalledProvider())
+    pid = _mk_project(ai=False)
+    spec = ProviderSpec(provider="failprov", retry_max=0, backoff_base=0.0)
+    CALLS.clear()
+    real_get = _providers.get_provider
+
+    def _dead_engine(*_a, **_kw):
+        raise RuntimeError("engine lookup failed before any complete()")
+
+    with ai_optout.scope(project_id=pid):
+        _providers.get_provider = _dead_engine
+        try:
+            # the failure itself is the setup
+            with contextlib.suppress(Exception):
+                run_completion(spec, "Translate: Hello.", task="translate")
+        finally:
+            _providers.get_provider = real_get
+        with Session(engine) as s:
+            p = s.get(Project, pid)
+            p.ai_opt_out = True
+            s.add(p)
+            s.commit()
+        _refused(FailIfCalledProvider().complete, "Hello.")
+        # and through run_completion as well
+        _refused(run_completion, spec, "Translate: Hello.", task="translate")
+    assert CALLS == [], CALLS
+    print("L ok: an unused opt-out hand-off ends with its run_completion call")
+
+
 def main():
     init_db()
     test_opt_out_wording()
@@ -740,6 +778,7 @@ def main():
     test_F_turning_off_restores()
     test_H_gate_probes()
     test_I_gate2_probes()
+    test_L_hand_off_ends_with_its_call()
     print("verify_ai_opt_out OK")
 
 

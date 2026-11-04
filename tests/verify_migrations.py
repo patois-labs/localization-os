@@ -476,6 +476,51 @@ def test_added_columns_registry_covers_revisions() -> None:
     # (user.ui_skin, workflow.created_via) have their shim entries now, so the guard is
     # strict: every add_column a revision performs must be in the registry, no exceptions.
     # If a new gap appears, fix the registry -- do not re-introduce an allowlist here.
+    # A column a LATER revision's upgrade() retires with a literal "ALTER TABLE <t> DROP COLUMN
+    # <c>" is not owed a shim entry (the model no longer has it; the shim must not re-add it).
+    # Only upgrade bodies count: a downgrade that drops a column it added is the normal undo.
+    # First case: d6b3f8a2c4e1 retires the three fuzzy tm_match step overrides (ADR 0102).
+    drop_re = re.compile(r"ALTER TABLE (?P<table>\w+) DROP COLUMN (?P<col>\w+)")
+    rev_re = re.compile(r"^revision[^\n=]*=\s*['\"](?P<rev>\w+)['\"]", re.MULTILINE)
+    down_re = re.compile(r"^down_revision[^\n=]*=\s*(?P<val>[^\n]+)", re.MULTILINE)
+
+    def _code_only(text: str) -> str:
+        """Drop triple-quoted strings (docstrings) and comment lines: prose that merely quotes
+        an ALTER TABLE ... DROP COLUMN must not retire a column."""
+        text = re.sub(r'("""|\'\'\').*?\1', "", text, flags=re.DOTALL)
+        return "\n".join(ln for ln in text.splitlines() if not ln.strip().startswith("#"))
+
+    parents: dict[str, set[str]] = {}  # revision -> its down_revision(s)
+    dropped_by: dict[tuple[str, str], set[str]] = {}  # (table, col) -> revisions that drop it
+    for path in sorted(glob.glob(os.path.join(_ROOT, "alembic", "versions", "*.py"))):
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        rev_m = rev_re.search(src)
+        if rev_m is None:
+            continue
+        rev = rev_m.group("rev")
+        down_m = down_re.search(src)
+        parents[rev] = set(re.findall(r"['\"](\w+)['\"]", down_m.group("val"))) if down_m else set()
+        if "def upgrade" not in src:
+            continue
+        up = _code_only(src.split("def upgrade", 1)[1].split("def downgrade", 1)[0])
+        for m in drop_re.finditer(up):
+            dropped_by.setdefault((m.group("table"), m.group("col")), set()).add(rev)
+
+    def _descends_from(rev: str, ancestor: str) -> bool:
+        """True when `rev` is a descendant of `ancestor`, following down_revision links."""
+        seen: set[str] = set()
+        todo = [rev]
+        while todo:
+            cur = todo.pop()
+            for parent in parents.get(cur, ()):
+                if parent == ancestor:
+                    return True
+                if parent not in seen:
+                    seen.add(parent)
+                    todo.append(parent)
+        return False
+
     scanned = 0
     missing: list[str] = []
     for path in sorted(glob.glob(os.path.join(_ROOT, "alembic", "versions", "*.py"))):
@@ -485,6 +530,8 @@ def test_added_columns_registry_covers_revisions() -> None:
         # (advancedstagedtarget.adjudicated) plus webhookevent.processed_at.
         with open(path, encoding="utf-8") as fh:
             src = fh.read()
+        adder_m = rev_re.search(src)
+        adder = adder_m.group("rev") if adder_m else ""
         found: list[tuple[str, str]] = [
             (m.group("table"), m.group("col")) for m in direct.finditer(src)
         ]
@@ -498,7 +545,9 @@ def test_added_columns_registry_covers_revisions() -> None:
         for tbl, col in found:
             scanned += 1
             known = {name for name, _ddl in _ADDED_COLUMNS.get(tbl, [])}
-            if col not in known:
+            # Exempt only when a revision that DESCENDS from the adding one drops the column.
+            retired = any(_descends_from(d, adder) for d in dropped_by.get((tbl, col), ()))
+            if col not in known and not retired:
                 missing.append(f"{os.path.basename(path)}: {tbl}.{col}")
     assert scanned >= 100, f"the revision scan matched only {scanned} add_column calls (regex rot?)"
     assert not missing, (
@@ -789,6 +838,8 @@ def _index_sql(url: str) -> dict:
 _DOWNGRADE_INDEX_GUARDED = (
     ("f2c8a6d4b1e7", "c2a8e4f6b1d3", "project"),
     ("c2a8e4f6b1d3", "e1b7c3a9d5f2", "targetlocale"),
+    # ADR 0105: the serial_key revision drops its own two partial indexes, then the column.
+    ("e5a1c9d3b7f2", "d6b3f8a2c4e1", "jobqueue"),
 )
 
 

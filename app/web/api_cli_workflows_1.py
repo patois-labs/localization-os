@@ -200,16 +200,13 @@ def api_workflows_show(wid: int, request: Request):
                 # in-process `workflow show --json` row EXACTLY (the P6 row-shape
                 # guard asserts key-set parity).
                 "parallel_group": getattr(st, "parallel_group", None),
-                # Batch 15 T1 (SPEC-tm-match-step-config §8.C): the six tm_match config
+                # Batch 15 T1 (SPEC-tm-match-step-config §8.C): the tm_match config
                 # overrides, mirroring the CLI `workflow show --json` row EXACTLY (the P6
                 # key-set parity guard -- they land on BOTH show rows in this one diff).
                 # None on every non-tm_match step (dead there); a concrete snapshot on a
                 # tm_match step (NULL = inherit the live global).
-                "tm_fill_threshold": getattr(st, "tm_fill_threshold", None),
-                "tm_fuzzy_lock_mode": getattr(st, "tm_fuzzy_lock_mode", None),
                 "tm_lock_ice": getattr(st, "tm_lock_ice", None),
                 "tm_hundreds_enter_lqa": getattr(st, "tm_hundreds_enter_lqa", None),
-                "tm_context_floor": getattr(st, "tm_context_floor", None),
                 "tm_pool_selection": getattr(st, "tm_pool_selection", None),
             }
             for st in steps
@@ -644,11 +641,13 @@ async def api_workflows_add_step(wid: int, request: Request):
                 # like tm_protect; absent/null -> None -> inherit the global guard).
                 over_translation_guard=body.get("over_translation_guard", "auto"),
                 memory_mode=body.get("memory_mode", "auto"),
-                # Batch 15 T1 (SPEC-tm-match-step-config §8.C): the six tm_match config
+                # Batch 15 T1 (SPEC-tm-match-step-config §8.C): the tm_match config
                 # overrides. Raw pass-through (like tm_protect): absent/null -> None ->
                 # inherit, which SEEDS a concrete snapshot on a NEW tm_match step. add_step
                 # coerces + clamps + refuses a value forged onto a non-tm_match step. The
                 # tri-state bools default to None (inherit), NOT a concrete bool.
+                # ADR 0102: tm_fill_threshold / tm_fuzzy_lock_mode / tm_context_floor were
+                # removed; add_step answers a caller that still sends one with a 400.
                 tm_fill_threshold=body.get("tm_fill_threshold"),
                 tm_fuzzy_lock_mode=body.get("tm_fuzzy_lock_mode"),
                 tm_lock_ice=body.get("tm_lock_ice"),
@@ -774,17 +773,19 @@ async def api_workflows_edit_step(wid: int, sid: int, request: Request):
             # unchanged). Raw pass-through like tm_protect; update_step coerces the tristate.
             "over_translation_guard",
             "memory_mode",
-            # Batch 15 T1 (SPEC-tm-match-step-config §8.C): the six tm_match config
+            # Batch 15 T1 (SPEC-tm-match-step-config §8.C): the tm_match config
             # overrides, three-state per field (present-value sets / present-null clears to
             # inherit / absent leaves unchanged). Raw pass-through like tm_protect -- the
             # two tristate bools accept bool/"on"/"off"/"auto"/null and update_step's
             # coercers normalise; a value forged onto a non-tm_match step is refused there.
-            "tm_fill_threshold",
-            "tm_fuzzy_lock_mode",
             "tm_lock_ice",
             "tm_hundreds_enter_lqa",
-            "tm_context_floor",
             "tm_pool_selection",
+            # ADR 0102: removed parameters. Forwarded so update_step answers a caller that
+            # still sends one with the clear 400 (null / blank / a threshold of 100 pass).
+            "tm_fill_threshold",
+            "tm_fuzzy_lock_mode",
+            "tm_context_floor",
             # Terminology T3 (SPEC §9-T3): the two glossary caps, raw pass-through
             # (update_step's _coerce_glossary_cap normalises to >=0). A value forged onto a
             # non-llm_agent step is refused there.

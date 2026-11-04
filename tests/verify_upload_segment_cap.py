@@ -439,8 +439,11 @@ import socket
 
 import uvicorn
 
-BIG = 40000
-config.MAX_DOCUMENT_SEGMENTS = 50000
+# S7b round 2 (ADR 0103): ingest writes segments with core INSERTs and got about 3x faster, so
+# 40,000 lines finished before three /health polls; the file is sized to keep the ingest long.
+BIG = 120000
+config.MAX_DOCUMENT_SEGMENTS = 150000
+config.MAX_DOCUMENT_ROWS = max(config.MAX_DOCUMENT_ROWS, 10 * BIG)
 with socket.socket() as sk:
     sk.bind(("127.0.0.1", 0))
     PORT = sk.getsockname()[1]

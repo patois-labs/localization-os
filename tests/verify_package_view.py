@@ -187,7 +187,8 @@ def test_service_facts_pinned_glossary_qe_loop_and_style_guide():
     # per-document assets carry the honest scope tag (context resolves because a
     # ContextProfile was seeded in scope -- QA-8 #38 gates this fact on availability)
     assert pkg["context"]["scope"] == pv.PER_DOCUMENT
-    assert pkg["tm"]["scope"] == pv.PER_DOCUMENT
+    # ADR 0102: no TM examples fact in the core (it needs a TM examples add-on)
+    assert "tm" not in pkg, pkg.get("tm")
     assert pkg["style_guide"]["scope"] == pv.PER_DOCUMENT, "guide resolves per document"
     assert "pii" in pkg and "adaptive_feedback" in pkg
     # VERIFY: refusal always; DNT + adherence per document; QE gate quotes threshold

@@ -769,8 +769,17 @@
       <p>{{ brand }} is <strong>MT-first</strong>: content is machine-translated by default and only the
       exceptions reach a human. Every translation is layered:</p>
       <ul class="doc-list">
-        <li><strong>Translation memory</strong> - exact (100%) and fuzzy (75&ndash;99%) matches
-          are leveraged before an engine call.</li>
+        <li><strong>Translation memory</strong> - exact matches are leveraged before an engine call: 100%
+          when the source text is identical, 101% when the surrounding segments (or, for software strings,
+          the key) are identical too. There is no fuzzy (75&ndash;99%) matching: a near-identical sentence is
+          translated by the engine.</li>
+        <li><strong>Leverage report</strong> - the project page shows source words per target language in
+          four bands: 101% in-context, repetitions (the same source seen earlier, so only its first occurrence
+          is priced), 100% exact and new. A segment already filled keeps the band it was filled with; an
+          unfilled one is looked up in the memory now, so before translation it is a quote and after it the
+          leverage actually used. <strong>Download CSV</strong> gives the quoting file; the same report is
+          <code>project leverage</code> / <code>job leverage</code> on the CLI and, for the documents and
+          languages one translate job covered, on the job.</li>
         <li><strong>Glossary auto-attach</strong> - the applicable glossary constraints (incl.
           <strong>Do-Not-Translate</strong> terms and context-dependent senses) are injected into the
           prompt for the pair.</li>
@@ -844,14 +853,12 @@
           <code>awaiting_review</code> on the web, the API, the CLI and MCP.</li>
         <li><strong>TM match</strong> (<code>tm_match</code>) - pre-fills and locks TM hits before any
           engine runs, so qualifying segments are settled without an LLM call. Tunable per step in the
-          builder&rsquo;s <em>TM match policy</em> panel: a <strong>fill threshold</strong> (fill matches at
-          or above this score; 100 = exact only), a <strong>fuzzy lock mode</strong> for below-100 fills
-          (<em>none</em> = a suggestion with no lock, <em>soft</em> = enters LQA, <em>policy</em> = the same
-          lock the 100 band gives), <em>lock in-context matches</em> / <em>send 100% matches to LQA</em> /
-          <em>context floor</em> overrides, and a <strong>TM pool selection</strong> (which readable project
-          memories this step reads; blank = all readable). Each override left at <em>inherit</em> follows the
-          matching global setting, and a new step is seeded with a snapshot of the current globals. A fuzzy
-          fill only lands when the segment and the memory carry identical numbers, URLs, and variables.
+          builder&rsquo;s <em>TM match policy</em> panel: <em>lock in-context matches</em> /
+          <em>send 100% matches to LQA</em> overrides, and a <strong>TM pool selection</strong> (which readable
+          project memories this step reads; blank = all readable). Each override left at <em>inherit</em>
+          follows the matching global setting, and a new step is seeded with a snapshot of the current
+          globals. The step fills exact matches only (100%, or 101% in context); there is no fill threshold,
+          fuzzy lock mode or context floor, and a script that still sends one gets an error.
           If a memory entry is edited after it filled a segment, the editor marks that segment
           <em>TM changed since fill</em>; running the step again re-fills unreviewed (machine) segments from
           the edited entry, while approved or edited segments keep their text.
@@ -1177,7 +1184,7 @@ bank,rive,,river,river water shore stream</pre>
       <h2>Translation memory</h2>
       <p>Two parallel stores, both manageable from <a href="/tm">TM</a>:</p>
       <ul class="doc-list">
-        <li><strong>Segment TM</strong> - classic sentence pairs with exact/fuzzy matching.
+        <li><strong>Segment TM</strong> - classic sentence pairs with exact matching (100%, or 101% in context).
           Import/export <strong>TMX</strong>. Approving a segment writes it back.</li>
         <li><strong>Full-text TM</strong> - whole-document bilingual units keyed by content hash;
           re-translating an identical document returns from memory with zero engine calls.</li>
@@ -1238,7 +1245,8 @@ bank,rive,,river,river water shore stream</pre>
           anywhere JSON is, and outbound legs can ship an XLIFF package.</li>
         <li><strong>Money is two lines</strong> - model (AI) spend and vendor post-edit (Human) spend
           are tracked separately (<em>AI + Human = total</em>). The Human figure is an estimate, derived from
-          the leg's TM-leverage band breakdown priced through the rate card, until the vendor reconciles an
+          the leg's leverage band breakdown (101% in-context, repetitions, 100% exact, new) priced through the
+          rate card, until the vendor reconciles an
           actual on its return.</li>
         <li><strong>Off means removed, not corrupted.</strong> With the vendors switch off, every vendor
           surface (the pages, <code>/api/vendors</code>, the inbound webhooks, the CLI) 404s/refuses and no
@@ -2315,7 +2323,8 @@ offline_access</pre>
           <tr><td><span class="method get">GET</span></td><td><code>/api/custom-fields</code></td><td>List custom project field definitions. Query: <code>archived</code> (<code>1</code> to include archived).</td><td>read</td></tr>
           <tr><td><span class="method post">POST</span></td><td><code>/api/custom-fields</code></td><td>Define a field. Body: <code>key</code>, <code>label</code>, <code>type</code> (<code>text</code>, <code>long_text</code>, <code>number</code>, <code>date</code>, <code>select</code>, <code>url</code>, <code>external_link</code>), optional <code>options</code>, <code>key_pattern</code>, <code>link_system</code>, <code>help_text</code>, <code>required</code>, <code>show_in_list</code>, <code>filterable</code>, <code>list_order</code>, <code>customer_id</code>. A manager must set a customer (or be bound to one); an org-wide field (no customer) is admin only (<code>403</code>).</td><td>admin, manager</td></tr>
           <tr><td><span class="method patch">PATCH</span></td><td><code>/api/custom-fields/{fid}</code></td><td>Change a field (the key and type are fixed), or archive/restore it with <code>{"archived": true|false}</code>. A manager may change only a customer field they created; admins change any (<code>403</code> otherwise).</td><td>admin, manager</td></tr>
-          <tr><td><span class="method get">GET</span></td><td><code>/api/projects/{pid}/leverage</code></td><td>7-band word-based TM-leverage breakdown (repetitions/context/exact/fuzzy hi-mid-lo/new). Returns <code>bands[]</code> + <code>total_words</code>/<code>covered_words</code>/<code>billable_words</code>.</td><td>read</td></tr>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/projects/{pid}/leverage</code></td><td>Leverage report (ADR 0102): source words and segments per target language in four bands (<code>context</code> = 101 % in-context, <code>repetitions</code>, <code>exact</code> = 100 %, <code>new</code>). Returns <code>languages[]</code> (each with <code>bands</code>, <code>segments</code>, <code>words</code>) and <code>totals</code>. <code>?format=csv</code> returns a CSV for quoting (columns scope, language, band, segments, words). Key-based content is included; unfilled segments are looked up in the TM now.</td><td>read</td></tr>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/jobs/{jid}/leverage</code></td><td>The same leverage report for the documents and target languages one job covered (a <code>translate_document</code> job: its document and language). A job that covers no documents is 400; a foreign or missing job is 404. <code>?format=csv</code> as above.</td><td>read</td></tr>
           <tr><td><span class="method get">GET</span></td><td><code>/api/projects/{pid}/automation</code></td><td>The project's content source and run schedule (project automation): the connection, whether it runs on its own copy, the UTC schedule, mode, pause state, next and last run, warnings. <code>run_cap_usd</code> is shown to manager and above only.</td><td>read</td></tr>
           <tr><td><span class="method put">PUT</span></td><td><code>/api/projects/{pid}/automation</code></td><td>Change the schedule and run settings; only the fields sent change. Body: <code>enabled</code>, <code>mode</code> (delta/full), <code>times</code> (24-hour UTC, <code>["09:00"]</code>), <code>days</code>, <code>interval_minutes</code> (15 to 10080), <code>auto_pause_after</code>, <code>run_cap_usd</code> (null clears), <code>move_schedule</code>. Enabling never starts a run. Manager and above.</td><td>write, manager</td></tr>
           <tr><td><span class="method post">POST</span></td><td><code>/api/projects/{pid}/source</code></td><td>Set the project's content source. Body: <code>connection_id</code> (an existing connection) or <code>new_connection</code> (<code>kind</code>, <code>name</code>, <code>config</code>, <code>secret</code>), <code>clone</code> (own copy), <code>scope</code> (settings narrowing this project; wider ones are admin only). A connection that already feeds another project gives this one its own copy. Manager and above.</td><td>write, manager</td></tr>
@@ -2474,7 +2483,7 @@ offline_access</pre>
           <tr><td><span class="method post">POST</span></td><td><code>/api/vendors</code></td><td>Create. Body: <code>name</code> (required), <code>description</code>, <code>endpoint_url</code>, <code>config</code>, <code>protocol</code> (transport; default <code>native</code>).</td><td>admin</td></tr>
           <tr><td><span class="method get">GET</span></td><td><code>/api/vendors/{vid}</code></td><td>Show one vendor (connection, rate card, linked customers; secret never echoed).</td><td>admin</td></tr>
           <tr><td><span class="method post">POST</span></td><td><code>/api/vendors/{vid}</code></td><td>Update. Body: <code>name</code>/<code>description</code>/<code>endpoint_url</code>/<code>config</code>/<code>protocol</code>. The secret fields are refused here (use the admin-gated <code>/secret</code> route).</td><td>admin</td></tr>
-          <tr><td><span class="method post">POST</span></td><td><code>/api/vendors/{vid}/rate-card</code></td><td>Set the MSA rate card. Body: <code>currency</code> + <code>bands</code> map (per-band cost/word; unknown dropped, missing &rarr; 0.0).</td><td>admin</td></tr>
+          <tr><td><span class="method post">POST</span></td><td><code>/api/vendors/{vid}/rate-card</code></td><td>Set the MSA rate card. Body: <code>currency</code> + <code>bands</code> map (per-band cost/word over <code>context</code>, <code>repetitions</code>, <code>exact</code>, <code>new</code>; unknown refused, missing &rarr; 0.0; the removed <code>fuzzy_*</code> bands are refused, ADR 0102).</td><td>admin</td></tr>
           <tr><td><span class="method post">POST</span></td><td><code>/api/vendors/{vid}/link-customer</code></td><td>Link a vendor to a customer (the fail-closed scoping seam). Body: <code>customer_id</code>. Idempotent.</td><td>admin</td></tr>
           <tr><td><span class="method post">POST</span></td><td><code>/api/vendors/{vid}/unlink-customer</code></td><td>Unlink a vendor from a customer. Body: <code>customer_id</code>.</td><td>admin</td></tr>
           <tr><td><span class="method post">POST</span></td><td><code>/api/vendors/{vid}/delete</code></td><td>Delete (fails closed with a reference count while a step or dispatch references it; customer links removed as part of the delete; no cascade).</td><td>admin</td></tr>
@@ -2556,7 +2565,7 @@ offline_access</pre>
       <div class="help-scroll" role="region" aria-label="Table: Project translation memory &amp; glossary" data-scroll-region><table class="table api">
         <thead><tr><th scope="col">Method</th><th scope="col">Path</th><th scope="col">Purpose &amp; params</th><th scope="col">Gate</th></tr></thead>
         <tbody>
-          <tr><td><span class="method post">POST</span></td><td><code>/api/projects/{pid}/tm/import</code></td><td>Import TMX (or a Trados Studio <code>.sdltm</code>, same body; the reply adds <code>format</code>, <code>sdltm_languages</code>, <code>sdltm_units</code>, <code>skipped_unreadable</code>) into segment TM. Body: <code>tmx_b64</code>, <code>source</code>, <code>target</code>, optional <code>acknowledge_placeholder_loss</code> (JSON boolean). Units whose target drops or adds a placeholder, or that carry inline tags, are withheld (not saved to TM) and listed in <code>skipped_rows</code> with a <code>code</code>; the rest import. The acknowledgement imports placeholder losses only, never inline-tag breakage. A big file is stored in short transactions (<code>write_chunks</code> in the reply), so other writers are never held up for the whole import: a file of 2,500 rows or fewer is all-or-nothing, a bigger one that fails part way keeps the chunks already stored and answers 500 with <code>partial: true</code>, <code>rows_written</code> and <code>rows_total</code>; import the same file again to finish it without duplicates. Each chunk re-reads its rows when it writes, so the counts match what was written; a TM row someone deletes while the import runs is not restored and is counted in <code>concurrent_deleted</code>.</td><td>write</td></tr>
+          <tr><td><span class="method post">POST</span></td><td><code>/api/projects/{pid}/tm/import</code></td><td>Import TMX (or a Trados Studio <code>.sdltm</code>, same body; the reply adds <code>format</code>, <code>sdltm_languages</code>, <code>sdltm_units</code>, <code>skipped_unreadable</code>) into segment TM. Body: <code>tmx_b64</code>, <code>source</code>, <code>target</code>, optional <code>acknowledge_placeholder_loss</code> (JSON boolean). Units whose target drops or adds a placeholder, or that carry inline tags, are withheld (not saved to TM) and listed in <code>skipped_rows</code> with a <code>code</code>; the rest import. The acknowledgement imports placeholder losses only, never inline-tag breakage. A big file is stored in short transactions (<code>write_chunks</code> in the reply), so other writers are never held up for the whole import: a file of 2,500 rows or fewer is all-or-nothing, a bigger one that fails part way keeps the chunks already stored and answers 500 with <code>partial: true</code>, <code>rows_written</code> and <code>rows_total</code>; import the same file again to finish it without duplicates. Each chunk re-reads its rows when it writes, so the counts match what was written; a TM row someone deletes while the import runs is not restored and is counted in <code>concurrent_deleted</code>. A large TMX goes as <code>multipart/form-data</code> instead (fields <code>file</code>, <code>source</code>, <code>target</code>, optional <code>acknowledge_placeholder_loss=true</code>): it is streamed to disk (up to <code>TMX_IMPORT_MAX_BYTES</code>, default 2 GiB) and imported by a background job, and the reply is <code>202</code> with <code>job_id</code> and <code>status_url</code>; <code>GET /api/jobs/{id}</code> shows the progress and, when it completes, the same counts in <code>result</code>.</td><td>write</td></tr>
           <tr><td><span class="method get">GET</span></td><td><code>/api/projects/{pid}/tm/export</code></td><td>Export TMX (base64). Query: <code>source</code>, <code>target</code> (req). The response <code>source</code>/<code>target</code> are the <b>EFFECTIVE</b> locales queried: the requested pair verbatim when it has rows, else a region/case variant coerced to the project's spelling (the write path's own rule). <code>requested_source</code>/<code>requested_target</code> echo what was asked, <code>locales_normalized</code> flags a coercion, and <code>count</code> is the real TU count. 401 without a token; 400 when source or target is missing or blank. Add <code>raw=true</code> to get the TMX itself streamed as it is read (<code>application/x-tmx+xml</code>, constant memory, no base64): the effective locales and the unit count then ride in the <code>X-TM-Source</code>, <code>X-TM-Target</code> and <code>X-TM-Count</code> headers. Use it for large memories. The default JSON reply is streamed too (same fields and base64 payload; <code>bytes</code> is the last field). A complete file always ends with <code>&lt;/tmx&gt;</code>; if the export fails part way the response is cut off before it, so the file is not valid TMX and must not be used.</td><td>read</td></tr>
           <tr><td><span class="method post">POST</span></td><td><code>/api/projects/{pid}/glossary/import</code></td><td>Import a glossary CSV <em>or</em> TBX. Body: <code>csv_b64</code> (the file's bytes, either format), <code>source</code>, <code>target</code>, optional <code>filename</code> (a <code>.tbx</code> name forces TBX; otherwise the content is sniffed). <code>source</code>/<code>target</code> match the <code>xml:lang</code> pair exactly first, then by base language (a <code>es</code> langSet satisfies <code>es-ES</code>); when several sections match only by base language the generic base tag wins, else the lexicographically-first tag (deterministic, not document order - same rule as the module <code>.glossary.json</code> concept arm). A big file is stored in short transactions (<code>write_chunks</code> in the reply), so other writers are never held up for the whole import: a file that fits one chunk (2,500 entries) is all-or-nothing; a bigger one that fails part way keeps the chunks already stored and answers 500 with <code>partial: true</code>, <code>rows_written</code> and <code>rows_total</code> (entries; the message names the error class only); import the same file again to finish it without duplicates. Each chunk re-reads its entries when it writes: the file's values win over an edit made while the import runs, a field the file leaves blank keeps its current value, and an entry someone deletes meanwhile is not restored and is counted in <code>concurrent_deleted</code>. Also reads MultiTerm XML (<code>&lt;mtf&gt;&lt;conceptGrp&gt;</code>, <code>.xml</code>/<code>.mtf</code>, UTF-16 with a BOM) and the TBX 2002 default dialect MultiTerm exports; a forbidden or deprecated term is never used as the target. The reply carries <code>dialect</code> and a per-entry <code>report</code> (<code>imported</code>, <code>merged</code>, <code>skipped</code> with <code>skip_reasons</code>, <code>entries_detail</code>).</td><td>write</td></tr>
           <tr><td><span class="method post">POST</span></td><td><code>/api/projects/{pid}/glossary</code></td><td>Add one term. Body: <code>source_term</code> (req), <code>target_term</code>, <code>source</code>, <code>target</code>, <code>dnt</code>.</td><td>write</td></tr>
@@ -3181,11 +3190,17 @@ the web twin uses that same dated phrase and redirects with flashed counts). MCP
 read-only ledger status; no disable/purge tool.</p></section>
 <section id="job-queue-recovery"><h2>Background job recovery</h2>
 <p><code>loc-tms db recover-jobs</code> sweeps interrupted jobs. With
-<code>job_queue_backend=db</code>, only ONE app process per database is supported;
+the durable queue (<code>job_queue_backend=db</code>, the default) and the single-process layout
+(<code>LOC_TMS_ROLE=all</code>, the default), only ONE app process per database is supported;
 a second process with fresh in-flight leases is detected at boot and surfaced on
-<code>/admin/health</code>, but not prevented. The command remains a lease-only queue sweep.
-Lease heartbeat renewal is the F04 follow-up; jobs running longer than the one-hour
-lease can still be re-dispatched.</p></section>
+<code>/admin/health</code>, but not prevented. The split layout (one web process plus worker
+processes, <code>LOC_TMS_ROLE=web</code> and <code>python -m app.worker</code>, see
+<code>docs/DEPLOY.md</code>) shares one database by design. The command remains a lease-only queue sweep.
+A workflow run that a restart interrupts resumes from the last step it finished, and jobs the
+older in-memory queue left behind are picked up on the first boot after an upgrade.
+A running job's lease is renewed every 30 seconds by its worker, so a long job is never
+re-dispatched while its server is alive. Short jobs (exports) and long jobs (translation)
+run on separate worker pools.</p></section>
 <section id="memory-capacity"><h2>Host memory settings</h2>
 <p><code>loc-tms config list --group capacity</code> shows effective restart-only
 environment settings. See <code>docs/architecture/configuration.md</code> for install

@@ -1,0 +1,24 @@
+[package]
+name = "locos_native"
+version = "0.1.0"
+edition = "2021"
+description = "Native (Rust) hot paths for Localization OS, byte-identical to the Python reference"
+publish = false
+
+[lib]
+name = "locos_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+# NOT abi3: the fast paths read CPython's PEP 393 string storage directly (no UTF-8 round
+# trip), which the limited API does not expose. One build per CPython minor version.
+pyo3 = { version = "0.29", features = ["extension-module"] }
+# SHA-256 with the BoringSSL assembly (about 1.6x the pure-Rust sha2 crate on CPUs without
+# SHA-NI, e.g. the i5-10400F dev box). Builds with the platform C compiler.
+ring = "0.17"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "unwind"

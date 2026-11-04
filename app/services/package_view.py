@@ -166,9 +166,18 @@ def _llm_agent_view(
             _fact("glossary", "Glossary", "auto-attach (project + content type)", PER_DOCUMENT)
         )
     tm_window = _g(step, "tm_examples_window", 3)
-    if _g(step, "tm_examples", True) and (tm_window or 0) > 0:
+    # ADR 0102: the core has no example retriever, so the fact is shown only when an add-on
+    # supplies TM examples (otherwise the step would advertise examples it never gets).
+    from app.services import tm as _tm
+
+    if _g(step, "tm_examples", False) and (tm_window or 0) > 0 and _tm.examples_available():
         pkg.append(
-            _fact("tm", "TM few-shot", f"top {tm_window} fuzzy matches per segment", PER_DOCUMENT)
+            _fact(
+                "tm",
+                "TM few-shot",
+                f"up to {tm_window} TM examples per segment",
+                PER_DOCUMENT,
+            )
         )
     if has_context:
         pkg.append(_fact("context", "Context", "resolved", PER_DOCUMENT))
@@ -328,8 +337,6 @@ def _tm_match_view(step) -> dict:
         v = _g(step, name)
         return "inherit" if v is None else v
 
-    _fill = _eff("tm_fill_threshold")
-    _fuzzy = _eff("tm_fuzzy_lock_mode")
     _pools = _g(step, "tm_pool_selection")
     # M4: NULL = all readable (inherit); a NON-NULL empty list = "nothing selected" (matches
     # nothing at run time, distinct from NULL, LAW-TM-9); a populated list lists the ids.
@@ -339,22 +346,18 @@ def _tm_match_view(step) -> dict:
         _pools_txt = "nothing selected"
     else:
         _pools_txt = ", ".join(str(p) for p in _pools)
-    _fill_txt = f"{_fill}%" if _fill != "inherit" else "the inherited threshold"
     _ice = _eff("tm_lock_ice")
     _hundreds = _eff("tm_hundreds_enter_lqa")
-    _floor = _eff("tm_context_floor")
     pkg = [
         _fact(
             "tm_match",
             "TM matching",
-            f"no model call - fills TM matches at or above {_fill_txt} and locks them",
+            "no model call - fills exact TM matches (100%, or 101% in context) and locks them",
         ),
         _fact(
             "tm_policy",
             "Lock policy",
-            f"fill threshold {_fill}, fuzzy lock mode {_fuzzy}, lock_ice {_ice}, "
-            f"hundreds_enter_lqa {_hundreds}, context_floor {_floor} "
-            "(each 'inherit' = follow the global)",
+            f"lock_ice {_ice}, hundreds_enter_lqa {_hundreds} (each 'inherit' = follow the global)",
             PER_DOCUMENT,
         ),
         _fact("tm_pools", "TM pools", f"reads: {_pools_txt}"),

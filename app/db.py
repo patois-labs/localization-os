@@ -9,6 +9,7 @@ Documented in: docs/architecture/data-and-migrations.md
 import contextvars
 import logging
 import random
+import re
 import threading as _threading
 import time
 
@@ -334,6 +335,112 @@ engine = create_engine(
 )
 
 
+# First keyword of a statement whose rollback cannot leave a prepared statement stale: reads,
+# DML and session settings. Anything else (DDL, ROLLBACK TO SAVEPOINT, DISCARD, an unknown
+# word, a second statement after a ";") marks the connection's cache unsafe until a rollback
+# really clears it.
+_PLAN_SAFE_WORDS = frozenset(
+    b"SELECT INSERT UPDATE DELETE MERGE WITH VALUES TABLE SHOW SET RESET LOCK SAVEPOINT "
+    b"RELEASE".split()
+)
+_FIRST_WORD = re.compile(rb"\s*(?:(?:--[^\n]*(?:\n|$)|/\*.*?\*/)\s*)*([A-Za-z]+)", re.S)
+
+
+def _plan_safe(sql: bytes) -> bool:
+    m = _FIRST_WORD.match(sql)
+    if not m or m.group(1).upper() not in _PLAN_SAFE_WORDS:
+        return False
+    # The simple protocol runs "SELECT 1; DROP TABLE t" as one string: only a lone statement
+    # (a trailing ";" allowed) is judged by its first word. A ";" inside a literal errs unsafe.
+    return b";" not in sql.rstrip().rstrip(b";")
+
+
+def _plan_reuse_connection_class():
+    """A psycopg Connection whose prepared statements survive a clean ROLLBACK (ADR 0109).
+
+    psycopg 3 prepares a statement on its 5th execution on a connection, but `rollback()`
+    throws away both its prepared statements and the execution counts. Every pooled
+    checkout here ends in a rollback (the Session's, then the pool's reset), so nothing
+    was ever prepared and Postgres planned every statement of every request.
+
+    The server keeps a prepared statement across ROLLBACK (PREPARE is not transactional),
+    so the clear is only needed when the rolled-back transaction could have left one
+    stale or missing: it failed (a Parse in a failed transaction or an aborted pipeline is
+    never created), it ran DDL that the rollback undoes, or it rolled back to a savepoint.
+    This keeps the cache only for a rollback of a transaction in good standing
+    (INTRANS, no pipeline) that ran nothing but `_PLAN_SAFE_WORDS` statements since the
+    last cleared rollback; every other rollback clears exactly as stock psycopg does. The
+    ROLLBACK itself, and so every transaction's outcome, is unchanged.
+
+    The unsafe mark is dropped only after a rollback that really cleared, never in
+    `clear()`: psycopg also clears mid-transaction (after an ALTER, DROP or ROLLBACK TO
+    SAVEPOINT), and statements prepared after that point would be stale once the rollback
+    undoes the change (gate r1 MEDIUM). A commit keeps the mark (one extra clear later).
+
+    Rests on psycopg internals (`_prepared`, `PrepareManager.get/clear`), pinned by
+    verify_pg_plan_reuse so a psycopg upgrade that moves them fails a suite."""
+    import psycopg
+    from psycopg._preparing import PrepareManager
+    from psycopg.pq import TransactionStatus
+
+    class _PlanKeepingPrepareManager(PrepareManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.keep_on_clear = False  # set only for the duration of a clean rollback()
+            self.unsafe = False  # a non-plain statement ran since the last cleared rollback
+
+        def get(self, query, prepare=None):
+            if not self.unsafe and not _plan_safe(query.query):
+                self.unsafe = True
+            return super().get(query, prepare)
+
+        def clear(self) -> bool:
+            if self.keep_on_clear:
+                return False
+            return super().clear()
+
+    class _PlanKeepingConnection(psycopg.Connection):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self._prepared = _PlanKeepingPrepareManager()
+
+        def rollback(self) -> None:
+            mgr = self._prepared
+            mgr.keep_on_clear = (
+                self.info.transaction_status == TransactionStatus.INTRANS
+                and self._pipeline is None
+                and not mgr.unsafe
+            )
+            cleared = (
+                not mgr.keep_on_clear
+                and self._pipeline is None  # a pipeline sync can turn the status IDLE (gate r2)
+                and self.info.transaction_status != TransactionStatus.IDLE
+            )
+            try:
+                super().rollback()
+            finally:
+                mgr.keep_on_clear = False
+            if cleared:  # psycopg ran its clear: nothing kept can predate the rollback
+                mgr.unsafe = False
+
+    return _PlanKeepingConnection
+
+
+def _install_plan_reuse(eng) -> None:
+    """Open the pooled engine's psycopg connections with `_plan_reuse_connection_class`.
+    Postgres through psycopg 3 only; SQLite and other drivers are untouched."""
+    if eng.dialect.name != "postgresql" or eng.dialect.driver != "psycopg":
+        return
+    conn_cls = _plan_reuse_connection_class()
+
+    @event.listens_for(eng, "do_connect")
+    def _connect_plan_keeping(_dialect, _record, cargs, cparams):
+        return conn_cls.connect(*cargs, **cparams)
+
+
+_install_plan_reuse(engine)
+
+
 # SQLite writer-lock wait (QA-1 defense-in-depth). A few seconds: long enough to
 # ride out any brief legitimate contention (one connection committing while another
 # waits to write), short enough that a genuinely stuck writer still surfaces as an
@@ -413,7 +520,18 @@ _ADDED_COLUMNS = {
     ],
     "workflowbatch": [("reopened_members", "JSON"), ("dispatcher_owner", "JSON")],
     # #364: exact booked USD per Job, nullable, no default (NULL = pre-tracking / unknown).
-    "job": [("cost_usd", "FLOAT")],
+    "job": [
+        ("cost_usd", "FLOAT"),
+        # S1 engine reliability: transient-retry count (alembic b4d8e2f6a9c1).
+        ("retries", "INTEGER"),
+    ],
+    # S1 engine reliability: transient-retry backoff on the durable queue (b4d8e2f6a9c1).
+    # ADR 0105: serial_key serializes one project's TM imports (alembic e5a1c9d3b7f2).
+    "jobqueue": [
+        ("not_before", "DATETIME"),
+        ("last_error", "VARCHAR"),
+        ("serial_key", "VARCHAR"),
+    ],
     # Project automation round 2: claim hand-over bookkeeping.
     "projectbindingclaim": [("wanted_by", "INTEGER")],
     "projectautomation": [("blocked_sig", "VARCHAR DEFAULT ''")],
@@ -463,6 +581,8 @@ _ADDED_COLUMNS = {
         # Connected projects (SPEC-connected-projects 4; alembic f2c8a6d4b1e7): where the
         # content comes from, 'upload' (every existing row) or 'connected'.
         ("intake", "VARCHAR NOT NULL DEFAULT 'upload'"),
+        # Semantic TM examples switch (alembic a7e3c9d1f4b2): NULL = inherit.
+        ("semantic_examples", "VARCHAR"),
         # Archive/retire (residual sweep: archive verbs; Customer.archived_at
         # precedent). NULL = ACTIVE. A non-NULL timestamp retires the project
         # from default listings/pickers + blocks new runs; existing rows
@@ -589,6 +709,10 @@ _ADDED_COLUMNS = {
         # "translate all" created up front in RunStatus.QUEUED. Mirrors the model +
         # alembic revision e2b6c9f4a713 (nullability-parity CI guard).
         ("queue_group", "VARCHAR"),
+        # Restart resume (S1 engine reliability, ADR 0090; alembic b4d8e2f6a9c1).
+        ("owner", "VARCHAR"),
+        ("heartbeat_at", "DATETIME"),
+        ("resume_count", "INTEGER"),
     ],
     # Conditional-workflow durable outcome signal (SPEC-conditional-workflows §3.2,
     # Phase 1): score/gate NULL where a step produced no outcome (populated by the
@@ -628,6 +752,10 @@ _ADDED_COLUMNS = {
         # #356 phase 2b: which scope's head won (workflow | org | builtin). Mirrors the
         # model + alembic revision c3d5e7f9a1b2.
         ("system_prompt_scope", "VARCHAR"),
+        # Step-visit checkpoint + idempotency key (S1 engine reliability, ADR 0090;
+        # alembic b4d8e2f6a9c1). NULL on every row written before it.
+        ("idempotency_key", "VARCHAR"),
+        ("checkpoint", "JSON"),
     ],
     "workflowstep": [
         ("redact_pii", "BOOLEAN NOT NULL DEFAULT 0"),
@@ -753,17 +881,16 @@ _ADDED_COLUMNS = {
         # model + the alembic revision (nullability-parity CI guard).
         ("lqa_threshold", "INTEGER"),
         # tm_match step per-step config (Batch 15 T1, SPEC-tm-match-step-config §5.1).
-        # SIX NULLABLE overrides, NO default: NULL on every legacy row = inherit the
+        # NULLABLE overrides, NO default: NULL on every legacy row = inherit the
         # live global = today's exact tm_match behavior byte-for-byte (LAW-TM-3). The
         # tm_protect nullable-tristate shape, NOT the NOT-NULL use_image_context shape.
         # A NEW tm_match step is seeded with concrete global snapshots at creation
         # (add_step); LIVE only on tm_match, dead elsewhere. Mirrors the model + the
         # alembic revision c5e8a1f9d3b7 (nullability-parity CI guard).
-        ("tm_fill_threshold", "INTEGER"),
-        ("tm_fuzzy_lock_mode", "VARCHAR"),
+        # ADR 0102: tm_fill_threshold, tm_fuzzy_lock_mode and tm_context_floor are no
+        # longer ensured here (alembic revision d6b3f8a2c4e1 drops the columns).
         ("tm_lock_ice", "BOOLEAN"),
         ("tm_hundreds_enter_lqa", "BOOLEAN"),
-        ("tm_context_floor", "INTEGER"),
         ("tm_pool_selection", "JSON"),
         # run-190 Item D / M5 (gate round 1): per-step opt-out of the over-translation
         # (page-dump) guard on an llm_agent step. NULLABLE tri-state (the tm_* override
@@ -862,6 +989,8 @@ _ADDED_COLUMNS = {
         # TM-unit metadata (SPEC-context-metadata phase 1): column ships
         # now, written in later phases. NULL today = byte-identical.
         ("meta", "JSON"),
+        # ADR 0102: in-context (101 %) key of the last write; NULL = 100 % only.
+        ("context_key", "VARCHAR"),
     ],
     "fulltexttm": [("content_type_id", "INTEGER"), ("activity_at", "DATETIME")],
     "segmentembedding": [("content_type_id", "INTEGER")],
@@ -917,6 +1046,8 @@ _ADDED_COLUMNS = {
     # byte-identical to the pre-P4 bare-name behaviour.
     "customer": [
         ("org_id", "INTEGER"),
+        # Semantic TM examples switch (alembic a7e3c9d1f4b2): NULL = install default.
+        ("semantic_examples", "VARCHAR"),
         ("settings", "JSON"),
         ("active_pairs", "JSON"),
         ("default_provider", "VARCHAR"),
@@ -1444,6 +1575,8 @@ def _ensure_columns() -> None:
 # TM lookup filters on (project, locale pair) before hashing/fuzzy-scoring;
 # every segment fetch filters on (document, locale) and sorts by order_index.
 _INDEXES = [
+    # S7b round 2 (ADR 0103): per-project language reads; mirrors alembic d7b3f1a9c2e4.
+    ("ix_targetlocale_project_id", "targetlocale", "(project_id)"),
     ("ix_workflowrun_status_id", "workflowrun", "(status, id)"),
     ("ix_workflowrun_batch_id_status", "workflowrun", "(batch_id, status)"),
     ("ix_segmenttm_lookup", "segmenttm", "(project_id, source_locale, target_locale, source_hash)"),
@@ -1490,6 +1623,14 @@ _INDEXES = [
     # already present) lands the index too, matching the alembic revision b9e3d7c1f5a2 and the
     # model's index=True -- three-way agreement (the ix_segment_doc_locale precedent).
     ("ix_advancedstagedtarget_segment_id", "advancedstagedtarget", "(segment_id)"),
+    # ADR 0105: the claim's per-key look-up (is a row of this serial_key running, or pending and
+    # older?). Partial, so the table's many done rows and NULL keys are not indexed; mirrors alembic
+    # e5a1c9d3b7f2.
+    (
+        "ix_jobqueue_serial_active",
+        "jobqueue",
+        "(serial_key) WHERE serial_key IS NOT NULL AND state IN ('pending', 'running')",
+    ),
 ]
 
 # UNIQUE indexes carried on the SQLite init_db path (the Alembic baseline builds
@@ -1498,6 +1639,9 @@ _INDEXES = [
 # (SegmentTM row, model) so a spammed backfill can't write duplicates — the app's
 # upsert_embedding is delete-then-insert + IntegrityError-tolerant on top.
 _UNIQUE_INDEXES = [
+    # S1 engine reliability (ADR 0090): one completed step visit per idempotency key, so a
+    # superseded run thread and its resumed successor can never both land the same visit.
+    ("ux_steprun_idempotency_key", "steprun", "(idempotency_key)"),
     ("ux_segmentembedding_segtm_model", "segmentembedding", "(segment_tm_id, model)"),
     # Connector webhook idempotency (CONNECTOR_FRAMEWORK_DESIGN §3.4): one accepted
     # event per (connection, event id) so a provider RETRY is deduped. Unique so a
@@ -1578,6 +1722,10 @@ _UNIQUE_INDEXES = [
     # below (skip-with-warning, like segmenttm): the shim path cannot run the migration's
     # normalize+tombstone dedupe, and init_db must not crash on a legacy DB.
     ("ux_user_email_lower", "user", "(lower(email))"),
+    # ADR 0105: at most ONE running queue row per serial_key (a project's TM imports run one at a
+    # time). Partial: only running rows, and NULL keys (every other kind) never collide. Created
+    # in _ensure_indexes after _ensure_columns added the column. Matches alembic e5a1c9d3b7f2.
+    ("ux_jobqueue_serial_running", "jobqueue", "(serial_key) WHERE state = 'running'"),
 ]
 
 
@@ -1687,6 +1835,12 @@ def _ensure_indexes() -> None:
                 "segment",
                 "usergroup",
                 "usergroupmember",
+                # S1 (ADR 0090): every legacy steprun row has a NULL key, so this can never
+                # be violated by existing data (SQL keeps NULLs distinct).
+                "steprun",
+                # ADR 0105: every row's serial_key is NULL on the shim path (the column is new),
+                # so the partial unique index cannot be violated by existing data.
+                "jobqueue",
             ):
                 conn.execute(
                     text(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {_sql_table(table_)} {cols}")
@@ -2387,6 +2541,24 @@ def session_has_uncommitted_work(session) -> bool:
     return dbapi_in_transaction(session)
 
 
+_PREBUILT: dict = {}
+
+
+def prebuilt(key: str, build):
+    """A statement built ONCE per process and reused, its per-call values passed as
+    `bindparam()` parameters at execute time (S7b). Building a select per call AND
+    generating its cache key costs about as much CPU as running it: on the worker's hot reads
+    (several per translate job) a reused statement halves the SQLAlchemy cost. `build` must
+    return the same statement every time (no per-call values baked in); statements are
+    immutable, so one object is safe to execute from every thread. A bound None compiles to
+    `= NULL`, never `IS NULL`: a value that may be None must be part of the key (a separate
+    statement for the NULL shape), as style_guides and context_pkg do."""
+    stmt = _PREBUILT.get(key)
+    if stmt is None:
+        stmt = _PREBUILT.setdefault(key, build())
+    return stmt
+
+
 def commit_if_staged(session) -> bool:
     """Release the writer lock before a provider fan-out — but ONLY if it is held.
 
@@ -2489,6 +2661,113 @@ def is_locked_error(exc: BaseException) -> bool:
         return False
     msg = str(getattr(exc, "orig", None) or exc).lower()
     return "database is locked" in msg or "database table is locked" in msg
+
+
+# --- Postgres conflict retry and ordered row locks (engine redesign S3, target T4) -----------
+# Postgres reports two TRANSIENT conflicts that the right answer to is "run the whole
+# transaction again": 40P01 (deadlock_detected: the server killed one of two transactions
+# waiting on each other's row locks) and 40001 (serialization_failure). Both abort the
+# transaction, so retrying the failed statement alone is impossible; the unit of retry is the
+# whole transaction, which is why retry_conflicts takes a function that opens, writes and
+# commits its own transaction.
+#: SQLSTATEs that mean "this transaction lost a conflict; re-running it may succeed".
+PG_RETRYABLE_SQLSTATES = frozenset({"40P01", "40001"})
+#: Total attempts of retry_conflicts (1 initial + 2 retries), and its jitter window in seconds.
+CONFLICT_RETRY_TRIES = 3
+CONFLICT_RETRY_JITTER_S = (0.02, 0.08)
+
+
+def _pg_sqlstate(exc: BaseException) -> str | None:
+    """The SQLSTATE of a Postgres driver error, unwrapped from SQLAlchemy's DBAPIError
+    (psycopg 3 exposes `.sqlstate`, psycopg2 `.pgcode`); None for anything else."""
+    from sqlalchemy.exc import DBAPIError
+
+    orig = exc.orig if isinstance(exc, DBAPIError) else exc
+    code = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    return code if isinstance(code, str) else None
+
+
+def is_retryable_conflict(exc: BaseException, *, sqlite_locks: bool = True) -> bool:
+    """True when `exc` is a transient write conflict that re-running the WHOLE transaction can
+    clear: Postgres 40P01 deadlock or 40001 serialization failure (as SQLAlchemy wraps them),
+    and, unless `sqlite_locks=False`, SQLite's "database is locked" (is_locked_error).
+
+    False for everything else, an IntegrityError included: a unique-key clash is a real
+    answer, not a lost race to retry. `sqlite_locks=False` is for call sites that must keep
+    SQLite behavior byte-identical (their SQLite lock handling already lives elsewhere, e.g.
+    the busy timeout plus commit_with_retry)."""
+    if _pg_sqlstate(exc) in PG_RETRYABLE_SQLSTATES:
+        return True
+    return sqlite_locks and is_locked_error(exc)
+
+
+def retry_conflicts(
+    fn, action: str, tries: int = CONFLICT_RETRY_TRIES, *, sqlite_locks: bool = True
+):
+    """Run `fn()` and return its result, re-running it after a retryable conflict
+    (is_retryable_conflict) with a 20-80 ms jittered pause, at most `tries` times in all;
+    the last conflict is re-raised unchanged. Any other exception propagates at once.
+
+    `fn` must be ONE whole transaction that is safe to run again from the top: it opens its
+    session (or savepoint), does its reads and writes, and commits. A conflict has already
+    rolled the transaction back on the server, so nothing of a failed attempt survives; `fn`
+    must not have side effects outside the database (provider calls, events, file writes)
+    before its commit. `action` names the work in the retry log line."""
+    tries = max(1, int(tries))
+    for attempt in range(1, tries + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            if attempt >= tries or not is_retryable_conflict(exc, sqlite_locks=sqlite_locks):
+                raise
+            log.warning(
+                "write conflict on %s (%s), retrying the transaction (attempt %d of %d)",
+                action,
+                _pg_sqlstate(exc) or "database is locked",
+                attempt + 1,
+                tries,
+            )
+            conflict_retry_pause()
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def conflict_retry_pause() -> None:
+    """Sleep the 20-80 ms jitter between two attempts of a conflicted transaction (for call
+    sites that run their own retry loop, e.g. a savepoint-scoped chunk)."""
+    time.sleep(random.uniform(*CONFLICT_RETRY_JITTER_S))  # noqa: S311 -- retry jitter, not a secret
+
+
+#: Ids per SELECT ... FOR UPDATE; chunks are taken in ascending order, so the order holds.
+LOCK_ROWS_CHUNK = 1000
+
+
+def lock_rows_in_order(session, model_or_table, ids) -> list:
+    """Take row locks on `ids` of a table in ascending id order, inside the session's current
+    transaction: SELECT id ... WHERE id IN (...) ORDER BY id FOR UPDATE on Postgres. Two
+    transactions that both call this before writing the same rows queue behind each other
+    instead of deadlocking, whatever order they then write in.
+
+    Returns the ids that exist and are now locked (ascending). A safe no-op on SQLite (and
+    any other backend), which returns [] and runs no SQL: SQLite has one writer lock for the
+    whole file, so there is no row-lock order to get wrong. `model_or_table` is a SQLModel
+    class or a Core Table with an integer `id` primary key."""
+    if not ids:
+        return []
+    bind = session.get_bind()
+    if bind.dialect.name != "postgresql":
+        return []
+    from sqlalchemy import select
+
+    table = getattr(model_or_table, "__table__", model_or_table)
+    ordered = sorted({int(i) for i in ids})
+    locked: list = []
+    for i in range(0, len(ordered), LOCK_ROWS_CHUNK):
+        chunk = ordered[i : i + LOCK_ROWS_CHUNK]
+        stmt = (
+            select(table.c.id).where(table.c.id.in_(chunk)).order_by(table.c.id).with_for_update()
+        )
+        locked.extend(session.execute(stmt).scalars().all())
+    return locked
 
 
 #: Seconds a caller is told to wait after the CONNECTION POOL (not the writer lock) was

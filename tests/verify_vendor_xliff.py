@@ -96,7 +96,12 @@ def _sample_contract():
             "target": "El gato.",
             "tm_match_pct": 100,
         },  # tm_exact/locked
-        {"id": 3, "source": "You have 3.", "target": "Tienes 3.", "tm_match_pct": 88},  # tm_fuzzy
+        {
+            "id": 3,
+            "source": "You have 3.",
+            "target": "Tienes 3.",
+            "tm_match_pct": 88,
+        },  # old stamp -> mt (ADR 0102)
         {"id": 4, "source": "Brand new.", "target": ""},  # new
     ]
     return vendor_dispatch.build_contract(
@@ -146,21 +151,21 @@ def test_writer_shape_and_mappings():
     assert _tgt(tus["2"]).get("state") == "translated"
     assert _tgt(tus["2"]).get("state-qualifier") == "exact-match"
     assert tus["2"].get("translate") == "no"
-    # tm_fuzzy -> needs-review-translation / fuzzy-match + <alt-trans match-quality>
-    assert _tgt(tus["3"]).get("state-qualifier") == "fuzzy-match"
-    alt = tus["3"].find(f"{{{XLIFF_NS}}}alt-trans")
-    assert alt is not None and alt.get("match-quality") == "88%", etree.tostring(tus["3"])
+    # ADR 0102: no fuzzy tier any more. An old 88 stamp with a target is "mt": mt-suggestion,
+    # no fuzzy-match qualifier and no <alt-trans match-quality> is written.
+    assert _tgt(tus["3"]).get("state-qualifier") == "mt-suggestion"
+    assert tus["3"].find(f"{{{XLIFF_NS}}}alt-trans") is None, etree.tostring(tus["3"])
     # new -> needs-translation, no state-qualifier
     assert _tgt(tus["4"]).get("state") == "needs-translation"
     assert _tgt(tus["4"]).get("state-qualifier") is None
 
-    # SAFETY: only the three research-verified core qualifiers are ever emitted.
+    # SAFETY: only the research-verified core qualifiers are ever emitted (no fuzzy-match).
     quals = {t.get("state-qualifier") for t in root.iter(f"{{{XLIFF_NS}}}target")}
     quals.discard(None)
-    assert quals <= {"exact-match", "fuzzy-match", "mt-suggestion"}, quals
+    assert quals <= {"exact-match", "mt-suggestion"}, quals
     print(
         "  [A] valid 1.2; state/qualifier per provenance; translate=no lock; "
-        "fuzzy match-quality; only verified-core qualifiers: OK"
+        "no fuzzy-match / alt-trans written; only verified-core qualifiers: OK"
     )
 
 

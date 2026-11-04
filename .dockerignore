@@ -8,8 +8,11 @@
 #   * the application package, its migrations and runtime assets (fonts for images);
 #   * the entrypoint, pyproject.toml (release fallback version) and the dependency locks;
 #   * scripts/saml_smoke.py (the SAML build smoke) and scripts/convert_db_encryption.py
-#     (imported by `loc-tms db encrypt|decrypt`);
-#   * the license files (LICENSE, NOTICE, THIRD_PARTY_NOTICES.md).
+#     (imported by `loc-tms db encrypt|decrypt`) and scripts/sqlite_to_postgres.py (imported by
+#     `loc-tms db copy-to-postgres`);
+#   * the license files (LICENSE, NOTICE, THIRD_PARTY_NOTICES.md);
+#   * the locos_native crate sources (Cargo.toml, Cargo.lock, src/) for the native build stage
+#     (ADR 0091); its target/ build folder stays out.
 # Anything else (tests, docs, deploy, tools, data, .env, .claude, ...) stays
 # out. tests/verify_docker_image.py fails when a runtime reference is not allow-listed
 # here or when a secret-bearing or gitignored path could slip back in.
@@ -31,6 +34,10 @@
 !requirements-sqlcipher.lock
 !scripts/saml_smoke.py
 !scripts/convert_db_encryption.py
+!scripts/sqlite_to_postgres.py
+!native/locos_native/Cargo.toml
+!native/locos_native/Cargo.lock
+!native/locos_native/src/
 !LICENSE
 !NOTICE
 !THIRD_PARTY_NOTICES.md

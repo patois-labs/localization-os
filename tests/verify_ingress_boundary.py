@@ -1067,6 +1067,9 @@ def test_r3_invalid_env():
             "egress_config",
             "ledger_envelopes",
             "saml_proxy",
+            # S2 (ADR 0092): the durable job queue is the default, so its word ("db", or the
+            # foreign-instance latch) is now present whenever the queue is armed.
+            "job_queue",
         }, body["detail"]
         assert {"admission_daemon", "ingress_config"} <= set(body["detail"]), body["detail"]
         settings.set_many({"saml_enabled": "1", "trusted_proxy_ips": "0.0.0.0/0"})

@@ -348,7 +348,7 @@ def _validate_step_draft(
             warnings.append(f"Step {idx + 1} ({label}): LQA pass threshold dropped -- {exc}")
 
     tmx = rs.get("tm_examples")
-    step["tm_examples"] = True if tmx is None else _as_bool(tmx)
+    step["tm_examples"] = False if tmx is None else _as_bool(tmx)
     step["tm_examples_window"] = context_pkg.clamp_examples_window(
         rs.get("tm_examples_window") if rs.get("tm_examples_window") is not None else 3
     )

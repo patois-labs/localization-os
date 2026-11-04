@@ -146,7 +146,7 @@
       "step_workflow_desc": "Automate translation, review and QA as a reusable graph.",
       "step_workflow_cta": "Build a workflow",
       "step_provider_title": "Connect a provider",
-      "step_provider_desc": "Add an API key to go live. Until then translation is blocked; choose Mock in Setup AI for an offline demo.",
+      "step_provider_desc": "Add an API key to translate with a real engine. Until then the offline Mock engine translates, so you can try every step.",
       "step_provider_cta": "Set up AI",
       "showme": "Show me",
       "spot_cta_hint": "This opens the real screen where you'll do it - ready?",
@@ -249,7 +249,7 @@
     },
     "jobs": {
       "title": "Execution history",
-      "intro": "A chronological log of every background job and workflow run - like an audit log, just for executions. Newest first. Interrupted jobs are marked failed on restart.",
+      "intro": "A chronological log of every background job and workflow run - like an audit log, just for executions. Newest first. Jobs and runs a restart interrupted are picked up again and resume.",
       "col_type": "Type",
       "col_id": "#",
       "col_kind": "Kind / workflow",

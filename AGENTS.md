@@ -29,7 +29,7 @@ python run.py                        # http://127.0.0.1:8000
 ```
 
 The default engine in `.env.example` is `mock` (free, offline, deterministic), so the app works with no API
-key. Switch `DEFAULT_PROVIDER` once you have added a real key. Python 3.10 or newer; CI and the container use
+key. Switch `DEFAULT_PROVIDER` once you have added a real key. Python 3.11 or newer; CI and the container use
 3.13. By hand: `pip install --require-hashes -r requirements.lock -r requirements-dev.lock` (dev), or
 `pip install -r requirements.txt` for a runtime-only install. Restart `run.py` after multi-file edits.
 

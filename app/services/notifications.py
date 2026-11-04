@@ -97,13 +97,16 @@ def _describe_job(s: Session, job: Job) -> tuple[str, str]:
     return doc_label, engine_used
 
 
-def on_job_finished(job: Job) -> bool:
+def on_job_finished(job: Job, reread: bool = True) -> bool:
     """Email the submitter that their translation job finished. Returns True if a
     message was actually sent (SMTP configured + delivered), else False. Opens its
     OWN DB session — it runs on the worker thread, outside any request scope.
 
     Safe to call for any job: it self-filters to translate_document jobs with an
-    email `created_by`, and no-ops (returns False) when disabled / unconfigured."""
+    email `created_by`, and no-ops (returns False) when disabled / unconfigured.
+
+    `reread=False` (S4 follow-up): the caller hands a row it has just read and that no
+    longer changes (jobs._after_execute: the job is terminal), so it is not read again."""
     if not enabled():
         return False
     if job.kind != "translate_document":
@@ -118,7 +121,7 @@ def on_job_finished(job: Job) -> bool:
     with Session(engine) as s:
         # Re-read the job so payload/result are fresh (the caller may pass a
         # detached copy), and resolve the document + engine for the body.
-        fresh = s.get(Job, job.id) or job
+        fresh = (s.get(Job, job.id) or job) if reread else job
         locale = (fresh.payload or {}).get("locale") or "the requested language"
         doc_label, engine_used = _describe_job(s, fresh)
 

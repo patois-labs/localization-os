@@ -26,12 +26,12 @@ import os
 import re
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 
 def utcnow() -> datetime:
     """Naive UTC now, matching how the app stores timestamps."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

@@ -29,6 +29,80 @@ inbound submission (those are a separate routing surface).
 
 ## 2. Invariants
 
+- **An interrupted run resumes; a completed step visit never runs twice.** Every step-visit
+  commit also stamps its `StepRun` with an `idempotency_key` (`<run>:<cursor>:<seq>`, UNIQUE)
+  and a `checkpoint` (next cursor, working texts, the run-local pause context) through
+  `app/services/run_resume.py::VisitWriter`, in the same transaction. Boot recovery
+  (`app/services/orchestrator_part6.py::recover_interrupted_runs` and
+  `app/services/batch_runs_hub.py::recover_interrupted_batches`) asks
+  `app/services/run_resume.py::plan`: a run whose owner is still alive is left alone, a run
+  whose newest `StepRun` carries a checkpoint for its cursor is re-queued QUEUED with
+  `_resume_kind=restart` (`app/services/run_resume.py::requeue`) and the admission scheduler
+  resumes it from that step; anything else fails as before. PAUSED and QUEUED runs are never
+  touched; rows with no owner (older code) keep the old fail rule. A run thread whose run was
+  taken over writes nothing more (`app/services/run_resume.py::taken_over`). Enforced by
+  `verify_run_restart_resume` (ADR 0090).
+
+- **A run hands its slot back between step visits without changing what it does.** A
+  background run (`app/services/orchestrator.py::_run_in_background`, batch members through
+  `app/services/batch_runs_hub.py::_run_member`) executes as a
+  `app/services/run_segments.py::RunSegment`: the run's generator, Session and
+  `contextvars.Context` live on the segment, not on a thread. At a completed step visit
+  (the `step` / `step_skipped` event that follows the checkpoint commit) a segment that has
+  run for `LOC_TMS_STEP_QUANTUM_S` (default 30 s) parks when ANOTHER customer's work waits,
+  the process admission daemon is alive and its Session holds no unflushed change (ADR 0098:
+  never before a pause-only step such as a human review, an external step or the end; and a
+  batch member parks at once when a sibling language is parked at its step or an earlier one,
+  so the languages continue together): it ends its read
+  transaction, keeps its heartbeat on a parked holder (`run_resume.park`), releases its slot
+  and its thread ends. The admission scheduler continues it on a new thread with the same name
+  (`run_resume.adopt`), so the SAME generator resumes: loops, gates, branches, parallel groups,
+  human-review pauses and visit caps are untouched by construction. A parked run reads RUNNING,
+  counts toward its batch width, is live to `_run_thread_alive` and to the recovery sweeps, and is
+  cancelled through the ordinary path. A synchronous CLI run or batch never parks.
+  `LOC_TMS_STEP_HANDOFF=off` disables it; `always` parks at every boundary (the proof mode).
+  Enforced by `verify_step_queue` (ADR 0092).
+- **Waiting work is admitted fairly across customers, documents and languages.**
+  `app/services/orchestrator.py::_AdmissionScheduler._fair_pick` orders QUEUED rows and parked
+  runs (ADR 0098): a parked run that has waited `LOC_TMS_STEP_PARK_MAX_WAIT_S` (60 s) goes
+  first (on at most every other pick); a batch keeps its turn for up to its width, across
+  customers, so one document's languages start and continue together; otherwise customers take
+  turns least-recently-served first; within the chosen customer its parked runs continue first
+  (the fan-out whose member parked earliest, then that fan-out's other parked languages), then
+  fan-outs take turns least-recently-served first
+  (a new fan-out joins at the back; ties to the oldest run id, numeric), with new runs in the
+  fan-out's language order, rotated by one place per new fan-out so no language is always
+  first. On Postgres the claim locks its row with `FOR UPDATE SKIP LOCKED`. Enforced by
+  `verify_fair_dispatch` (target T3, ADR 0092, 0098).
+- **A document's languages are admitted together** (ADR 0099). When a batch's turn comes,
+  `_AdmissionScheduler._gang_for` takes up to its width (what its width and its turn allow,
+  never more than the queue's share of `LOC_TMS_MAX_CONCURRENT_RUNS`, so a wider batch starts in
+  chunks) and `_gather_slots` holds the slots that free until there is one per language, at most
+  `LOC_TMS_BATCH_GANG_WAIT_S` (30 s); then `_admit_gang` claims the rows RUNNING in ONE
+  transaction that first writes the batch row and counts its active members, so another worker
+  process's claim of the same batch waits and finds them taken, and the width holds across
+  workers. Past the wait it starts what it has and the rest follow; the interactive reserve slot
+  is outside the queue's share. Parked languages continue the same way: the first language of a
+  batch to reach a boundary decides whether the batch parks there (`run_segments._should_park`;
+  a run's own next step still comes first, so never before its review), and the pick does not
+  offer a batch's parked language while a sibling may still park at that step
+  (`_siblings_still_stepping`, at most `LOC_TMS_BATCH_GANG_WAIT_S`, holding no slot). Enforced by
+  `verify_fair_dispatch` (G1-G8).
+- **In the web role a launch or a resume is a queued row a worker executes, with the same
+  outcome.** With `LOC_TMS_ROLE=web` (ADR 0095) `start_run` goes through
+  `app/services/orchestrator.py::_queue_interactive_launch` (the same eager refusals, then one
+  QUEUED row via `queue_runs`, whose double-submit guard re-attaches and whose overlap guard
+  refuses another workflow's run), and `resume_run_async` through
+  `app/services/orchestrator.py::_queue_paused_run` (one conditional UPDATE PAUSED -> QUEUED
+  that advances the cursor like the in-process claim and stores the edited text in
+  `run.context["_queued_resume"]`). The worker that admits the row pops the key and calls the
+  same `_run_in_background(..., is_resume=True)`; a queued resume or a restart resume is
+  never re-gated by batch width or a fail-fast stop (it is already in flight). A worker
+  publishes `run:<id>` events after each step event, persisted progress counter and run end,
+  and `app/services/orchestrator_part10.py::observe_run` in the web role waits on them
+  (re-reading at least every `WEB_OBSERVE_FALLBACK_S`, 2 s). Workers claim QUEUED rows with
+  `FOR UPDATE SKIP LOCKED` on Postgres, so any worker takes the next run. Enforced by
+  `verify_worker_roles`.
 - **Project-bound workflow definitions follow project visibility.** Web detail and plan
   reads return the same 404 for missing workflows and workflows whose non-null
   `project_id` the caller cannot view, regardless of the `scope` label. Web lists,
@@ -112,6 +186,8 @@ inbound submission (those are a separate routing surface).
 | Per-workflow system prompt overrides | `app/services/system_prompt_overrides.py::wf_save` · `app/services/system_prompt_overrides.py::resolve` · `app/services/system_prompt_overrides.py::base_workflow_id` · `app/services/system_prompt_overrides.py::copy_workflow_overrides` · `app/services/system_prompts.py::workflow_editable_detail` · `app/web/system_prompts_api.py::api_workflow_system_prompt_save` · `app/web/workflows.py::save_workflow_system_prompt` · `app/cli/workflow_system_prompts.py::system_set` | The same two editable heads set on ONE workflow (GitHub #356 phase 2b), behind the same default-off flag. Resolution is pair-variant override > base workflow override > org override > built-in (#365); "inherit" is the absence of a live workflow override (never set, or the last action was a reset). The base of a language-pair variant is the default workflow of its `WorkflowGroup` (`system_prompt_overrides.base_workflow_id`: a base has no base, and the base is ignored when missing, archived, in another org, or scoped to a customer other than the variant's (a global base reaches a customer variant; a customer base never reaches a global variant or another customer's), so a base of another ring never applies; under the multi-org gate it must also be in the run's project org). Because the group default is the base, a change that moves or removes a live head (`system_prompt_overrides.group_default_change_needs_admin`: set-default, add with make_default, moving a group's default into another group, or (#386) moving an ordinary variant so the move changes either effective head, including gaining a base override over org or built-in fallback, on the web and /api routes) needs an admin or a manager (`system_prompts.can_change_group_default_heads`, 2026-10-08; a linguist is refused), and set-default itself is open to a manager (`system_prompts.can_set_group_default`); a manager may also change and restore ONE step's prompt and nothing else of the step (`system_prompts.can_edit_step_prompt`: the web `apply_step_prompt` and `restore_step_prompt` routes, and a `prompt_text`-only body on /api edit-step); `add_to_group` also clears a joining workflow's stale default flag so a group never ends up with two bases. History is append-only in the sibling table `WorkflowSystemPromptOverride` (a plain FK onto the workflow, so a delete reaps exactly its own rows and the org table's unique index and queries stay untouched; the org is the workflow's own, never stored on the row). Same validation, locked floor, audit by hash (`workflow.system_prompt_*`) as the org level. Who may edit: an admin or a manager (#630, 2026-10-08; `system_prompts.can_edit_workflow_heads`, `_manage_block` on /api; the org level stays admin only) whose org and customer ring contain the workflow (a foreign workflow is a 404); reads are admin, manager or linguist (`can_read_workflow_heads`). The run resolves once from its workflow id; under the multi-org gate a workflow override is ignored when the workflow's org differs from the run's project. The plain-MT path has no workflow of its own, so a pass takes the project's default workflow (the pair variant for the locale), and `/api/translate/text` takes an optional `workflow_id`. Each AI `StepRun` also records `system_prompt_scope` (workflow, base_workflow, org or builtin). Clone carries the live text (re-validated); copy-to-pairs from the base does not copy it (the new variant inherits it live), from a variant with its own text it does; `delete_workflow` and the project delete reap it. The machine-translation floor now always carries the locked sentence `prompts.MT_LOCKED_CONTENT_RULE` after an override body. Flag off: nothing read, nothing stamped, nothing copied, writes refuse. |
 | Studio aids rail | `app/services/workflow_rail.py::customer_facts` | Composes the "what we already know" panel from the existing per-asset service seams, honest by empty list. |
 | Per-workflow stats | `app/services/workflow_stats.py::stats_for` · `app/services/workflow_stats.py::collect` | The single stat dict (runs, spend with honest NULL, LQA pass rate) behind the dashboard, CLI, and /api, single and bulk. |
+| Restart resume | `app/services/run_resume.py::VisitWriter` · `app/services/run_resume.py::plan` · `app/services/run_resume.py::requeue` · `app/services/run_resume.py::sweep_stale_runs` · `app/services/run_resume.py::register` | Checkpoint and idempotency key per step visit, owner token plus a 30 s heartbeat per execution, the boot decision (skip / resume / fail) and the live sweep that re-queues runs whose owner's heartbeat went stale (ADR 0090). |
+| Step hand-off + fair dispatch | `app/services/run_segments.py::RunSegment` · `app/services/run_segments.py::SlotProxy` · `app/services/run_resume.py::park` · `app/services/run_resume.py::adopt` | Runs execute in segments that may park between step visits; one scheduler admits QUEUED rows and continues parked runs in the fair order (customer, fan-out with batch-width turns, rotated language order); Postgres claims use SKIP LOCKED (ADR 0092). |
 | Batch fan-out | `app/services/batch_runs.py::start_batch` · `app/services/batch_runs_hub.py::_dispatch` · `app/services/batch_runs_hub.py::recover_interrupted_batches` · `app/services/batch_runs_common.py::log` · `app/services/batch_runs_hub2.py::_finalize` | One `WorkflowBatch` dispatching a member run per locale under a bounded pool, with boot recovery of an interrupted batch. |
 | Web surface | `app/web/workflows_part2.py::workflows_index` · `app/web/workflows.py::start_batch_run` · `app/web/workflows_common.py::_notice_url` · `app/web/workflows_part3.py::group_detail` · `app/web/workflows_part4.py::delete_prompt_template` | The `/workflows` management pages, the group pages, and the run/batch POST routes. |
 | CLI surface | `app/cli/cmd_workflow_part3.py` · `app/cli/cmd_workflow_part2.py` · `app/cli/cmd_workflow_common.py` · `app/cli/cmd_workflow.py::register` · `app/cli/cmd_workflow_common_leaf.py::_MAX_WAIT_HOURS` · `app/cli/cmd_workflow_part2_leaf.py::_wf_show` · `app/cli/cmd_workflow_part3_leaf.py::_wf_rename` · `app/cli/cmd_workflow_part4.py::_wf_run` | The `workflow` command group that drives the same service seams headless. |
@@ -126,6 +202,11 @@ inbound submission (those are a separate routing surface).
   locale against), `app/models.py::WorkflowBatch` and `app/models.py::WorkflowRun` (a batch
   and its member runs, correlated by `batch_id`), and `app/models.py::StepRun` (the per-step
   execution row whose stamped `cost_usd` the stats seam sums).
+- **Restart resume columns (ADR 0090, alembic `b4d8e2f6a9c1`):** `WorkflowRun.owner` (the
+  execution holding the run: `<host>:<pid>:<uuid8>/<nonce>`), `WorkflowRun.heartbeat_at`
+  (renewed about every 30 s; stale after 90 s), `WorkflowRun.resume_count` (restart resumes,
+  capped at 3, then recovery fails the run), `StepRun.idempotency_key` (UNIQUE
+  `ux_steprun_idempotency_key`) and `StepRun.checkpoint` (cleared when the run ends).
 - **Settings:** `setting:batch_max_parallel` (default `"3"`, clamped 1..8 by
   `app/services/batch_runs_common.py::clamp_max_parallel`) bounds how many member runs a batch
   launches at once. `setting:workflow_max_visits` (default `"5"`) and
@@ -155,6 +236,22 @@ inbound submission (those are a separate routing surface).
 - `verify_workflow_rename_delete`: rename propagation and the fail-closed delete.
 - `verify_run_cancel`: that a graph edit is refused while a run is in flight and allowed once
   it is cancelled.
+- `verify_run_restart_resume`: a batch member and a FULL_TEXT plain run interrupted mid-step
+  resume from that step after a simulated restart, each completed visit lands once (a
+  superseded thread finishing its call writes nothing), keys are unique, checkpoints are
+  cleared on completion, and recovery leaves live owners and PAUSED runs alone while failing
+  older rows, steps without a checkpoint and runs past the resume cap; the live sweep resumes
+  a run whose remote owner's heartbeat went stale.
+- `verify_worker_roles`: web-role launches and human-review resumes are queued rows that a
+  worker process finishes exactly as the single process would; two workers never run the same
+  run or step twice; run events reach the web role's stream.
+- `verify_step_queue`: forced hand-off at every step boundary leaves outputs, StepRun sequences,
+  status and notes identical for linear, looping, branching, paused and capped graphs; a queued
+  run starts within one step visit when long runs hold every slot; a parked run stays live to the
+  sweeps, cancels cleanly and keeps its context variables and actor across threads.
+- `verify_fair_dispatch`: (12 documents x 3 languages on a 3-slot engine: per-document
+  language spread, no language systematically last, no document starved) and the pick order
+  (customer turns, batch-width turns, rotated language order, legacy group rotation).
 - `verify_run_recovery_progress`: the plain-run startup healer
   (`app/services/orchestrator_part6.py::recover_interrupted_runs`, GitHub #44) is exact: it fails a
   planted plain RUNNING corpse (NULL `batch_id`) while leaving a PAUSED run and a live batch
@@ -180,6 +277,19 @@ inbound submission (those are a separate routing surface).
 
 ## 7. Limits & accepted risks
 
+- **The step visit in flight at a crash runs again.** Resume granularity is the step visit:
+  its provider calls are made (and billed) a second time, while every committed visit is
+  reused. A visit not written through a checkpointed seam (a parallel LQA group, a visit-cap
+  skip), an EXTERNAL step in flight, or a FULL_TEXT run with a failed, refused or regressed
+  step or branch routing is failed at restart instead. A crash right after a human-review
+  resume, before the next visit commits, fails too (the reviewer's edit lives only in memory
+  until then). ADR 0090.
+- **A parked run continues only in the process that parked it.** Its continuation is in memory;
+  the database holds its state (checkpoints), so if that process dies the run resumes from its
+  last checkpoint through recovery (or fails where recovery cannot resume, as before), but a second
+  live process cannot take its next step. Cross-process step migration needs checkpoint-grade
+  checkpoints for every seam (graph routing, parallel groups) and is left to S3 or later. ADR 0092.
+
 - **Fail-fast stops launching, it does not kill an in-flight member.** A batch's fail-fast and
   spend stops prevent launching further locales; members already running finish, because the
   run stream has no cancellation hook mid-step, stated in the `app/services/batch_runs.py`
@@ -192,6 +302,6 @@ inbound submission (those are a separate routing surface).
   rows on read, so a workflow whose runs predate spend tracking reports a NULL rather than a
   reconstructed total, stated in the `app/services/workflow_stats.py` module docstring.
 
-FULL_TEXT workflows accept tm_match by default. Exact (100%) sentence matches from the step's selected readable TM pools are OFFERED, unverified, beside the glossary; {tm_offers} controls placement. The source body is unchanged. This is an offer, not a guarantee. If a string must be exact, FULL_TEXT is the wrong mode. The run summary, GET /api/runs/{id}, MCP work_status and workflow show-run expose tm_offers with sentences_examined, matches_offered and message after a FULL_TEXT tm_match step. These describe the latest offer list, not applied translations. SSE tm_match carries the counts for that step visit. A SEGMENTED workflow's tm_match step also leaves a tally on the run: the run page, GET /api/runs/{id} (tm_match), MCP work_status and workflow show-run report filled (genuine TM fills), relocked (already held the exact TM text), unmatched (not taken from the TM at the step's fill threshold, so sent on to the next step) and total segments. Fuzzy suggestions below the fill threshold are not counted.
+FULL_TEXT workflows accept tm_match by default. Exact (100%) sentence matches from the step's selected readable TM pools are OFFERED, unverified, beside the glossary; {tm_offers} controls placement. The source body is unchanged. This is an offer, not a guarantee. If a string must be exact, FULL_TEXT is the wrong mode. The run summary, GET /api/runs/{id}, MCP work_status and workflow show-run expose tm_offers with sentences_examined, matches_offered and message after a FULL_TEXT tm_match step. These describe the latest offer list, not applied translations. SSE tm_match carries the counts for that step visit. A SEGMENTED workflow's tm_match step also leaves a tally on the run: the run page, GET /api/runs/{id} (tm_match), MCP work_status and workflow show-run report filled (genuine TM fills), relocked (already held the exact TM text), unmatched (no exact TM entry, so sent on to the next step) and total segments.
 
 Every later llm_agent step receives the TM offer block, except steps that redact PII. An empty tm_pool_selection offers nothing.

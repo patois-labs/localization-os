@@ -97,7 +97,7 @@
           </form>
         {% endif %}
         <form method="post" action="/workflows/{{ wf.id }}/delete" class="inline-del"
-              data-action-confirm="Delete workflow &quot;{{ wf.name }}&quot;? This also removes its steps, run history and fan-out batches. It fails if a routing rule, customer default, group default, or an in-flight run still uses it. A workflow any {{ names.llmemory }} suggestion targets cannot be deleted at all (those suggestions are permanent audit records); archive it instead.">
+              data-action-confirm="Delete workflow &quot;{{ wf.name }}&quot;? This also removes its steps, run history and fan-out batches. It fails if a routing rule, customer default, group default, or an in-flight run still uses it.{% if feature_installed('llmemory') %} A workflow any {{ names.llmemory }} suggestion targets cannot be deleted at all (those suggestions are permanent audit records); archive it instead.{% endif %}">
           {% include "_csrf.html" %}
           <button type="submit" class="small danger-btn">Delete workflow</button>
         </form>
@@ -172,7 +172,7 @@
               {% if s.doc_context_prepass %}<span class="badge" title="Doc-level brief prepended to every segment">doc pre-pass</span>{% endif %}
               {% if s.qe_gate %}<span class="badge warn" title="Score each segment; route below-threshold to review">QE gate (>={{ s.qe_threshold }}{% if s.qe_provider %} · {{ s.qe_provider }}{% endif %})</span>{% endif %}
               {% if s.qe_gate and s.qe_autofix %}<span class="badge" title="A segment that fails a Jev QE gate is rewritten by an LLM post-editor and re-scored before it goes to review">auto-fix (up to {{ s.qe_autofix_max_rounds }} rounds{% if s.qe_autofix_provider %} · {{ s.qe_autofix_provider }}{% endif %})</span>{% endif %}
-              {% if s.step_type == 'llm_agent' and s.tm_examples and s.tm_examples_window > 0 %}<span class="badge" title="Top-N fuzzy TM matches injected as example pairs">TM few-shot (n={{ s.tm_examples_window }})</span>{% endif %}
+              {% if s.step_type == 'llm_agent' and s.tm_examples and s.tm_examples_window > 0 and tm_examples_available() %}<span class="badge" title="Top-N TM pairs injected as examples">TM few-shot (n={{ s.tm_examples_window }})</span>{% endif %}
               {# Batch 14 T2 (SPEC §7.2/§25.9, M-4): the mandatory human-layer signal. An
                  opted-out llm_agent step shows "image context off" so the author who set
                  the toggle sees, per step, that this step will NOT receive the string's
@@ -422,8 +422,14 @@
                   <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="adaptive_feedback" value="1"{% if s.adaptive_feedback %} checked{% endif %} /> In-run adaptive feedback</label>
                   <label data-types="llm_agent">Adaptive feedback window <input type="number" name="adaptive_feedback_window" value="{{ s.adaptive_feedback_window }}" min="0" max="50" style="width:5em" /></label>
                   <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="doc_context_prepass" value="1"{% if s.doc_context_prepass %} checked{% endif %} /> Document-context pre-pass</label>
+                  {% if tm_examples_available() %}
                   <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="tm_examples" value="1"{% if s.tm_examples %} checked{% endif %} /> TM few-shot examples</label>
                   <label data-types="llm_agent">TM examples window <input type="number" name="tm_examples_window" value="{{ s.tm_examples_window }}" min="0" max="5" style="width:5em" /></label>
+                  {% else %}
+                  {# No TM examples add-on: keep the stored values so an edit changes nothing else. #}
+                  {% if s.tm_examples %}<input type="hidden" name="tm_examples" value="1" />{% endif %}
+                  <input type="hidden" name="tm_examples_window" value="{{ s.tm_examples_window }}" />
+                  {% endif %}
                   {# Per-string image context (Batch 14 T2, SPEC §25): reflects the stored value; unchecking opts THIS step out. #}
                   <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="use_image_context" value="1"{% if s.use_image_context %} checked{% endif %} title="On by default. Turn off to skip image context for this step only." /> Send this string's images to this step</label>
                   {# Terminology T3 (SPEC §9-T3): the concept-glossary renderer toggle + caps reflect the stored values; default OFF renders prompts.glossary_line verbatim. #}
@@ -477,16 +483,7 @@
               <details class="adv" data-types="tm_match">
                 <summary>TM match policy</summary>
                 <fieldset class="lp-fieldset" data-types="tm_match">
-                  <label data-types="tm_match" title="A TM hit at or above this score fills the segment. 100 = exact matches only.">Fill matches at or above this score
-                    <input type="number" name="tm_fill_threshold" value="{{ s.tm_fill_threshold if s.tm_fill_threshold is not none else '' }}" min="50" max="100" placeholder="inherit" style="width:6em" /></label>
-                  <label data-types="tm_match" title="How a below-100 fuzzy fill locks.">How to lock fuzzy fills
-                    <select name="tm_fuzzy_lock_mode" style="width:min(16em,100%)">
-                      <option value=""{% if s.tm_fuzzy_lock_mode is none %} selected{% endif %}>Inherit global</option>
-                      <option value="none"{% if s.tm_fuzzy_lock_mode == 'none' %} selected{% endif %}>None (suggestion, no lock)</option>
-                      <option value="soft"{% if s.tm_fuzzy_lock_mode == 'soft' %} selected{% endif %}>Soft (enter LQA)</option>
-                      <option value="policy"{% if s.tm_fuzzy_lock_mode == 'policy' %} selected{% endif %}>Policy (as the 100 band)</option>
-                    </select></label>
-                  <label data-types="tm_match" title="Lock in-context exact (ICE) matches.">Lock in-context exact matches
+                  <label data-types="tm_match" title="Lock in-context (101%) matches.">Lock in-context (101%) matches
                     <select name="tm_lock_ice" style="width:min(16em,100%)">
                       <option value="auto"{% if s.tm_lock_ice is none %} selected{% endif %}>Inherit global</option>
                       <option value="on"{% if s.tm_lock_ice is true %} selected{% endif %}>On</option>
@@ -498,8 +495,6 @@
                       <option value="on"{% if s.tm_hundreds_enter_lqa is true %} selected{% endif %}>On</option>
                       <option value="off"{% if s.tm_hundreds_enter_lqa is false %} selected{% endif %}>Off</option>
                     </select></label>
-                  <label data-types="tm_match" title="Attach near matches at or above this score as context (forward-compat until the ICE/context wave ships).">Attach near matches at or above this score as context
-                    <input type="number" name="tm_context_floor" value="{{ s.tm_context_floor if s.tm_context_floor is not none else '' }}" min="50" max="99" placeholder="inherit" style="width:6em" /></label>
                   <label data-types="tm_match" title="Comma-separated readable project ids whose TM this step reads. Blank = all readable; type (none) to read NO pool.">Which translation memories this step reads (default: all readable)
                     <input type="text" name="tm_pool_selection" value="{% if s.tm_pool_selection == [] %}(none){% elif s.tm_pool_selection %}{{ s.tm_pool_selection | join(', ') }}{% endif %}" placeholder="all readable" style="width:min(16em,100%)" /></label>
                 </fieldset>
@@ -812,15 +807,16 @@
                  title="Max prior segments injected into each prompt; 0 disables." /></label>
         <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="doc_context_prepass" value="1" />
           Document-context pre-pass <span class="muted">(one extra call builds a doc brief added to every segment; counts against spend cap)</span></label>
-        {# TM few-shot examples (SPEC-context-metadata phase 2B). Default ON - the
-           checkbox is pre-CHECKED so leaving it renders examples; unchecking submits
-           nothing -> OFF. #}
-        <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="tm_examples" value="1" checked
+        {# TM few-shot examples (SPEC-context-metadata phase 2B). Default OFF, and offered only
+           when a TM examples add-on is installed (ADR 0102: the core has no example retriever). #}
+        {% if tm_examples_available() %}
+        <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="tm_examples" value="1"
           title="Relevance-gated: a poor or absent match injects nothing." />
-          TM few-shot examples <span class="muted">(inject top-N similar TM matches as examples - the biggest quality lever)</span></label>
+          TM few-shot examples <span class="muted">(inject top-N similar TM matches as examples)</span></label>
         <label data-types="llm_agent">TM examples window
           <input type="number" name="tm_examples_window" value="3" min="0" max="5" style="width:5em"
                  title="Top matches injected; clamped 0-5, 0 disables." /></label>
+        {% endif %}
         {# Per-string image context (Batch 14 T2, SPEC §25). Default ON - the checkbox is
            pre-CHECKED so a new agent step sees the string's images (when the engine is
            vision-capable); unchecking submits nothing -> OFF for this step only. #}
@@ -885,16 +881,7 @@
       <details class="adv" data-types="tm_match">
         <summary>TM match policy</summary>
         <fieldset class="lp-fieldset" data-types="tm_match">
-          <label data-types="tm_match" title="A TM hit at or above this score fills the segment. 100 = exact matches only.">Fill matches at or above this score
-            <input type="number" name="tm_fill_threshold" value="" min="50" max="100" placeholder="inherit (100)" style="width:6em" /></label>
-          <label data-types="tm_match" title="How a below-100 fuzzy fill locks.">How to lock fuzzy fills
-            <select name="tm_fuzzy_lock_mode" style="width:min(16em,100%)">
-              <option value="" selected>Inherit global</option>
-              <option value="none">None (suggestion, no lock)</option>
-              <option value="soft">Soft (enter LQA)</option>
-              <option value="policy">Policy (as the 100 band)</option>
-            </select></label>
-          <label data-types="tm_match" title="Lock in-context exact (ICE) matches.">Lock in-context exact matches
+          <label data-types="tm_match" title="Lock in-context (101%) matches.">Lock in-context (101%) matches
             <select name="tm_lock_ice" style="width:min(16em,100%)">
               <option value="auto" selected>Inherit global</option>
               <option value="on">On</option>
@@ -906,8 +893,6 @@
               <option value="on">On</option>
               <option value="off">Off</option>
             </select></label>
-          <label data-types="tm_match" title="Attach near matches at or above this score as context (forward-compat until the ICE/context wave ships).">Attach near matches at or above this score as context
-            <input type="number" name="tm_context_floor" value="" min="50" max="99" placeholder="inherit (95)" style="width:6em" /></label>
           <label data-types="tm_match" title="Comma-separated readable project ids whose TM this step reads. Blank = all readable.">Which translation memories this step reads (default: all readable)
             <input type="text" name="tm_pool_selection" value="" placeholder="all readable" style="width:min(16em,100%)" /></label>
         </fieldset>

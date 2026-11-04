@@ -461,13 +461,12 @@ def run_ab(
     # delta attributable to the context block alone). Reuses the same gated retrieval
     # the real MT path uses.
     sources = [s.source_text for s in sample]
-    tm_examples_map = tm.example_matches_batch(
+    tm_examples_map = tm.example_matches_hybrid(
         session,
         project.id,
         sources,
         src,
         chosen,
-        floor=context_pkg.TM_EXAMPLES_FLOOR,
         window=context_pkg.TM_EXAMPLES_DEFAULT_WINDOW,
     )
 

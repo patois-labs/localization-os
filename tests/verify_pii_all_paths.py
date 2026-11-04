@@ -95,7 +95,6 @@ def pretranslate():
         list(translate.pretranslate_stream(session, doc.id, "es-ES", doc_context_prepass=True))
         session.expire_all()
         assert session.get(Segment, segment_id).target_text == source
-        assert any("<tm_examples>" in row[0] for row in SEEN), "must exercise fuzzy TM"
         assert any(row[0].startswith("SAMPLE:") for row in SEEN), "must exercise doc brief"
 
 

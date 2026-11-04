@@ -95,7 +95,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.models import EvalScoreState
 from app.services import quality
@@ -743,7 +743,7 @@ def metric_signature(
             scorers[mid] = {"id": mid, "error": "scorer not registered"}
     sig = {
         "module_version": MODULE_VERSION,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "target_locale": target_locale or "",
         "tokenizer": tokenizer_for_locale(target_locale),
         "scorers": scorers,

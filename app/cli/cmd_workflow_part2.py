@@ -250,23 +250,28 @@ def register_cmd_workflow_part2_sub(sub) -> None:
         "routes to review REGARDLESS of score (so a 94 can still fail "
         "even at a bar of 90). Default 90. Refused on non-lqa steps.",
     )
-    # TM few-shot examples (SPEC-context-metadata phase 2B; default ON; parity with
-    # the web step editor). llm_agent-only -- refused (if turned off) on lqa/human_review.
+    # TM few-shot examples (SPEC-context-metadata phase 2B; default OFF in the core, ADR 0102:
+    # they need a TM examples add-on). llm_agent-only.
+    p.add_argument(
+        "--tm-examples",
+        dest="tm_examples",
+        action="store_true",
+        default=False,
+        help="turn TM few-shot examples on for this step (default off). They need a TM "
+        "examples add-on; without one the step gets no examples. Refused on lqa/human_review.",
+    )
     p.add_argument(
         "--no-tm-examples",
         dest="tm_examples",
         action="store_false",
-        default=True,
-        help="disable TM few-shot: do NOT inject the top-N fuzzy TM matches "
-        "as example pairs into this step's prompt (default ON). "
-        "Refused on lqa/human_review.",
+        help="TM few-shot examples off for this step (the default).",
     )
     p.add_argument(
         "--tm-examples-window",
         dest="tm_examples_window",
         type=int,
         default=3,
-        help="how many top fuzzy TM matches to inject, clamped 0-5 "
+        help="how many top TM examples to inject, clamped 0-5 "
         "(default 3; 0 disables like --no-tm-examples).",
     )
     # Per-string image context (Batch 14 T2, SPEC §25; default ON; the --no-tm-examples
@@ -573,7 +578,7 @@ def register_cmd_workflow_part2_sub(sub) -> None:
         dest="tm_examples_window",
         type=int,
         default=None,
-        help="top fuzzy TM matches to inject, clamped 0-5.",
+        help="top TM examples to inject, clamped 0-5.",
     )
     p.add_argument(
         "--tm-protect",
@@ -724,7 +729,10 @@ def register_cmd_workflow_part2_sub(sub) -> None:
         "no baseline call.",
     )
     _tristate_bool(
-        p, "--tm-examples", "tm_examples", "inject top-N fuzzy TM matches as example pairs."
+        p,
+        "--tm-examples",
+        "tm_examples",
+        "TM few-shot examples (need a TM examples add-on; without one the step gets none).",
     )
     # Batch 14 T2 (SPEC §25.5-D): the per-step image-context toggle, tri-state on edit
     # (present-true / present-false / absent-unchanged) via the --qe-gate pattern.

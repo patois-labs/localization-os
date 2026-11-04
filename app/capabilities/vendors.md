@@ -8,7 +8,7 @@ nouns:
   External step: "A workflow step of type external that hands its packaged text to a linked vendor and pauses the run until the vendor returns it. This is how work is dispatched - vendors are a workflow capability, not a side channel."
   Return contract: "The vendor's answer: the translated segments, admitted through one guarded seam whether they arrive by signed webhook callback, a poll, or a manual re-upload - as JSON or as XLIFF 1.2, which is accepted anywhere JSON is."
   Protocol: "How a leg is delivered - native (an automated signed wire) or manual (an operator carries the package out and the return back in). Snapshotted per leg, so flipping a vendor's protocol only affects future dispatches."
-  Rate card: "A vendor's MSA pricing - a per-band cost per word (repetitions, context, exact, fuzzy tiers, new). It turns a leg's TM-leverage band breakdown into the Human-spend estimate."
+  Rate card: "A vendor's MSA pricing - a per-band cost per word (101 % in-context, repetitions, 100 % exact, new). It turns a leg's TM-leverage band breakdown into the Human-spend estimate."
   Quote gate: "An optional per-vendor requires_quote_approval posture: a dispatch parks as QUOTED awaiting a quote and an operator's approval before any work proceeds - the deliberate spend decision, separate from dispatching."
   Rework: "Rejecting a delivered leg and re-dispatching it to the same vendor with structured feedback. Rework rounds are capped (default 1), then the run escalates to a human review pause."
   Vendor Studio: "A companion app an operator can be handed off to (admin-only, browser-interactive) via a short-lived signed SSO token, when its URL and SSO secret are configured."
@@ -44,7 +44,7 @@ connects:
   - module: documents
     how: "A dispatch leg packages a document's segments (with additive per-segment provenance, match score and locked markers) and the return commits translated segments back through the same guarded write seam a normal translation uses."
   - module: tm
-    how: "A leg's TM-leverage band breakdown - how much of the work is repetitions, exact, fuzzy or new - is what the vendor's rate card prices into the Human-spend estimate, so better TM coverage directly lowers the vendor quote."
+    how: "A leg's TM-leverage band breakdown - how many words are 101 % in-context, repetitions, 100 % exact or new - is what the vendor's rate card prices into the Human-spend estimate, so better TM coverage directly lowers the vendor quote."
   - module: engines
     how: "Vendor (Human) spend sits alongside model (AI) spend in the same ledger: AI plus Human is the run's total, so a vendor leg and an engine call are two priced lines on one run."
 ---

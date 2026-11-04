@@ -6,7 +6,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -600,8 +600,8 @@ def test_purge_staging_reconciled():
 
 def test_purge_cutoff_must_be_past():
     """LOW-2 (round 1): a today/future cutoff is refused even with a matching typed phrase."""
-    today = datetime.now(timezone.utc).date().isoformat()
-    future = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
+    today = datetime.now(UTC).date().isoformat()
+    future = (datetime.now(UTC).date() + timedelta(days=1)).isoformat()
     for bad in (today, future):
         refused(
             lambda bad=bad: ledger_controls.purge(

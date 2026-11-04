@@ -220,16 +220,13 @@ def _fully_populated_kwargs(template_id: int, glossary_id: int, vendor_id: int) 
         # workflow's vendor dispatch config. vendor_id is a real FK (a created vendor).
         "vendor_id": vendor_id,
         "external_wait_hours": 96,
-        # Batch 15 T1 (SPEC-tm-match-step-config §5.1): the six tm_match per-step config
+        # Batch 15 T1 (SPEC-tm-match-step-config §5.1): the tm_match per-step config
         # columns. Default is None (inherit), so a distinctive non-None value on each makes
         # a copy site that forgets one fail loudly here rather than silently resetting a
         # cloned tm_match step's TM policy to inherit. (WorkflowRun.used_tm_match is on
         # WorkflowRun, NOT WorkflowStep, so it does NOT enroll in this introspection.)
-        "tm_fill_threshold": 85,
-        "tm_fuzzy_lock_mode": "policy",
         "tm_lock_ice": False,
         "tm_hundreds_enter_lqa": False,
-        "tm_context_floor": 88,
         "tm_pool_selection": [1, 2],
         # Distinctive (non-default False): the "flag for linguist review" checkbox
         # (workflow_author_review.html -> setup_author.py) -- the second bug this

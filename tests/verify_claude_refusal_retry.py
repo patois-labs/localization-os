@@ -18,7 +18,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from email.utils import formatdate
 from unittest import mock
 
@@ -345,7 +345,7 @@ def test_retry_after_seconds_and_variants():
     when = formatdate(time.time() + 6.5, usegmt=True)
     (d,) = _delays({"retry-after": when})
     assert 4.0 <= d <= 6.6, d
-    reset = (datetime.now(timezone.utc) + timedelta(seconds=9)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    reset = (datetime.now(UTC) + timedelta(seconds=9)).strftime("%Y-%m-%dT%H:%M:%SZ")
     (d,) = _delays({"anthropic-ratelimit-requests-reset": reset})
     assert 6.5 <= d <= 9.0, d
     print("  634a. Retry-After seconds / fractional / HTTP date / ms / ratelimit-reset honored OK")

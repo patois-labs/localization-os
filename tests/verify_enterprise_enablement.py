@@ -51,6 +51,12 @@ def _reset(keys):
     settings.set_many({k: settings.DEFAULTS.get(k, "") for k in keys})
 
 
+def _jobqueue_off():
+    # S2: job_queue_backend now defaults to "db" (already ON). The enable/disable flow under test
+    # starts from the opt-out, so these tests put the feature in its off state explicitly.
+    settings.set_many({"job_queue_backend": "memory"})
+
+
 def _no_lib(*_names):
     return False
 
@@ -257,6 +263,8 @@ def test_disable_never_preflights(monkeypatch):
 
 def test_jobqueue_enable_uses_backend_value():
     _reset(["job_queue_backend"])
+    assert settings.get("job_queue_backend") == "db", "S2: durable queue is the default"
+    _jobqueue_off()
     res = ee.enable("jobqueue", "tester")
     assert res.new_value == "db" and settings.get("job_queue_backend") == "db"
     ee.disable("jobqueue", "tester")
@@ -302,6 +310,7 @@ def _web_client():
 
 def test_web_panel_and_step_up(monkeypatch):
     _reset(["operator_key_hash", "job_queue_backend", "otel_enabled", "otel_endpoint"])
+    _jobqueue_off()
     c = _web_client()
     assert c.get("/settings/enterprise").status_code == 200
 
@@ -371,6 +380,7 @@ def test_step_up_refusal_is_audited():
     trace, so guessing at it was invisible. Refusals are audited -- and the row must never
     carry the supplied value (a stored guess is a guess to replay)."""
     _reset(["operator_key_hash", "job_queue_backend"])
+    _jobqueue_off()
     settings.set_many({"operator_key_hash": hashlib.sha256(b"opk").hexdigest()})
     c = _web_client()
     before = len(_audit_actions_like("enterprise.step_up_refused"))
@@ -403,6 +413,7 @@ def test_step_up_refusal_is_audited():
 
 def test_web_csrf_enforced():
     _reset(["operator_key_hash", "job_queue_backend"])
+    _jobqueue_off()
     settings.set_many({"operator_key_hash": hashlib.sha256(b"opk").hexdigest()})
 
     c = _web_client()

@@ -10,25 +10,22 @@ them. The lock is a persisted segment state (models.Segment.lock_band / lock_har
 enforcement lives at the write seam (quality.is_hard_locked) and, for soft locks, in
 the orchestrator's pending-set exclusion.
 
-WHAT IS IN v1 HERE (matches §3 for the 100 band):
-  * 100-band = source byte-exact (the existing tm.lookup_batch match_pct == 100).
-  * fill + SOFT lock by default; HARD lock when policy.hundreds_enter_lqa is off.
+WHAT IT DOES (ADR 0102, exact-only TM):
+  * 100-band = source byte-exact (tm.lookup_batch match_pct 100).
+  * ICE / 101-band = byte-exact AND in context (match_pct 101: the stored unit's context key
+    equals the segment's, see tm_context): fill + HARD lock when `tm_lock_ice` is on (the
+    default); with it off an in-context hit behaves as a 100.
+  * a 100 fills + SOFT locks by default; HARD lock when policy.hundreds_enter_lqa is off.
   * multi-TM resolution rides tm.lookup_batch's own-row-first precedence; the winning
     entry's project supplies the policy (here: the reading project's global policy).
-
-DELIBERATELY DEFERRED (documented in the proposal's own §14 wave split, and in the
-builder report): the ICE / 101 context band (§4) needs a TM-entry `context` column +
-capture-at-every-write-seam + backfill — "the largest and most invasive part of the
-build" — so in this wave every fill is the 100 band and `lock_ice` is inert. An entry
-with no context can only ever produce a 100, which is precisely the proposal's own
-migration behaviour (§4). Backflow (§9) and spend-plan surfacing (§10) are later waves.
+  * There is no fuzzy band any more: stored segments with lock_band 'fuzzy' or a tm_match_pct
+    of 75-99 (written before ADR 0102) are read as "not leveraged" and never crash anything.
 
 Documented in: docs/architecture/tm-and-glossary.md
 """
 
-import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlmodel import Session, select
 
@@ -36,7 +33,7 @@ from app.models import Project, Segment, SegmentTM
 
 
 def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+    return datetime.now(UTC).replace(tzinfo=None).isoformat()
 
 
 # --- per-TM policy (PROPOSAL §6) ---------------------------------------------
@@ -50,36 +47,18 @@ def _utcnow_iso() -> str:
 # container object). Until then, the toggles below are global.
 _SETTING_LOCK_ICE = "tm_lock_ice"  # default on  (D2)
 _SETTING_HUNDREDS_ENTER_LQA = "tm_hundreds_enter_lqa"  # default on (D3)
-_SETTING_CONTEXT_FLOOR = "tm_context_floor"  # default 95  (D11)
-# Batch 15 T1 (SPEC-tm-match-step-config §11): the two NEW global default keys — the
-# DEFAULTS a new tm_match step seeds from + the inherited value for a NULL-override step.
-_SETTING_FILL_THRESHOLD = "tm_fill_threshold"  # default 100 (fill exactly the 100 band)
-_SETTING_FUZZY_LOCK_MODE = "tm_fuzzy_lock_mode"  # default "soft" (a fuzzy fill enters LQA)
-
-# The three fuzzy lock modes (D15-3 / §6.3). "none" = fill, no lock (a suggestion,
-# overwritten by a downstream unprotected translate step, subject to the tm_protect
-# guard); "soft" = fill + soft lock (enters LQA); "policy" = fill + the lock the 100-band
-# policy would give (soft when hundreds_enter_lqa, else hard).
-FUZZY_LOCK_MODES = ("none", "soft", "policy")
 
 
 @dataclass(frozen=True)
 class TmPolicy:
-    """The resolved TM policy. `lock_ice` and `context_floor` are carried for
-    completeness and forward-compatibility (ICE + the context band are deferred).
-
-    Batch 15 T1 (SPEC-tm-match-step-config §6.1) adds `fill_threshold` (the min match %
-    a tm_match step FILLS at; 100 = today's exact-only behaviour) and `fuzzy_lock_mode`
-    (how a below-100 fuzzy fill locks: "none"|"soft"|"policy"). A step resolves its
-    EFFECTIVE policy via resolve_policy_for_step (per-step override else the live
-    global); resolve_policy keeps the global-only shape for seeding + non-step callers.
-    """
+    """The resolved TM policy. `lock_ice`: an in-context (101) fill hard-locks (off = it
+    behaves as a 100). `hundreds_enter_lqa`: a 100 fill locks SOFT (enters LQA) when on, HARD
+    when off. A step resolves its EFFECTIVE policy via resolve_policy_for_step (per-step
+    override else the live global); resolve_policy keeps the global-only shape for seeding and
+    non-step callers."""
 
     lock_ice: bool = True
     hundreds_enter_lqa: bool = True
-    context_floor: int = 95
-    fill_threshold: int = 100
-    fuzzy_lock_mode: str = "soft"
 
 
 def _as_bool(v, default: bool) -> bool:
@@ -96,77 +75,29 @@ def _as_bool(v, default: bool) -> bool:
 
 def resolve_policy(session: Session, project: Project | None = None) -> TmPolicy:
     """Resolve the TM policy for a run. v1 = the GLOBAL settings interim (see the module
-    header -- §6's per-TM grain is the target, not yet built); the `project` arg is
+    header -- section 6's per-TM grain is the target, not yet built); the `project` arg is
     accepted now so a per-project/per-TM override can land without a caller change.
-    Settings are read at RUN time (§6: "settings changes take effect on the next matching
-    run -- they never retroactively lock/unlock")."""
+    Settings are read at RUN time (section 6: "settings changes take effect on the next
+    matching run -- they never retroactively lock/unlock")."""
     from app.services import settings
 
-    try:
-        floor = int(settings.get(_SETTING_CONTEXT_FLOOR) or 95)
-    except (TypeError, ValueError):
-        floor = 95
-    floor = max(50, min(99, floor))
     return TmPolicy(
         lock_ice=_as_bool(settings.get(_SETTING_LOCK_ICE), True),
         hundreds_enter_lqa=_as_bool(settings.get(_SETTING_HUNDREDS_ENTER_LQA), True),
-        context_floor=floor,
-        fill_threshold=_global_fill_threshold(settings),
-        fuzzy_lock_mode=_global_fuzzy_lock_mode(settings),
     )
 
 
-def _clamp_fill_threshold(v) -> int:
-    """Bound a fill threshold to [50, 100] (mirrors the context_floor clamp). Junk/None
-    -> 100 (exact-only, byte-identical to pre-Batch-15)."""
-    try:
-        n = int(v)
-    except (TypeError, ValueError):
-        return 100
-    return max(50, min(100, n))
-
-
-def _global_fill_threshold(settings) -> int:
-    raw = settings.get(_SETTING_FILL_THRESHOLD)
-    if raw is None or (isinstance(raw, str) and not raw.strip()):
-        return 100
-    return _clamp_fill_threshold(raw)
-
-
-def _norm_fuzzy_lock_mode(v, default: str = "soft") -> str:
-    """Coerce a fuzzy-lock-mode value to one of FUZZY_LOCK_MODES; an unknown/blank value
-    SELF-HEALS to `default` (like a garbage context_floor), never raises."""
-    if v is None:
-        return default
-    s = str(v).strip().lower()
-    return s if s in FUZZY_LOCK_MODES else default
-
-
-def _global_fuzzy_lock_mode(settings) -> str:
-    return _norm_fuzzy_lock_mode(settings.get(_SETTING_FUZZY_LOCK_MODE), "soft")
-
-
 def resolve_policy_for_step(session: Session, project, step) -> TmPolicy:
-    """The EFFECTIVE tm_match policy for ONE step (SPEC-tm-match-step-config §6.1,
+    """The EFFECTIVE tm_match policy for ONE step (SPEC-tm-match-step-config section 6.1,
     LAW-TM-1): per-step override column when non-NULL, else the live global. Removing an
-    override (setting the column NULL) restores exact global-tracking behaviour. Reads
-    each column via getattr so a partial/forward-compat step stub never raises. The five
-    scalar knobs fall back to the global; `tm_pool_selection` is resolved separately by
-    the orchestrator (§7)."""
+    override (setting the column NULL) restores exact global-tracking behaviour. Reads each
+    column via getattr so a partial/forward-compat step stub never raises. (The removed fuzzy
+    columns tm_fill_threshold / tm_fuzzy_lock_mode / tm_context_floor are dropped by alembic
+    revision d6b3f8a2c4e1; ADR 0102.)"""
     g = resolve_policy(session, project)
 
     def _col(name):
         return getattr(step, name, None)
-
-    fill = _col("tm_fill_threshold")
-    fill_threshold = _clamp_fill_threshold(fill) if fill is not None else g.fill_threshold
-
-    mode = _col("tm_fuzzy_lock_mode")
-    # An explicit per-step mode is validated (unknown -> the GLOBAL default, self-healing
-    # like a garbage context_floor); NULL inherits the global.
-    fuzzy_lock_mode = (
-        _norm_fuzzy_lock_mode(mode, g.fuzzy_lock_mode) if mode is not None else g.fuzzy_lock_mode
-    )
 
     lock_ice = _col("tm_lock_ice")
     lock_ice = _as_bool(lock_ice, g.lock_ice) if lock_ice is not None else g.lock_ice
@@ -175,27 +106,7 @@ def resolve_policy_for_step(session: Session, project, step) -> TmPolicy:
     hundreds_enter_lqa = (
         _as_bool(hundreds, g.hundreds_enter_lqa) if hundreds is not None else g.hundreds_enter_lqa
     )
-
-    floor = _col("tm_context_floor")
-    context_floor = max(50, min(99, int(floor))) if _is_intish(floor) else g.context_floor
-
-    return TmPolicy(
-        lock_ice=lock_ice,
-        hundreds_enter_lqa=hundreds_enter_lqa,
-        context_floor=context_floor,
-        fill_threshold=fill_threshold,
-        fuzzy_lock_mode=fuzzy_lock_mode,
-    )
-
-
-def _is_intish(v) -> bool:
-    if v is None or isinstance(v, bool):
-        return False
-    try:
-        int(v)
-        return True
-    except (TypeError, ValueError):
-        return False
+    return TmPolicy(lock_ice=lock_ice, hundreds_enter_lqa=hundreds_enter_lqa)
 
 
 # --- lock provenance on the segment ------------------------------------------
@@ -333,127 +244,48 @@ def candidate_indices(segments, produced, already_locked) -> list[int]:
     ]
 
 
-# --- LAW-TM-6 variable-content parity (SPEC-tm-match-step-config §6.2, finding 4) ----
-# A below-100 fuzzy fill is allowed ONLY when the segment source and the hit source carry
-# the IDENTICAL variable content -- the ordered multiset of numeric tokens, URLs, emails,
-# and any surviving %s / {brace} variable literals -- and do NOT differ by case alone.
-# The r0 "marker-multiset" claim was FALSE: tm.is_tm_eligible excludes every
-# inline-token/placeholder-bearing source from TM entirely, so a ⟦xN⟧-marker string never
-# gets a hit and the fillable universe is already token-free. The REAL hazard is NON-marker
-# variable content in token-free text -- fuzz.ratio("Pay 900 now", "Pay 100 now") ~= 95 yet
-# the FACT differs -- so this parity check (not the fuzzy score) is what stops a wrong
-# number/URL from shipping. A divergence -> NOT fillable (the fuzzy fill drops to the
-# context band, never a fill). Locale-pair byte-exactness (proposal D6) is preserved by the
-# lookup's exact locale scoping; casing divergence is treated conservatively (a case-only
-# difference is not a fill).
-_NUM_RE = re.compile(r"\d+(?:[.,]\d+)*")
-_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
-_EMAIL_RE = re.compile(r"\b[^\s@]+@[^\s@]+\.[^\s@]+\b")
-# printf ( %s %d %1$s ) + brace/named ( {count} {0} %(name)s ) variable literals that
-# survived as literal text (token-bearing sources are already TM-excluded upstream).
-_VAR_RE = re.compile(r"%\(\w+\)?[sdfgxac]|%\d*\$?[sdfgxac]|\{[^{}]*\}")
-
-
-def _var_signature(text: str) -> tuple:
-    """The ordered multiset (a tuple, order-preserving) of variable content in `text`:
-    numbers, URLs, emails, and printf/brace variable literals. Two sources with the SAME
-    signature carry the same facts; a divergence blocks a fuzzy fill (LAW-TM-6)."""
-    t = text or ""
-    return (
-        tuple(_NUM_RE.findall(t)),
-        tuple(_URL_RE.findall(t)),
-        tuple(_EMAIL_RE.findall(t)),
-        tuple(_VAR_RE.findall(t)),
-    )
-
-
-def variable_content_parity(seg_source: str, hit_source: str) -> bool:
-    """True iff a below-100 fuzzy fill from `hit_source` onto `seg_source` is SAFE under
-    LAW-TM-6: identical variable-content signatures AND not a case-only difference. A
-    missing source (None) fails closed."""
-    if seg_source is None or hit_source is None:
-        return False
-    if _var_signature(seg_source) != _var_signature(hit_source):
-        return False
-    # Case-only divergence (same letters, different case) is treated as non-fillable.
-    return not (seg_source != hit_source and seg_source.lower() == hit_source.lower())
-
-
-def plan_hit(
-    hit, policy: TmPolicy, *, min_fill: int = 100, seg_source: str | None = None
-) -> tuple[str, bool] | None:
+def plan_hit(hit, policy: TmPolicy) -> tuple[str, bool] | None:
     """(band, hard) for a fillable TM `hit` under `policy`, or None.
 
-    `min_fill` (default 100 = today's exact-only behaviour) is the minimum match % this
-    call fills at -- the empty-target FILL path passes the effective per-step threshold,
-    while the HEAL / re-lock path passes 100 (EXACT ONLY, LAW-TM-20), so the below-100
-    relaxation never reaches a non-empty target. A hit whose match_pct is below `min_fill`
-    is not fillable.
-
-      * match_pct >= 100 -> band "100" (ICE/context deferred); SOFT unless
-        hundreds_enter_lqa is off (D3). Byte-identical to pre-Batch-15.
-      * min_fill <= match_pct < 100 -> band "fuzzy" (below-100 fill, LAW-TM-5), GATED on
-        the LAW-TM-6 variable-content parity of `seg_source` vs the hit source (a
-        divergence -> None, fail-closed to the context band). `hard` follows the fuzzy
-        lock mode: "policy" mirrors the 100-band hard bit, "none"/"soft" are never hard
-        here (the orchestrator reads policy.fuzzy_lock_mode for the full none/soft/hard
-        routing -- §6.3)."""
+    * match_pct >= 101 (in context) with `lock_ice` on -> band "ice", HARD.
+    * match_pct >= 100 otherwise (a plain 100, or a 101 with lock_ice off) -> band "100";
+      SOFT unless hundreds_enter_lqa is off (D3).
+    * anything else (None, or a stale sub-100 value) -> None: nothing below 100 fills."""
     if not hit:
         return None
     pct = hit.get("match_pct")
-    if pct is None or pct < min_fill:
+    if pct is None or pct < 100:
         return None
-    if pct >= 100:
-        return ("100", not policy.hundreds_enter_lqa)
-    # below-100 fuzzy fill (only reachable when the caller lowered min_fill)
-    if not variable_content_parity(seg_source, hit.get("source_text")):
-        return None
-    hard = (policy.fuzzy_lock_mode == "policy") and (not policy.hundreds_enter_lqa)
-    return ("fuzzy", hard)
+    if pct >= 101 and policy.lock_ice:
+        return ("ice", True)
+    return ("100", not policy.hundreds_enter_lqa)
 
 
 def lock_mode_for(band: str, policy: TmPolicy) -> str:
-    """The lock disposition ("none" | "soft" | "hard") the orchestrator applies to a
-    filled segment (§6.3). A 100/ICE band locks per hundreds_enter_lqa; a "fuzzy" band
-    locks per the fuzzy lock mode."""
-    if band == "fuzzy":
-        mode = policy.fuzzy_lock_mode
-        if mode == "none":
-            return "none"
-        if mode == "policy":
-            return "hard" if not policy.hundreds_enter_lqa else "soft"
-        return "soft"  # "soft" (the safe default)
+    """The lock disposition ("soft" | "hard") the orchestrator applies to a filled segment
+    (section 6.3): an ICE band always hard-locks (that is what lock_ice means); a 100 locks per
+    hundreds_enter_lqa."""
+    if band == "ice":
+        return "hard"
     return "hard" if not policy.hundreds_enter_lqa else "soft"
 
 
-def fill_or_relock(
-    seg_target, hit, policy: TmPolicy, *, min_fill: int = 100, seg_source: str | None = None
-) -> tuple[str, str, bool, str] | None:
+def fill_or_relock(seg_target, hit, policy: TmPolicy) -> tuple[str, str, bool, str] | None:
     """Decide what a tm_match step does with ONE in-scope segment (not produced this run,
     not already locked) given its STORED target and its TM lookup `hit`. Returns
     ``(action, band, hard, lock_mode)`` or ``None``:
 
-      * ("fill",   band, hard, lock_mode) -- STORED target EMPTY + a fillable hit
-        (match_pct >= min_fill; a below-100 fuzzy fill also passes LAW-TM-6 parity): fill
-        working[] with the hit target. `lock_mode` ("none"|"soft"|"hard") tells the
-        orchestrator how to lock it (a fuzzy "none" fill is committed but NOT locked --
-        §6.3). B4-safe (an empty slot is never an existing translation).
+      * ("fill",   band, hard, lock_mode) -- STORED target EMPTY + a fillable hit (an exact
+        100 or in-context 101): fill working[] with the hit target. B4-safe (an empty slot
+        is never an existing translation).
       * ("relock", band, hard, lock_mode) -- STORED target NON-EMPTY but already
-        BYTE-EQUALS the hit's target (Q9): a prior TM-EXACT fill that lost its lock band.
-        Re-lock is EXACT-ONLY BY CONSTRUCTION (L1): even if a caller passes a below-100
-        min_fill, a "fuzzy"-band hit whose target coincidentally byte-equals a NON-empty
-        stored target returns None here, never a re-lock -- re-lock exists only to restore a
-        lost lock on a value the machine wrote as an EXACT fill, so a fuzzy coincidence is
-        out of scope. (The orchestrator's re-lock scope passes min_fill=100 anyway, so this
-        guard is belt-and-braces, not the only line.)
-      * None -- below min_fill, no hit, a parity-failing fuzzy hit, OR a NON-EMPTY stored
-        target that DIFFERS from the hit. B4: a different existing translation is NEVER
-        clobbered and NEVER locked.
+        BYTE-EQUALS the hit's target (Q9): a prior TM fill that lost its lock band.
+      * None -- no hit, or a NON-EMPTY stored target that DIFFERS from the hit. B4: a
+        different existing translation is NEVER clobbered and NEVER locked.
 
-    F10: the equality is DELIBERATELY raw byte-equality, NOT Unicode-normalized (see the
-    prior wave's note -- re-lock only restores a lost lock on a value the machine already
-    wrote identically)."""
-    plan = plan_hit(hit, policy, min_fill=min_fill, seg_source=seg_source)
+    F10: the equality is DELIBERATELY raw byte-equality, NOT Unicode-normalized (re-lock only
+    restores a lost lock on a value the machine already wrote identically)."""
+    plan = plan_hit(hit, policy)
     if plan is None:
         return None
     band, hard = plan
@@ -462,11 +294,6 @@ def fill_or_relock(
     if not stored.strip():
         return ("fill", band, hard, mode)
     if stored == hit.get("target_text"):
-        # L1: re-lock is EXACT-ONLY by construction. A "fuzzy"-band hit whose target
-        # coincidentally byte-equals a NON-empty stored target is NOT a re-lock (re-lock
-        # restores a lost lock on a machine-written EXACT fill, never a fuzzy coincidence).
-        if band == "fuzzy":
-            return None
         return ("relock", band, hard, mode)
     return None
 

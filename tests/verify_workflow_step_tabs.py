@@ -335,7 +335,7 @@ with fresh_fixture() as (client, pages, _), sync_playwright() as pw:
         # control (document order) must stay open, because that is the one the browser
         # focuses; every offending tab is still marked.
         page.evaluate(
-            "document.querySelector('[name=s0_tm_examples_window]').value = '99';"
+            "document.querySelector('[name=s0_qe_threshold]').value = '500';"
             "document.querySelector('[name=s1_lqa_threshold]').value = '500';"
         )
         page.locator("#wftab-step-2").click()
@@ -345,13 +345,13 @@ with fresh_fixture() as (client, pages, _), sync_playwright() as pw:
         page.locator("#wftab-step-2").click()
         page.locator('form[action="/workflows/author/confirm"] button[type=submit]').first.click()
         assert page.locator(sel).get_attribute("id") == "wftab-step-1", "first invalid wins"
-        assert page.evaluate("document.activeElement.name") == "s0_tm_examples_window"
+        assert page.evaluate("document.activeElement.name") == "s0_qe_threshold"
         marked = page.evaluate(
             "[...document.querySelectorAll('[role=tab][data-invalid]')].map(t => t.id)"
         )
         assert marked == ["wftab-step-1", "wftab-step-2"], marked  # Name was fixed above
         # fixing the field clears the mark on that tab only
-        page.fill("[name=s0_tm_examples_window]", "3")
+        page.fill("[name=s0_qe_threshold]", "70")
         assert page.locator("#wftab-step-1").get_attribute("data-invalid") is None
         assert page.locator("#wftab-step-2").get_attribute("data-invalid") == "true"
         ctx.close()

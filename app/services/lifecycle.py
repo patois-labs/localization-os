@@ -113,6 +113,68 @@ def document_status(session: Session, doc: Document) -> str:
     return document_status_map(session, [doc.id]).get(doc.id, "new")
 
 
+def _has_target_py(target_text) -> bool:
+    """`length(trim(target_text)) > 0` as the database evaluates it: trim strips only
+    spaces (Postgres and SQLite alike), NULL is false. NOT str.strip(), which also strips
+    tabs and newlines and would call a target of "\\n" empty."""
+    return target_text is not None and len(target_text.strip(" ")) > 0
+
+
+def document_status_from_segments(segments) -> str:
+    """The derived status of ONE document from its segment rows already in hand (any object
+    with `.status` and `.target_text`; ALL the document's segments, every locale). Exactly
+    the buckets document_status_map counts in SQL, so a caller that loaded the segments
+    anyway does not run the grouped query a second time."""
+    untouched = open_ = approved = 0
+    for sg in segments:
+        if sg.status == "approved":
+            approved += 1
+        elif sg.status == "new" and not _has_target_py(sg.target_text):
+            untouched += 1
+        else:
+            open_ += 1
+    return _derive_document_status(untouched, open_, approved)
+
+
+def document_status_column():
+    """A correlated scalar subquery giving a Document row's derived status (the same value
+    document_status_map computes), so a list of documents reads its statuses in the same
+    statement as the documents. Use inside a select whose FROM is `document`.
+
+    The buckets are document_status_map's: approved; status "new" with no target text
+    (NULL, empty or spaces only: the SQL trim) is untouched; everything else is open."""
+    from sqlalchemy import and_, case, func, or_
+    from sqlalchemy import select as sa_select
+
+    approved = case((Segment.status == "approved", 1), else_=0)
+    untouched = case(
+        (
+            and_(
+                Segment.status == "new",
+                or_(
+                    Segment.target_text.is_(None), func.length(func.trim(Segment.target_text)) == 0
+                ),
+            ),
+            1,
+        ),
+        else_=0,
+    )
+    total = func.count()
+    n_untouched = func.sum(untouched)
+    status = case(
+        (or_(total == 0, n_untouched == total), "new"),
+        (func.sum(approved) == total, "done"),
+        (n_untouched > 0, "in_translation"),
+        else_="in_review",
+    )
+    return (
+        sa_select(status)
+        .where(Segment.document_id == Document.id)
+        .correlate(Document)
+        .scalar_subquery()
+    )
+
+
 # #580: the MANUAL status graph, enforced by the user-facing seams (web form, /api, CLI) via
 # transition_error(). Built from what the app already means by each status: the four working
 # states move freely among themselves and to completed or cancelled; a completed project
@@ -212,37 +274,53 @@ def set_status(
     return project
 
 
-def _all_segments_translated(session: Session, project_id: int) -> bool:
+def _all_segments_translated(session: Session, project_id: int, stopped_locales=None) -> bool:
     """True when the project has >=1 document AND every segment across its
     documents carries non-empty target_text. False for an empty project (no docs
-    or no segments) — never auto-complete work that hasn't started."""
+    or no segments) — never auto-complete work that hasn't started.
+
+    `stopped_locales`: the project's stopped target locales (raw `TargetLocale.locale`
+    values) when the caller has already read them (mark_completed_if_done reads them with
+    the project row); None reads them here."""
     # SPEC-key-based-projects 2.5: internal key documents are excluded. Their rows
     # include a SOFT-DELETED key's parked values (keys.trash_document), which would
     # hold a project below 100% forever; and a key project is continuous by design,
     # so "every string translated => the project is complete" is not a statement its
     # owner wants made automatically. A key project therefore never auto-completes.
-    doc_ids = [
-        d.id
-        for d in session.exec(
-            select(Document).where(Document.project_id == project_id, Document.fmt != "keys")
-        ).all()
-    ]
-    if not doc_ids:
-        return False
-    segs = session.exec(select(Segment).where(Segment.document_id.in_(doc_ids))).all()
+    # S4 query diet (ADR 0093): ONE read of just the two columns the predicate needs,
+    # joined to the project's non-key documents (it used to read every document row, then
+    # every full segment row of the project, after each finished translate job). No
+    # document -> no segment row -> False, as before.
+    from sqlalchemy import bindparam
+
+    from app import db
+
+    segs = session.exec(
+        db.prebuilt(  # S7b: built once (this runs after every translate job)
+            "lifecycle.project_segment_targets",
+            lambda: (
+                select(Segment.target_locale, Segment.target_text)
+                .join(Document, Document.id == Segment.document_id)
+                .where(Document.project_id == bindparam("project_id"), Document.fmt != "keys")
+            ),
+        ),
+        params={"project_id": project_id},
+    ).all()
     # A connected project's STOPPED languages are kept but no longer worked on: their open
     # segments must not hold the project below 100% for ever.
     from app.models import TargetLocale
     from app.services import languages_catalog
 
-    stopped = {
-        languages_catalog.normalize(tl.locale)
-        for tl in session.exec(
-            select(TargetLocale).where(
-                TargetLocale.project_id == project_id, TargetLocale.stopped_at.is_not(None)
-            )
-        ).all()
-    }
+    if stopped_locales is None:
+        stopped_locales = [
+            tl.locale
+            for tl in session.exec(
+                select(TargetLocale).where(
+                    TargetLocale.project_id == project_id, TargetLocale.stopped_at.is_not(None)
+                )
+            ).all()
+        ]
+    stopped = {languages_catalog.normalize(loc) for loc in stopped_locales}
     if stopped:
         segs = [s for s in segs if languages_catalog.normalize(s.target_locale) not in stopped]
     if not segs:
@@ -256,10 +334,32 @@ def mark_completed_if_done(session: Session, project_id: int, actor: str = "syst
     COMPLETED/CLOSED/CANCELLED project is left alone) and safe on partial multi-
     locale projects (the predicate demands ALL segments translated). Returns True
     when it transitioned, else False."""
-    project = session.get(Project, project_id)
+    # S4 follow-up: the project and its stopped target locales in one read (a project with
+    # none comes back once with locale None).
+    from sqlalchemy import bindparam
+
+    from app import db
+    from app.models import TargetLocale
+
+    rows = session.exec(
+        db.prebuilt(  # S7b: built once (this runs after every translate job)
+            "lifecycle.project_stopped_locales",
+            lambda: (
+                select(Project, TargetLocale.locale)
+                .outerjoin(
+                    TargetLocale,
+                    (TargetLocale.project_id == Project.id) & TargetLocale.stopped_at.is_not(None),
+                )
+                .where(Project.id == bindparam("project_id"))
+            ),
+        ),
+        params={"project_id": project_id},
+    ).all()
+    project = rows[0][0] if rows else None
     if project is None or project.status not in _ACTIVE_FOR_COMPLETE:
         return False
-    if not _all_segments_translated(session, project_id):
+    stopped = [loc for _p, loc in rows if loc is not None]
+    if not _all_segments_translated(session, project_id, stopped_locales=stopped):
         return False
     set_status(session, project_id, ProjectStatus.COMPLETED, actor=actor)
     return True

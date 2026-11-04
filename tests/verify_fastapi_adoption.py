@@ -212,9 +212,9 @@ def test_forms():
             patch.object(admin.settings, "set_many") as save,
             patch.object(admin.audit, "log"),
         ):
-            # Existing non-empty Form default contract, including supplied empty.
-            assert post("/setup-ai/tm", {"tm_context_floor": ""}).status_code == 303
-            assert save.call_args.args[0]["tm_context_floor"] == "95"
+            # ADR 0102: the context floor is gone; a stale form field is ignored, not stored.
+            assert post("/setup-ai/tm", {"tm_context_floor": "90"}).status_code == 303
+            assert "tm_context_floor" not in save.call_args.args[0]
             save.reset_mock()
             auth.reset_mock()
             # Required empty text is folded to missing before the handler runs.

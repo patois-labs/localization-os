@@ -241,8 +241,23 @@ def verify_key(full_key: str) -> ApiKey | None:
     digest = _hash(full_key)
     matched = None
     with Session(engine) as s:
-        rows = s.exec(select(ApiKey).where(ApiKey.key_hash == digest)).all()
-        for key in rows:
+        # S3c (ADR 0097): the key and its owner in ONE joined read (this runs on every
+        # authenticated /api request). The owner rides on the returned key as `_owner`, so
+        # deps.api_identity does not read the same user row again.
+        from sqlalchemy import bindparam
+
+        rows = s.exec(
+            _db.prebuilt(  # S7b round 2: built once; this runs on every /api request
+                "apikeys.verify_key",
+                lambda: (
+                    select(ApiKey, User)
+                    .join(User, User.id == ApiKey.user_id, isouter=True)
+                    .where(ApiKey.key_hash == bindparam("digest"))
+                ),
+            ),
+            params={"digest": digest},
+        ).all()
+        for key, user in rows:
             if not key.active:
                 continue
             # Expired = revoked, exactly (#270 r2-apiauth-10): an expired key is
@@ -250,9 +265,10 @@ def verify_key(full_key: str) -> ApiKey | None:
             # unknown or revoked key gets; nothing ever reveals the key existed.
             if key_is_expired(key):
                 continue
-            user = s.get(User, key.user_id)
             if not (user and user.active):
                 continue
+            s.expunge(user)
+            key._owner = user
             # EXPUNGE the matched row with its loaded attributes INTACT, then return it.
             # The SELECT above loaded every column, and expunge (unlike commit/refresh)
             # never EXPIRES anything, so the caller can read key.user_id / key.scopes after
@@ -278,20 +294,40 @@ def verify_key(full_key: str) -> ApiKey | None:
     # standalone detached row. attempts=1 (fold-in): this is the AUTH HOT PATH of the very
     # flood this fixes — every authenticated request runs it — so a lost stamp must NOT block
     # for the bounded retry's worst-case (~15s at 3 attempts). One try, then drop.
+    #
+    # S3c (ADR 0097): at most once per LAST_USED_RESOLUTION, as ONE conditional UPDATE with no
+    # read. Writing and committing the same key row on every request serialized every request
+    # of every process sharing a key behind that row's lock (the multi-web read tail on
+    # Postgres). last_used now means "last used, to the minute".
+    now = datetime.utcnow()
+    cutoff = now - LAST_USED_RESOLUTION
+    if matched.last_used is not None and matched.last_used >= cutoff:
+        return matched
     try:
+        from sqlalchemy import or_, update
+
         with Session(engine) as s2:
 
             def _stamp():
-                row = s2.get(ApiKey, matched.id)
-                if row is not None:
-                    row.last_used = datetime.utcnow()
-                    s2.add(row)
+                s2.exec(
+                    update(ApiKey)
+                    .where(
+                        ApiKey.id == matched.id,
+                        or_(ApiKey.last_used.is_(None), ApiKey.last_used < cutoff),
+                    )
+                    .values(last_used=now)
+                )
 
             _db.commit_with_retry(s2, stage=_stamp, attempts=1)
     except Exception:
         # debug, not warning: this is the per-request auth hot path under lock contention.
         log.debug("api key last_used stamp dropped for key id %s", matched.id, exc_info=True)
     return matched
+
+
+#: How fresh `ApiKey.last_used` is kept (S3c, ADR 0097): the stamp is skipped while the stored
+#: value is newer than this.
+LAST_USED_RESOLUTION = timedelta(seconds=60)
 
 
 def list_keys(user_id: int) -> list[ApiKey]:

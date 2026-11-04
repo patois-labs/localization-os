@@ -83,7 +83,7 @@
   var err = query.get('err') || '';
   if (/^(status|name|due|content_type|segmentation|pair_providers)$/.test(err)) select('project-settings');
   if (query.has('langs_added') || query.has('locale_added') || query.has('locale_removed')) select('project-languages');
-  if (query.has('tm_imported') || query.has('tm_source_added') || query.has('tm_source_removed') || query.has('tm_source_absent')) select('project-memory');
+  if (query.has('tm_imported') || query.has('tm_import_job') || query.has('tm_source_added') || query.has('tm_source_removed') || query.has('tm_source_absent')) select('project-memory');
   if (query.has('gl_entries') || query.has('gl_added') || query.has('glossary_pinned') || query.has('glossary_unpinned') || query.has('glossary_pin_absent') || query.has('glossary_cursor')) select('project-glossary');
   if (query.has('member_msg')) select('project-members');
   if (location.hash) revealHash();

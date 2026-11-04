@@ -2,7 +2,9 @@
 
 Proves the JobQueue port (app/ports/jobqueue.py) both ways:
 
-  FLAG-OFF (job_queue_backend="memory", the DEFAULT) is BYTE-IDENTICAL to pre-Train-S:
+  DEFAULT (S2): job_queue_backend is "db" on a fresh install and configure_at_boot arms DbJobQueue.
+
+  OPT-OUT (job_queue_backend="memory") is BYTE-IDENTICAL to pre-Train-S:
     * jobqueue.get() is the InMemoryJobQueue wrapping a queue.Queue;
     * jobs.submit -> a worker claims off the in-memory queue -> the job COMPLETES;
     * jobs.recover_interrupted still fails a RUNNING row and re-runs a QUEUED one.
@@ -65,8 +67,23 @@ def _mk_job(kind="test_jq_noop", status=JobStatus.QUEUED, payload=None):
         return job.id
 
 
+def test_default_is_db():
+    # S2: a fresh install defaults to the durable queue, and boot arms it.
+    assert settings.get("job_queue_backend") == "db", settings.get("job_queue_backend")
+    assert isinstance(jobqueue.get(), jobqueue.InMemoryJobQueue), (
+        "port default is the memory adapter"
+    )
+    jobqueue.configure_at_boot()
+    assert isinstance(jobqueue.get(), jobqueue.DbJobQueue), type(jobqueue.get()).__name__
+    assert jobqueue.DB_BACKEND_ARMED
+    ports.unregister("jobqueue")
+    jobqueue.DB_BACKEND_ARMED = False  # the next sections start from an unarmed process
+    print("  default: job_queue_backend=db; configure_at_boot arms DbJobQueue")
+
+
 def test_flag_off_memory_default():
-    # The default backend is the in-memory adapter -- byte-identical dispatch to pre-Train-S.
+    # The memory opt-out: the in-memory adapter -- byte-identical dispatch to pre-Train-S.
+    settings.set_many({"job_queue_backend": "memory"})
     assert settings.get("job_queue_backend") == "memory", settings.get("job_queue_backend")
     q = jobqueue.get()
     assert isinstance(q, jobqueue.InMemoryJobQueue), type(q).__name__
@@ -101,6 +118,11 @@ def test_flag_off_memory_default():
         assert "restart" in (s.get(Job, rid).error or "")
     _wait_job(qid, (JobStatus.COMPLETED,))
     print("  flag-off: recover_interrupted RUNNING->FAILED, QUEUED->re-run (unchanged)")
+    # The worker threads started above re-read the active adapter on every claim. The DB sections
+    # below claim by hand and race those threads (the DB queue wakes its claimers on enqueue),
+    # so park the workers: no new claims once their in-flight memory claim times out.
+    jobs._draining.set()
+    time.sleep(jobs._CLAIM_TIMEOUT_S + 0.7)
 
 
 def test_flag_on_db_backend():
@@ -416,13 +438,14 @@ def test_fail_loud_boot():
 
 def main() -> None:
     init_db()
+    test_default_is_db()
     test_flag_off_memory_default()
     test_two_process_crash_boot()
     test_instance_fence()
     test_flag_on_db_backend()
     test_fail_loud_boot()
     # Restore the default backend + adapter (defensive; the process exits next anyway).
-    settings.set_many({"job_queue_backend": "memory"})
+    settings.set_many({"job_queue_backend": "db"})
     ports.unregister("jobqueue")
     print("JOB QUEUE OK")
 

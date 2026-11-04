@@ -667,9 +667,9 @@ TOOLS: tuple[Tool, ...] = (
         family="projects",
         summary=(
             "Read the work: every project and customer this key can see, or one "
-            "project's settings, one project's documents, or one project's 7-band "
-            "word-based TM-leverage breakdown. A project id that is not yours answers "
-            "not-found rather than forbidden, so absence here is never proof the id "
+            "project's settings, one project's documents, or one project's leverage report "
+            "(101 % in-context, repetitions, 100 % exact, new). A project id that is not yours "
+            "answers not-found, not forbidden, so absence here is never proof the id "
             "does not exist."
         ),
         tier="read",
@@ -693,8 +693,9 @@ TOOLS: tuple[Tool, ...] = (
                         '"projects" (default) lists every project and customer; '
                         '"project" returns one project\'s full settings; '
                         '"documents" returns just that project\'s document list; '
-                        '"leverage" returns the 7-band word-based TM-leverage '
-                        "breakdown; fields returns one project's custom field values and "
+                        '"leverage" returns the leverage report (words per target '
+                        "language in four bands: 101 % in-context, repetitions, 100 % exact, "
+                        "new); fields returns one project's custom field values and "
                         "the fields that apply to it. The last four need project_id."
                     ),
                 },
@@ -1361,6 +1362,7 @@ TOOLS: tuple[Tool, ...] = (
         routes=(
             ("GET", "/api/jobs/{jid}"),
             ("GET", "/api/jobs"),
+            ("GET", "/api/jobs/{jid}/leverage"),
         ),
         input_schema={
             "type": "object",
@@ -1372,6 +1374,16 @@ TOOLS: tuple[Tool, ...] = (
                         "slow tool (connector_*, extract_terms, "
                         "translate_image) returned while still running. "
                         "Omit to LIST recent jobs instead of polling one."
+                    ),
+                },
+                "view": {
+                    "type": "string",
+                    "enum": ["status", "leverage"],
+                    "default": "status",
+                    "description": (
+                        '"status" (default) polls or lists jobs; "leverage" returns the '
+                        "leverage report for the documents and languages job_id covered "
+                        "(needs job_id; a job with no documents is an error)."
                     ),
                 },
                 "status": {
@@ -2498,11 +2510,10 @@ TOOLS: tuple[Tool, ...] = (
                             "term list) with glossary_concept_cap (default 10) and "
                             "glossary_token_cap (default 0 = inherit the install cap), "
                             "and the tm_match-only TM policy fields "
-                            "tm_fill_threshold (min match %% to fill, 50-100; 100 = exact "
-                            "only), tm_fuzzy_lock_mode (none/soft/policy), tm_lock_ice, "
-                            "tm_hundreds_enter_lqa, tm_context_floor, tm_pool_selection (a "
+                            "tm_lock_ice, tm_hundreds_enter_lqa, tm_pool_selection (a "
                             "list of readable project ids; omit any of these to inherit the "
-                            "global default). "
+                            "global default). TM fills exact matches only, so there is no "
+                            "fill threshold. "
                             "An llm_agent step's prompt_text MUST contain {text} (or "
                             "{prior}); an unknown field is refused, not dropped."
                         ),
@@ -2599,8 +2610,7 @@ TOOLS: tuple[Tool, ...] = (
                         "clears it, an empty string clears a text field. EXCEPTION -- the "
                         "tm_match TRISTATE overrides tm_lock_ice / tm_hundreds_enter_lqa "
                         "take true/false as the OVERRIDE (on/off) and null to CLEAR back to "
-                        "inherit (the global); tm_fill_threshold / tm_fuzzy_lock_mode / "
-                        "tm_context_floor / tm_pool_selection take null to clear (an empty "
+                        "inherit (the global); tm_pool_selection takes null to clear (an empty "
                         "list on tm_pool_selection means read NO pool, distinct from null = "
                         "all readable). An unknown field is refused, not dropped."
                     ),
@@ -3570,7 +3580,9 @@ TOOLS: tuple[Tool, ...] = (
                     "type": "string",
                     "description": (
                         "import: absolute path to a TMX or Trados .sdltm file on THIS machine. "
-                        "Use this or `data` (an .sdltm is binary: file_path only)."
+                        "Use this or `data` (an .sdltm is binary: file_path only). A file "
+                        "over 8 MB is imported in the background: the reply carries a job_id "
+                        "to follow with job_status (the counts are in its result)."
                     ),
                 },
                 "data": {"type": "string", "description": "import: the TMX text inline."},

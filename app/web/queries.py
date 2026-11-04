@@ -103,13 +103,13 @@ def _score_sum_count(session, doc_ids=None):
 
 def _leverage_band_counts(session, doc_ids) -> dict[str, int]:
     """SQL twin of tm.leverage_bands(segments): the same four-way bucketing (no target =
-    untranslated, 100 = exact, any other cited match = fuzzy, else new) done by a CASE in
-    the database, so no Segment row is loaded."""
+    untranslated, 101 = context, 100 = exact, else new; ADR 0102) done by a CASE in the
+    database, so no Segment row is loaded."""
     bands = tm.leverage_bands([])  # the zeroed dict in the canonical band order
     band = case(
         (or_(Segment.target_text.is_(None), Segment.target_text == ""), "untranslated"),
+        (Segment.tm_match_pct >= 101, "context"),
         (Segment.tm_match_pct == 100, "exact"),
-        (Segment.tm_match_pct.is_not(None), "fuzzy"),
         else_="new",
     )
     for key, n in _group_counts(session, band, in_col=Segment.document_id, ids=doc_ids).items():
@@ -183,17 +183,11 @@ def _project_counts(session, doc_ids):
     }
 
 
-def _project_stats(session, doc_ids, with_leverage7=False):
-    """Dashboard rollup across a project's documents.
-
-    `with_leverage7` (project DETAIL page only — never the multi-project list) adds the
-    CV-1 7-band WORD leverage, computed from the SAME already-loaded `segs` (M4: no
-    second full segment load per render). The segs are collected across chunks then sorted
-    ONCE globally by (order_index, id) — matching vendor_cost.project_leverage's global
-    sort — so the leverage repetition split is byte-identical to that loader seam even
-    past the chunk boundary and whatever order the caller's doc_ids arrive in (N1 + L1)."""
+def _project_stats(session, doc_ids):
+    """Dashboard rollup across a project's documents (the word-based leverage report is
+    app.services.leverage, called by the project page itself; ADR 0102)."""
     if not doc_ids:
-        out = {
+        return {
             "documents": 0,
             "segments": 0,
             "status": {},
@@ -203,22 +197,13 @@ def _project_stats(session, doc_ids, with_leverage7=False):
             "runs": 0,
             "tm_leverage": tm.leverage_bands([]),
         }
-        if with_leverage7:
-            from app.kernel import vendor_cost
-
-            est = vendor_cost.leverage_over_segments([])
-            out["leverage7"] = est
-            out["leverage7_rows"] = vendor_cost.estimate_band_rows(est)
-        return out
-    # Chunk the IN() at 150 (SQLite variable limit) like the sibling fetchers — this path
-    # now carries the 7-band leverage, so a >999-doc project must not blow the bind (N1).
+    # Chunk the IN() at 150 (SQLite variable limit) like the sibling fetchers: a >999-doc
+    # project must not blow the bind (N1).
     segs = []
     _CHUNK = 150
     for _i in range(0, len(doc_ids), _CHUNK):
         _batch = doc_ids[_i : _i + _CHUNK]
         segs.extend(session.exec(select(Segment).where(Segment.document_id.in_(_batch))).all())
-    # ONE global sort after collection (identical to project_leverage) so the leverage
-    # repetition split matches across surfaces regardless of doc-id / chunk order.
     segs.sort(key=lambda s: (s.order_index, s.id))
     # #583 (review): the detail page agrees with the list and dashboard, so the rows of a
     # locale still being added (chunked clone) are left out of every count and band here.
@@ -248,7 +233,7 @@ def _project_stats(session, doc_ids, with_leverage7=False):
     approved = status.get(SegStatus.APPROVED, 0)
     # TM-leverage rollup (viz quick-win): reuses the SAME `segs` list already
     # fetched for the status counts above - no new query, no new scope logic.
-    out = {
+    return {
         "documents": len(doc_ids),
         "segments": total,
         "status": status,
@@ -258,13 +243,6 @@ def _project_stats(session, doc_ids, with_leverage7=False):
         "runs": len(runs),
         "tm_leverage": tm.leverage_bands(segs),
     }
-    if with_leverage7:
-        from app.kernel import vendor_cost
-
-        est = vendor_cost.leverage_over_segments(segs)
-        out["leverage7"] = est
-        out["leverage7_rows"] = vendor_cost.estimate_band_rows(est)
-    return out
 
 
 def _applicable_workflows(session, project, doc=None, with_excluded=False):

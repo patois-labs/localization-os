@@ -13,8 +13,8 @@ Two link tables now exist, and they use two DIFFERENT mechanisms on purpose:
 
 GROUPS
 
-  [A] THE MATCHING PAYOFF, AND ITS EXACT REVERSAL. All five read paths -- 100% exact
-      short-circuit, fuzzy, the batch path, TM few-shot examples and full-text
+  [A] THE MATCHING PAYOFF, AND ITS EXACT REVERSAL. All the read paths -- 100% exact
+      short-circuit, the batch path and full-text (fuzzy was removed, ADR 0102)
       -- start returning the attached project's rows, and the
       WRITE side does not move: count/ft_count/TMX export/write-back stay own-project,
       so a project never starts writing into or exporting somebody else's memory.
@@ -186,9 +186,10 @@ def _tm_probe(
     covers every path _tm_read_scope feeds, so a future change that widens ONE of them
     without going through the seam shows up here as a difference."""
     exact = tm.lookup(s, pid, query, "en-US", "fr-FR")
-    fuzzy = tm.lookup(s, pid, fuzzy_query, "en-US", "fr-FR", min_score=60)
-    batch = tm.lookup_batch(s, pid, [query, fuzzy_query], "en-US", "fr-FR", min_score=60)
-    examples = tm.example_matches_batch(s, pid, [fuzzy_query], "en-US", "fr-FR", floor=60, window=3)
+    # ADR 0102: no fuzzy leg. The near-variant query is still probed: it must miss everywhere.
+    fuzzy = tm.lookup(s, pid, fuzzy_query, "en-US", "fr-FR")
+    batch = tm.lookup_batch(s, pid, [query, fuzzy_query], "en-US", "fr-FR")
+    examples = tm.example_matches_hybrid(s, pid, [fuzzy_query], "en-US", "fr-FR", window=3)
     return {
         "exact": exact and (exact["match_pct"], exact["target_text"]),
         "fuzzy": fuzzy and (fuzzy["match_pct"], fuzzy["target_text"]),
@@ -253,16 +254,19 @@ def test_a_attach_widens_every_read_path_and_detach_restores():
         after = _tm_probe(s, tpid)
     assert after["exact"] == (100, "Le renard brun rapide saute par-dessus."), after
     print("  [A2] the 100% exact short-circuit returns the ATTACHED project's row")
-    assert after["fuzzy"] and after["fuzzy"][0] < 100, after
-    assert after["fuzzy"][1] == "Le renard brun rapide saute par-dessus.", after
+    # ADR 0102: the near variant stays a miss after the attach (there is no fuzzy leg to widen).
+    assert after["fuzzy"] is None, after
     assert (
         after["batch"]["The quick brown fox jumps over it."]
         == "Le renard brun rapide saute par-dessus."
     )
-    print("  [A3] fuzzy + the batch path return attached rows (match_pct %d)" % after["fuzzy"][0])  # noqa: UP031
+    assert after["batch"]["The quick brown fox jumped over it."] is None, after
+    print("  [A3] the batch path returns the attached row; the near variant still misses")
+    # ADR 0102: few-shot examples are semantic-only, and semantic examples need a real
+    # embedder (never the offline mock), so nothing can be drawn here.
     ex = after["examples"]["The quick brown fox jumped over it."]
-    assert len(ex) == 2 and "Le renard brun rapide fait la sieste." in ex, after
-    print("  [A4] TM few-shot examples draw %d pairs from the attached project" % len(ex))  # noqa: UP031
+    assert ex == [], after
+    print("  [A4] TM few-shot examples are semantic-only (none offline), attached or not")
     assert after["ft"] == "Corps du document ici.", after
     print("  [A5] the full-text path honours it too")
     # ...but CONCORDANCE does NOT (isolation review ISO-3). Every MATCH path above
@@ -380,26 +384,7 @@ def test_a_own_project_wins_ties():
         "  [A11] the winner is the same with the insertion order REVERSED -- "
         "decided by the rule, not by rowid"
     )
-
-    # The fuzzy path shares the tie-break, so a borrowed row cannot win a tie there
-    # either (it is the path that feeds suggestions and few-shot examples).
-    with Session(engine) as s:
-        cust3 = _customer(s, "Tie Corp Three")
-        src3 = _project(s, "A tie source 3", customer_id=cust3.id)
-        tgt3 = _project(s, "A tie target 3", customer_id=cust3.id)
-        s3id, t3id = src3.id, tgt3.id
-        NEAR = "Discard the draft before leaving."
-        tm.write_back(s, s3id, NEAR, "BORROWED-FUZZY", "en-US", "fr-FR")
-        tm.write_back(s, t3id, NEAR, "OWN-FUZZY", "en-US", "fr-FR")
-        project_sources.add_tm_source(s, t3id, s3id)
-    with Session(engine) as s:
-        fz = tm.lookup(s, t3id, "Discard the draft before leaving!", "en-US", "fr-FR", min_score=60)
-        assert fz and fz["match_pct"] < 100, fz
-        assert fz["target_text"] == "OWN-FUZZY", fz
-    print(
-        "  [A12] the FUZZY path shares the tie-break, so a borrowed row cannot win "
-        "an equal-score suggestion either"
-    )
+    # ADR 0102: the fuzzy path (and its [A12] tie-break cell) was removed with the fuzzy engine.
 
 
 def test_a_fulltext_precedence():
@@ -1150,8 +1135,8 @@ def test_b_global_null_row_still_excluded_under_the_gate():
                 ]
                 is None
             )
-            ex = tm.example_matches_batch(
-                s, tpid, ["Org-less global rows."], "en-US", "fr-FR", floor=60, window=3
+            ex = tm.example_matches_hybrid(
+                s, tpid, ["Org-less global rows."], "en-US", "fr-FR", window=3
             )
             assert not any("GLOBAL-LEAK" in e["target_text"] for v in ex.values() for e in v), ex
         print(

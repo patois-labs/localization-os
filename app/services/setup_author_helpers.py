@@ -619,7 +619,7 @@ def _workflow_prompt(description: str, catalogs: dict) -> str:
         "step; leave it null to accept the default 90. It is distinct from qe_threshold "
         "(the per-segment QE routing cutoff) and is ignored on any non-lqa step. "
         "needs_review=true flags a step for a linguist to check before it is used. "
-        "tm_examples defaults true. "
+        "tm_examples defaults false (TM examples need an add-on). "
         "run_condition is an OPTIONAL pre-step GUARD: set it to run a step ONLY when the "
         "immediately-prior quality outcome matches. ref 'prev_lqa' reads the most recent "
         "lqa step; ref 'prev_qe' reads the most recent qe_gate step. op 'failed'/'passed' "

@@ -504,6 +504,73 @@ def resolve_profile(session: Session, project: Project) -> SegmentationProfile |
     return None
 
 
+def resolve_profile_summary(session: Session, project: Project) -> tuple[int, str] | None:
+    """(id, name) of the profile resolve_profile would return, or None, reading only those two
+    columns (never the `srx_blob` ruleset). Same chain, same dangling-id rule, same multi-org
+    filter on the system default; for read-backs (`project show`) that print the id and name
+    and nothing else. A customer row already in the session is used as is (no read)."""
+    if project is None:
+        return None
+    from sqlalchemy import bindparam
+
+    from app import db
+
+    # Each statement is built once per process (S7b): a select built per call costs as much CPU
+    # as running it, and this runs on every project read-back.
+    def _by_id():
+        return select(SegmentationProfile.id, SegmentationProfile.name).where(
+            SegmentationProfile.id == bindparam("sid")
+        )
+
+    if project.segmentation_profile_id:
+        row = session.exec(
+            db.prebuilt("segmentation_profiles.summary_by_id", _by_id),
+            params={"sid": project.segmentation_profile_id},
+        ).first()
+        if row is not None:
+            return (row[0], row[1])
+    if project.customer_id:
+        cust = session.get(Customer, project.customer_id)
+        if cust and cust.default_segmentation_profile_id:
+            row = session.exec(
+                db.prebuilt("segmentation_profiles.summary_by_id", _by_id),
+                params={"sid": cust.default_segmentation_profile_id},
+            ).first()
+            if row is not None:
+                return (row[0], row[1])
+    from app.services import access
+
+    if access.multi_org_active():
+        org = getattr(project, "org_id", None)
+        if org is None:  # a bound None compiles to "= NULL": the IS NULL shape is its own statement
+            q = select(SegmentationProfile.id, SegmentationProfile.name).where(
+                SegmentationProfile.is_system_default == True,  # noqa: E712
+                SegmentationProfile.org_id == None,  # noqa: E711
+            )
+            row = session.exec(q).first()
+        else:
+            row = session.exec(
+                db.prebuilt(
+                    "segmentation_profiles.summary_system_org",
+                    lambda: select(SegmentationProfile.id, SegmentationProfile.name).where(
+                        SegmentationProfile.is_system_default == True,  # noqa: E712
+                        SegmentationProfile.org_id == bindparam("org"),
+                    ),
+                ),
+                params={"org": org},
+            ).first()
+    else:
+        row = session.exec(
+            db.prebuilt(
+                "segmentation_profiles.summary_system",
+                lambda: select(SegmentationProfile.id, SegmentationProfile.name).where(
+                    SegmentationProfile.is_system_default == True  # noqa: E712
+                ),
+            )
+        ).first()
+    return (row[0], row[1]) if row is not None else None
+
+
 def resolve_ruleset(session: Session, project: Project) -> bytes:
     """The raw SRX ruleset bytes a project segments under (the resolved profile's
     blob, or — when the chain lands on None — the GLOBALLY-ACTIVE ruleset). This is

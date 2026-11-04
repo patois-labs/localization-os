@@ -478,6 +478,9 @@ def no_raw_pool_fanout():
         ("ai_optout.py", "pool.submit(contextvars.copy_context().run"),  # the seam itself
         ("health.py", "_probe_pool.submit(db_ready)"),  # readiness probe: no engine calls
         ("vendors.py", "getElementById('sso').submit()"),  # an HTML form, not a pool
+        # tm_import_job.submit only wraps jobs.submit (ADR 0094), the cost-sink seam
+        ("api_cli_projects_2.py", "jid = tm_import_job.submit("),
+        ("projects_glossary.py", "jid = tm_import_job.submit("),
         (
             "notify.py",
             "_POOL.submit(deliver_ids, row_ids)",

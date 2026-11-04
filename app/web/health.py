@@ -227,7 +227,7 @@ async def ready():
         ok, detail = await asyncio.wait_for(
             asyncio.shield(asyncio.wrap_future(cf)), config.READY_PROBE_TIMEOUT_S
         )
-    except (TimeoutError, asyncio.TimeoutError):
+    except TimeoutError:
         # Only THIS caller stops waiting; the worker thread keeps going and its result
         # still serves whoever else is joined to it.
         return JSONResponse(

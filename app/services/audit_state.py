@@ -48,6 +48,18 @@ _PROCESS_GUARD = threading.Lock()
 _PROCESS_USERS = 0
 _PROCESS_FD = None
 _PROCESS_TIMEOUT = 30.0
+# S3c fair mode (split roles only, see process_lock): tenure cap, the pause a releasing process
+# leaves its peers, the peers' poll interval while they wait, and the waiter-mark handle.
+_PROCESS_COND = threading.Condition(_PROCESS_GUARD)
+_LOCAL = threading.local()
+_TENURE_AT = 0.0
+_YIELDING = False
+_RESUME_AT = 0.0
+_TENURE_MAX_S = 0.05
+_YIELD_PAUSE_S = 0.006
+_FAIR_POLL_S = 0.002
+_YIELD_WAIT_MAX_S = 1.0
+_WAIT_FD = None
 _FILES = {}  # path -> (stat signature, bytes, trusted) for the rarely-changing trust files
 # The caches below are consulted ONLY inside `cached_trust()` (the audit write path). Verification,
 # reset-anchor, rotate and every other maintenance caller read the files fresh every time.
@@ -72,47 +84,154 @@ def process_lock():
     All writers of a DB must share DATA_DIR (the keys and witness already require it).
     Never unlink the lock file: replacing its inode would allow two lock owners.
     """
-    global _PROCESS_USERS, _PROCESS_FD
-    with _PROCESS_GUARD:
+    global _PROCESS_USERS, _PROCESS_FD, _TENURE_AT, _YIELDING, _RESUME_AT
+    depth = getattr(_LOCAL, "depth", 0)
+    # S3c (ADR 0097): in the split roles (N web + M worker processes writing one chain) a
+    # process kept the OS lock for as long as ANY of its threads was a user, so a steadily
+    # busy process never let go and its peers polled until the 30 s timeout (measured: one
+    # process wrote 1,453 rows while two peers wrote 8 each; the multi-web save tail). Fair
+    # mode: a process that cannot get the lock marks itself as waiting on a side file
+    # (`.audit_lock.wait`); a holder that has held the lock for _TENURE_MAX_S and sees that
+    # mark stops admitting new outermost entrants, lets its current users finish, releases,
+    # and holds its own entrants back _YIELD_PAUSE_S so the waiting peer (polling every
+    # _FAIR_POLL_S) takes the lock. Without a waiting peer nothing changes, so an uncontended
+    # process pays one non-blocking probe per tenure. Nested entries (a thread already inside)
+    # never wait, so nothing deadlocks. The single `all` process keeps the old behaviour.
+    fair = config.ROLE != "all"
+    with _PROCESS_COND:
+        if depth == 0 and fair:
+            if not _YIELDING and _PROCESS_USERS and time.monotonic() - _TENURE_AT > _TENURE_MAX_S:
+                if _peer_waiting():
+                    _YIELDING = True
+                else:
+                    _TENURE_AT = time.monotonic()  # probe again one tenure later
+            # Gate LOW-1: the yield wait is bounded. Past _YIELD_WAIT_MAX_S this entrant joins
+            # the current holders instead (always safe while they still hold the lock), so an
+            # unexpected lock inversion inside the process can slow fairness, never wedge it.
+            give_up = time.monotonic() + _YIELD_WAIT_MAX_S
+            while _YIELDING:
+                if not _PROCESS_USERS:
+                    _YIELDING = False
+                    _RESUME_AT = time.monotonic() + _YIELD_PAUSE_S
+                    _PROCESS_COND.notify_all()
+                    break
+                if time.monotonic() >= give_up:
+                    break
+                _PROCESS_COND.wait(0.1)
+            while (left := _RESUME_AT - time.monotonic()) > 0:
+                _PROCESS_COND.wait(left)
         if not _PROCESS_USERS:
             fd = None
+            marked = False
             try:
                 config.private_directory(config.DATA_DIR)
                 fd = os.open(config.DATA_DIR / ".audit_lock", os.O_CREAT | os.O_RDWR, 0o600)
                 deadline = time.monotonic() + _PROCESS_TIMEOUT
                 while True:
                     try:
-                        if os.name == "nt":
-                            import msvcrt
-
-                            os.lseek(fd, 0, os.SEEK_SET)
-                            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-                        else:
-                            import fcntl
-
-                            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        _try_lock(fd)
                         break
                     except OSError as exc:
                         if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
                             raise
                         if time.monotonic() >= deadline:
                             raise TimeoutError("Audit process lock timed out") from exc
-                        time.sleep(0.01)
+                        if fair and not marked:
+                            marked = _mark_waiting()
+                        time.sleep(_FAIR_POLL_S if fair else 0.01)
             except (OSError, ImportError) as exc:
                 if fd is not None:
                     os.close(fd)
                 raise ProcessLockError("Audit process lock unavailable") from exc
+            finally:
+                if marked:
+                    _unmark_waiting()
             _PROCESS_FD = fd
+            _TENURE_AT = time.monotonic()
         _PROCESS_USERS += 1
+    _LOCAL.depth = depth + 1
     try:
         yield
     finally:
-        with _PROCESS_GUARD:
+        _LOCAL.depth = depth
+        with _PROCESS_COND:
             _PROCESS_USERS -= 1
+            _PROCESS_COND.notify_all()
             if not _PROCESS_USERS:
                 # Closing releases the OS lock, including on process termination.
                 os.close(_PROCESS_FD)
                 _PROCESS_FD = None
+
+
+def held_by_this_thread() -> bool:
+    """True while the calling thread is inside `process_lock` (a nested audit write must not
+    wait for another thread's group, which needs the locks this thread holds)."""
+    return getattr(_LOCAL, "depth", 0) > 0
+
+
+def _try_lock(fd) -> None:
+    """Non-blocking exclusive lock on byte 0 of `fd`; OSError (EACCES/EAGAIN) when held."""
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock(fd) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def _wait_fd():
+    """This process's handle on the waiter-mark file (opened once, kept open)."""
+    global _WAIT_FD
+    if _WAIT_FD is None:
+        _WAIT_FD = os.open(config.DATA_DIR / ".audit_lock.wait", os.O_CREAT | os.O_RDWR, 0o600)
+    return _WAIT_FD
+
+
+def _mark_waiting() -> bool:
+    """Mark this process as waiting for the audit lock. False when another waiter already
+    holds the mark (the holder sees a waiting peer either way) or the mark is unavailable."""
+    try:
+        _try_lock(_wait_fd())
+        return True
+    except OSError:
+        return False
+
+
+def _unmark_waiting() -> None:
+    with suppress(OSError):
+        _unlock(_wait_fd())
+
+
+def _peer_waiting() -> bool:
+    """True when another process holds the waiter mark (it is polling for the audit lock).
+    Only lock contention counts: a mark file that cannot be opened means no known waiter
+    (gate LOW-2), so the holder does not yield on every tenure for nobody."""
+    try:
+        fd = _wait_fd()
+    except OSError:
+        return False
+    try:
+        _try_lock(fd)
+    except OSError as exc:
+        return exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK)
+    with suppress(OSError):
+        _unlock(_wait_fd())
+    return False
 
 
 @contextmanager

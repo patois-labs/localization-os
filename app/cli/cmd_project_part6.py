@@ -4,6 +4,7 @@ Documented in: docs/architecture/content-and-projects.md
 """
 
 from app import branding
+from app.cli import _leverage_out
 from app.cli._common import (
     bounded_id,
 )
@@ -232,10 +233,11 @@ def _register_project(subparsers) -> None:
 
     p = sub.add_parser(
         "leverage",
-        help="7-band WORD-based TM-leverage breakdown "
-        "(repetitions/context/exact/fuzzy hi-mid-lo/new).",
+        help="Word leverage per target language: "
+        "101 %% in-context, repetitions, 100 %% exact, new.",
     )
     p.add_argument("project_id", type=bounded_id, help="project id.")
+    _leverage_out.add_flags(p)
     p.set_defaults(func=_project_leverage)
 
     p = sub.add_parser(

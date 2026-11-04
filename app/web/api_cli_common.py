@@ -315,24 +315,84 @@ def _cust_of(ident):
     return (ident or {}).get("_cust_id")
 
 
-def _project_in_org(s: Session, pid: int, org_id, ident=None):
+def _project_in_org(s: Session, pid: int, org_id, ident=None, *, ring=None):
     """Fetch a project in the caller's org/customer ring and current web visibility.
 
     Membership, creator and role rules come only from access.can_view_project. A
     missing identity fails closed with auth on. Missing and inaccessible IDs both
     resolve to None, so every remote CLI and MCP adapter uses the same 404.
+
+    `ring` (S9): the project's (org_id, customer_id) columns, already read by a caller
+    whose identity _ring_light marks unrestricted. The row is then not loaded here; the
+    same three checks run on those two values (can_view_project by id), and a visible
+    project answers True instead of the row. The caller has already answered a missing
+    project with the same 404.
     """
-    project = s.get(Project, pid)
-    if project is None:
-        return None
-    if org_id is not None and getattr(project, "org_id", None) != org_id:
+    if ring is None:
+        project = s.get(Project, pid)
+        if project is None:
+            return None
+        p_org = getattr(project, "org_id", None)
+        p_cust = getattr(project, "customer_id", None)
+    else:
+        project = None
+        p_org, p_cust = ring
+    if org_id is not None and p_org != org_id:
         return None
     cust = _cust_of(ident)
-    if cust is not None and getattr(project, "customer_id", None) != cust:
+    if cust is not None and p_cust != cust:
         return None
-    if not access.can_view_project(s, (ident or {}).get("user"), project):
+    target = project if project is not None else pid
+    if not access.can_view_project(s, (ident or {}).get("user"), target):
         return None
-    return project
+    return project if project is not None else True
+
+
+def _preload_project_and_customer(s: Session, pid: int):
+    """Read a project AND its customer's name / AI opt-out / default segmentation profile in
+    ONE statement, leaving both in the session's identity map, so the `_project_in_org`
+    (`session.get(Project)`) and `session.get(Customer)` that follow answer without another
+    read. The customer columns are the ones the project read-back uses; any other column is
+    still loaded on demand. Returns the (Project, Customer or None) row, or None when the project
+    does not exist (a missing id is the caller's 404; a foreign id still answers from
+    `_project_in_org`). THE CALLER MUST KEEP THE RETURNED ROW ALIVE for as long as it wants the
+    two reads answered from the session: the identity map holds its objects weakly."""
+
+    def _build():
+        from sqlalchemy import bindparam
+        from sqlalchemy.orm import Load
+
+        return (
+            select(Project, Customer)
+            .outerjoin(Customer, Customer.id == Project.customer_id)
+            .where(Project.id == bindparam("pid"))
+            .options(
+                Load(Customer).load_only(
+                    Customer.name,
+                    Customer.org_id,
+                    Customer.ai_opt_out,
+                    Customer.default_segmentation_profile_id,
+                )
+            )
+        )
+
+    # Built once per process (S7b): a select built per call costs about as much CPU as running it.
+    return s.exec(
+        _db.prebuilt("api_cli_common.project_and_customer", _build), params={"pid": pid}
+    ).first()
+
+
+def _ring_light(ident) -> bool:
+    """A HINT that the caller is unrestricted (no customer binding, no multi-org, sees every
+    project), so a project's visibility can be decided from its ring columns without loading
+    the whole Project row. It never decides visibility itself: `_project_in_org(..., ring=)`
+    still runs the ring checks and access.can_view_project, which stays the one authority (a
+    stale hint only costs a read)."""
+    return (
+        _cust_of(ident) is None
+        and not access.multi_org_active()
+        and access.can_see_all((ident or {}).get("user"))
+    )
 
 
 def _visible_document(s: Session, doc_id):
@@ -350,6 +410,101 @@ def _visible_document(s: Session, doc_id):
     if doc is not None and doc.fmt == keys_svc.KEY_DOC_FMT:
         return None
     return doc
+
+
+class _DocListRow:
+    """A project's document as the document lists read it: the five listed fields plus the
+    one `skeleton["zip_batch"]` stamp delivery.zip_batches counts. Stands in for a Document
+    row, whose `skeleton` JSON (the whole parsed document structure, large) the lists never
+    use. Only `id`, `created_at` and `skeleton["zip_batch"]` are readable through
+    delivery.zip_batches, and they are the same values."""
+
+    __slots__ = ("created_at", "filename", "fmt", "id", "mode", "skeleton", "status")
+
+    def __init__(self, id, filename, fmt, mode, created_at, status, zip_batch):
+        self.id = id
+        self.filename = filename
+        self.fmt = fmt
+        self.mode = mode
+        self.created_at = created_at
+        self.status = status
+        self.skeleton = {"zip_batch": zip_batch} if zip_batch is not None else None
+
+
+def _project_documents_listed(s: Session, project_id: int) -> list:
+    """The project's visible documents, newest first, each with its derived lifecycle status,
+    in ONE statement: the listed columns only (never the `skeleton` / `context` JSON), the
+    status as a correlated subquery over the document's segments (lifecycle.
+    document_status_column, the same buckets as document_status_map), and the ZIP-batch
+    stamp. Internal key documents stay invisible (SPEC-key-based-projects 2.5)."""
+
+    def _build():
+        from sqlalchemy import bindparam
+
+        from app.kernel import lifecycle
+
+        return (
+            select(
+                Document.id,
+                Document.filename,
+                Document.fmt,
+                Document.mode,
+                Document.created_at,
+                lifecycle.document_status_column(),
+                Document.skeleton["zip_batch"],
+            )
+            .where(
+                Document.project_id == bindparam("pid"),
+                Document.fmt != keys_svc.KEY_DOC_FMT,
+            )
+            .order_by(Document.created_at.desc())
+        )
+
+    rows = s.exec(
+        _db.prebuilt("api_cli_common.documents_listed", _build), params={"pid": project_id}
+    ).all()
+    return [_DocListRow(*r) for r in rows]
+
+
+def _project_ring_and_documents(s: Session, project_id: int):
+    """(found, org_id, customer_id, documents) for the document list of an unrestricted caller
+    (see _ring_light), in ONE statement: the project's two ring columns joined to its visible
+    documents (the _project_documents_listed shape). `found` is False when the project does not
+    exist; the caller decides visibility from the ring columns with _project_in_org(..., ring=)."""
+
+    def _build():
+        from sqlalchemy import and_, bindparam
+
+        from app.kernel import lifecycle
+
+        return (
+            select(
+                Project.org_id,
+                Project.customer_id,
+                Document.id,
+                Document.filename,
+                Document.fmt,
+                Document.mode,
+                Document.created_at,
+                lifecycle.document_status_column(),
+                Document.skeleton["zip_batch"],
+            )
+            .select_from(Project)
+            .outerjoin(
+                Document,
+                and_(Document.project_id == Project.id, Document.fmt != keys_svc.KEY_DOC_FMT),
+            )
+            .where(Project.id == bindparam("pid"))
+            .order_by(Document.created_at.desc())
+        )
+
+    rows = s.exec(
+        _db.prebuilt("api_cli_common.project_ring_and_documents", _build),
+        params={"pid": project_id},
+    ).all()
+    if not rows:
+        return False, None, None, []
+    return True, rows[0][0], rows[0][1], [_DocListRow(*r[2:]) for r in rows if r[2] is not None]
 
 
 def _customer_in_org(s: Session, cid: int, org_id, ident=None):

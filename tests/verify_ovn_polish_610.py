@@ -4,7 +4,7 @@ Each case is independent (a failing case does not stop the others, so the fail-b
 origin/main names every item that was broken). Pinned, anchored on element ids and parsed values:
 
   1. A 100% TM fill reads "TM" in the editor status chip; the stored status stays "mt".
-  2. A fuzzy TM suggestion gets an inline badge (#fz-<id>) in the target cell.
+  2. A stored legacy fuzzy lock (ADR 0102 removed fuzzy matching) renders without a TM badge.
   3. The tm_match step's tally lands on the run (context, GET /api/runs/{id}, run page, CLI line).
   4. /api/tm and /api/tm/stats accept customer_id like customer; garbage or a conflict is a 400.
 
@@ -151,7 +151,10 @@ def case_01_tm_fill_chip_says_tm():
 
 
 @case
-def case_02_fuzzy_inline_badge():
+def case_02_legacy_fuzzy_lock_renders_plain_mt():
+    # ADR 0102: fuzzy matching is gone, so there is no inline "Fuzzy NN%" badge any more. A
+    # segment stored with lock_band "fuzzy" (written before the removal) must still render:
+    # no crash, no #fz- hint, no "TM 87%" lock badge, and the status chip reads MT.
     pid = _project()
     doc_id = _doc(pid, "Please save your changes now.")
     with Session(engine) as s:
@@ -167,14 +170,18 @@ def case_02_fuzzy_inline_badge():
     with Session(engine) as s:
         a = s.get(Segment, sid)
         a.target_text, a.status = "Bitte speichern Sie jetzt.", SegStatus.MT
+        a.lock_band, a.tm_match_pct, a.lock_hard = "fuzzy", 87, False
         s.add(a)
         s.commit()
-    html = client.get(f"/documents/{doc_id}/editor?locale=de-DE").text
-    m = re.search(
-        rf'id="fz-{sid}"><span class="badge fuzzy">Fuzzy (\d+)%</span>',
-        html,
+    resp = client.get(f"/documents/{doc_id}/editor?locale=de-DE")
+    assert resp.status_code == 200, resp.status_code
+    html = resp.text
+    assert f'id="fz-{sid}"' not in html and "Fuzzy " not in html, "the fuzzy hint badge is gone"
+    assert "TM 87%" not in html and "fuzzy TM match" not in html, "no fuzzy lock badge"
+    m = re.search(rf'<span class="chip st-mt" id="st-{sid}"([^>]*)>([^<]*)</span>', html)
+    assert m and m.group(2).strip() != "TM" and "data-tm-fill" not in m.group(1), (
+        "a legacy fuzzy fill reads as plain MT, not as a TM fill"
     )
-    assert m and 75 <= int(m.group(1)) < 100, "no inline fuzzy badge on the suggested row"
 
 
 @case

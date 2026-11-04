@@ -596,6 +596,16 @@ templates.env.filters["langdir"] = langdir
 # Jinja Environment (the wf_graph byte pins), where an unknown FILTER fails at compile time
 # but an unknown global only fails if the macro that calls it is rendered.
 templates.env.globals["langattrs"] = langattrs
+
+
+def _tm_examples_available() -> bool:
+    from app.kernel import tm as _tm  # lazy: keeps the deps import light
+
+    return _tm.examples_available()
+
+
+# TM few-shot examples need an add-on retriever (ADR 0102); the builder hides the toggle without it.
+templates.env.globals["tm_examples_available"] = _tm_examples_available
 # The product brand — a lazy proxy so `{{ brand }}` re-reads the setting at render
 # time (white-label rename shows up on the next request; see app/branding.py).
 # `names` exposes the coined FEATURE names: {{ names.llmemory }} / {{ names.ledger }}.
@@ -1488,8 +1498,11 @@ def _resolve_api_identity(request: Request) -> dict | None:
         # Pool-less inside a relief scope (gate A round 3, HIGH-4): the API-key lookup on
         # the way to `POST /api/runs/{id}/cancel` must not wait on the pool the run being
         # cancelled has exhausted.
-        with Session(_db.relief_engine_or(engine)) as s:
-            user = s.get(User, key.user_id)
+        # S3c (ADR 0097): verify_key already read the owner in its joined read.
+        user = getattr(key, "_owner", None)
+        if user is None:
+            with Session(_db.relief_engine_or(engine)) as s:
+                user = s.get(User, key.user_id)
         if user is not None:
             # Multi-org P7: a SUSPENDED org's API tokens are rejected (treated as an
             # unknown token -> 401). No-op with the sacred gate off (org_active ->

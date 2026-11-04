@@ -90,6 +90,8 @@ segmentation that extracts the tokens (segmentation), or the provider seam the L
 
 - `verify_ai_tagging`: the mask/restore round trip, the deterministic repair contract, and the
   batch sweep.
+- `verify_ai_tagging_restore_parity`: `restore` with its pattern compiled once gives the same result as
+  the per-call pattern it replaced, over 20,000 generated engine outputs, and is at least 10x faster.
 - `verify_tag_llm_repair`: the LLM repair rung and its vote re-verification.
 
 ## 6. Battle scars

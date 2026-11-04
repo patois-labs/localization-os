@@ -287,7 +287,7 @@ def test_web_and_api_surfaces():
             arch = Customer(
                 name="Foreign Archived Secret",
                 org_id=org_b,
-                archived_at=_dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None),
+                archived_at=_dt.datetime.now(_dt.UTC).replace(tzinfo=None),
             )
             s.add(arch)
             s.commit()

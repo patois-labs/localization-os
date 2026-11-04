@@ -52,7 +52,7 @@ from app.models import (
     Workflow,
     _utcnow,
 )
-from app.services import languages_catalog, tm
+from app.services import languages_catalog, tm_counts
 
 _log = logging.getLogger("loc_tms.customers")
 
@@ -987,8 +987,8 @@ def get_customer_360(session: Session, cid: int, *, org_id=None, visible_pids=No
     tm_seg_total = tm_ft_total = 0
     for p in projects:
         n_docs = len(session.exec(select(Document.id).where(Document.project_id == p.id)).all())
-        seg_tm = tm.count(session, p.id)
-        ft_tm = tm.ft_count(session, p.id)
+        seg_tm = tm_counts.count(session, p.id)
+        ft_tm = tm_counts.ft_count(session, p.id)
         tm_seg_total += seg_tm
         tm_ft_total += ft_tm
         project_rows.append(

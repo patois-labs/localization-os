@@ -46,7 +46,7 @@ needs:
   - "A live provider for real output. With no key configured every engine resolves to the deterministic MockProvider, which echoes rather than translates. Check before you spend a run on it."
   - "For key routes: the keys scope AND the key_projects_enabled switch on. For image routes: image_localization_enabled. A switch that is off makes the route 404."
 limits:
-  - "Wave R3 puts the WHOLE configuration + credential surface on `/api` behind THREE locks: the `admin` scope + the `is_admin` role + the install switch `remote_admin_enabled` (settable only on the host; 404 on every R3 route when off). It covers GET/POST `/api/admin/config` (settings), engine CRUD+test, provider keys, connector/vendor secrets, and LDAP/OIDC/SMTP. Secrets are write-only (stored Fernet-encrypted, never returned). A small set of install-locked keys - `remote_admin_enabled`, `security_auth_required`, `multi_org_enabled`, `encrypt_db`/`encrypt_uploads`, `security_allowed_hosts`, `trusted_proxy_ips`, `operator_key_hash` - are refused even here, always local-only. (Wave R2 already put admin-ops toggles behind is_admin: semantic/SRX/retention/rulebooks/routing/budgets/languages.) The FEATURE-FLAG switchboard joins that surface on the same three locks (GET `/api/admin/features` and POST `/api/admin/features/{slug}`), and is the one place install-locked keys are refused with a purpose-written message rather than a generic one. It is deliberately absent from MCP: see the feature-flags section."
+  - "Wave R3 puts the WHOLE configuration + credential surface on `/api` behind THREE locks: the `admin` scope + the `is_admin` role + the install switch `remote_admin_enabled` (settable only on the host; 404 on every R3 route when off). It covers GET/POST `/api/admin/config` (settings), engine CRUD+test, provider keys, connector/vendor secrets, and LDAP/OIDC/SMTP. Secrets are write-only (stored Fernet-encrypted, never returned). A small set of install-locked keys - `remote_admin_enabled`, `security_auth_required`, `multi_org_enabled`, `encrypt_db`/`encrypt_uploads`, `security_allowed_hosts`, `trusted_proxy_ips`, `operator_key_hash` - are refused even here, always local-only. (Wave R2 already put admin-ops toggles behind is_admin: SRX/retention/rulebooks/routing/budgets/languages.) The FEATURE-FLAG switchboard joins that surface on the same three locks (GET `/api/admin/features` and POST `/api/admin/features/{slug}`), and is the one place install-locked keys are refused with a purpose-written message rather than a generic one. It is deliberately absent from MCP: see the feature-flags section."
   - "Several operator surfaces have no /api route at all and refuse --remote in the CLI: db, init, ask. (Engine + provider-key management, which were local-only before, NOW have a gated `/api` surface - Wave R3, behind admin scope + remote_admin_enabled - though their CLI verbs stay in-process. Workflow AUTHORING and TM-source/glossary pin also have /api routes; see those sections.)"
   - "An API key is pinned to its owner's home org. There is no super-admin bypass on /api, and no route lets you enumerate another org - foreign objects answer 404, never 403."
   - "Launching a translation run over a KEY project is available on ALL FOUR surfaces: web (the grid Translate control), the CLI (`keys translate --project P --workflow W --locale L`, or `--locale all`; local + --remote), the /api route (POST /api/projects/{pid}/keys/translate, keys scope, can_write), and MCP (the translate_keys tool). There is no web-only gap."
@@ -249,7 +249,7 @@ single paragraph of a multi-paragraph body leaves it `edited`, still human-edita
 TM locks (`lock_band`/`lock_hard`) protect independently and for the same reason.
 
 FULL_TEXT tm_match offers only 100% sentence matches from the step's selected readable TM pools. Offers are unverified, not a guarantee. Offers are WITHHELD from each step that redacts PII, because an offer reproduces the document's own sentence verbatim; the run message says so. If a string must be exact, FULL_TEXT is the wrong mode.
-tm_offers in the run summary, GET /api/runs/{id}, MCP work_status and workflow show-run reports sentences_examined, matches_offered and message for the latest offer list. SSE tm_match reports counts for that step visit. No count claims applied translations. A SEGMENTED workflow's tm_match step also leaves a tally on the run: the run page, GET /api/runs/{id} (tm_match), MCP work_status and workflow show-run report filled (genuine TM fills), relocked (already held the exact TM text), unmatched (not taken from the TM at the step's fill threshold, so sent on to the next step) and total segments. Fuzzy suggestions below the fill threshold are not counted.
+tm_offers in the run summary, GET /api/runs/{id}, MCP work_status and workflow show-run reports sentences_examined, matches_offered and message for the latest offer list. SSE tm_match reports counts for that step visit. No count claims applied translations. A SEGMENTED workflow's tm_match step also leaves a tally on the run: the run page, GET /api/runs/{id} (tm_match), MCP work_status and workflow show-run report filled (genuine TM fills), relocked (already held the exact TM text), unmatched (no exact TM entry, so sent on to the next step) and total segments.
 
 A full-text workflow run FAILS LOUD (honest-failure, 2026-08-13) when a translation
 step's output is implausibly short for its input - a char ratio below
@@ -461,7 +461,7 @@ bucket, treated the way a NULL-customer glossary is everywhere else). A source u
 DIFFERENT customer is refused. The rule is asymmetric on purpose: a house project may
 feed a customer's project, never the reverse.
 
-Every ranking path - exact match, both fuzzy scorers, full text,
+Every ranking path - exact match, full text,
 few-shot examples - applies **own-first precedence**: the project's own rows are
 ordered ahead of attached rows, ties broken by lowest id. Your own memory always
 wins over borrowed memory.
@@ -1146,9 +1146,8 @@ builder and `workflow` CLI call, so validation cannot drift):
   concepts audience-gated/ordered/capped into the prompt instead of the plain term list)
   with `glossary_concept_cap` (default 10) and `glossary_token_cap` (default 0 = inherit
   the install `glossary_prompt_token_cap`),
-  the **tm_match-only** TM policy fields `tm_fill_threshold` (min match % to fill,
-  `50-100`; 100 = exact only), `tm_fuzzy_lock_mode` (`none`/`soft`/`policy`),
-  `tm_lock_ice`, `tm_hundreds_enter_lqa`, `tm_context_floor`, and `tm_pool_selection`
+  the **tm_match-only** TM policy fields
+  `tm_lock_ice`, `tm_hundreds_enter_lqa`, and `tm_pool_selection`
   (a list of readable project ids; omit any of these to inherit the global default -
   a new tm_match step is seeded with a snapshot of the current globals; refused on any
   non-tm_match step),

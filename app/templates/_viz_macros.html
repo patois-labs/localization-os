@@ -7,7 +7,7 @@
    .chip.st-new use --muted, .badge.exact uses --success, .badge.fuzzy uses --warn)
    - no new hues invented for this wave. #}
 
-{# The "new" band (tm_match_pct is None, target present) is labeled "No TM match"
+{# The "new" band (no exact TM reference, target present) is labeled "No TM match"
    everywhere below - NOT "New (MT)". It covers ANY translated segment with no
    cited TM reference: net-new MT AND human-typed/edited/imported segments alike
    (none of those write tm_match_pct - see app/services/tm.py::leverage_bands's
@@ -20,9 +20,9 @@
 <div class="tmlev">
   {% if heading %}<p class="tmlev-heading">{{ heading }}</p>{% endif %}
   <div class="tmlev-bar" role="img"
-       aria-label="TM leverage: {{ bands.exact }} exact match, {{ bands.fuzzy }} fuzzy match, {{ bands.new }} no TM match, {{ bands.untranslated }} untranslated, out of {{ total }} segments">
-    {% for key, label, cls in [('exact', 'Exact match', 'tmlev-exact'),
-                                ('fuzzy', 'Fuzzy match', 'tmlev-fuzzy'),
+       aria-label="TM leverage: {{ bands.context }} 101 % in-context, {{ bands.exact }} 100 % exact, {{ bands.new }} no TM match, {{ bands.untranslated }} untranslated, out of {{ total }} segments">
+    {% for key, label, cls in [('context', '101 % in-context', 'tmlev-context'),
+                                ('exact', '100 % exact', 'tmlev-exact'),
                                 ('new', 'No TM match', 'tmlev-new'),
                                 ('untranslated', 'Untranslated', 'tmlev-untranslated')] %}
       {% set v = bands[key] %}
@@ -33,18 +33,18 @@
     {% endfor %}
   </div>
   <ul class="tmlev-legend">
-    <li class="tmlev-key tmlev-exact"><span class="tmlev-swatch"></span>Exact match
+    <li class="tmlev-key tmlev-context"><span class="tmlev-swatch"></span>101 % in-context
+      <b class="data-mono">{{ bands.context }}</b></li>
+    <li class="tmlev-key tmlev-exact"><span class="tmlev-swatch"></span>100 % exact
       <b class="data-mono">{{ bands.exact }}</b></li>
-    <li class="tmlev-key tmlev-fuzzy"><span class="tmlev-swatch"></span>Fuzzy match
-      <b class="data-mono">{{ bands.fuzzy }}</b></li>
     <li class="tmlev-key tmlev-new"><span class="tmlev-swatch"></span>No TM match
       <b class="data-mono">{{ bands.new }}</b></li>
     <li class="tmlev-key tmlev-untranslated"><span class="tmlev-swatch"></span>Untranslated
       <b class="data-mono">{{ bands.untranslated }}</b></li>
   </ul>
   <p class="sr-only">
-    TM leverage out of {{ total }} total segments: {{ bands.exact }} exact match,
-    {{ bands.fuzzy }} fuzzy match, {{ bands.new }} translated with no TM match
+    TM leverage out of {{ total }} total segments: {{ bands.context }} 101 % in-context,
+    {{ bands.exact }} 100 % exact, {{ bands.new }} translated with no TM match
     (machine-translated, human-typed/edited, or imported), {{ bands.untranslated }}
     not yet translated.
   </p>
@@ -114,38 +114,68 @@
 {% endmacro %}
 
 
-{# CV-1: the 7-band WORD-based TM-leverage bar (the real vendor-cost model, surfaced
-   project-wide). `rows` is vendor_cost.estimate_band_rows(estimate) - one row per band
-   in best-leverage-first order, each {band, label, words, segments, covered, billable}.
-   `total_words` is estimate.total_words. Accessible: the role="img" bar's aria-label is
-   the SINGLE place the per-band figures are announced (L8: the sr-only note below adds
-   only the covered-vs-billable EXPLANATION, never re-reading the numbers). Number
-   formatting is unified ({:,}) across aria-label, legend and title. The covered bands
-   (reps/context/exact) share the leverage-green family, the three fuzzy tiers the amber
-   family, `new` the muted family - three hue families, seven labelled bands, legible
-   without inventing seven hues. #}
-{% macro leverage7_bar(rows, total_words) %}
-{% if total_words and total_words > 0 %}
+{# The WORD-based leverage report (ADR 0102): `report` is app.services.leverage.analyze(...),
+   four bands (101 % in-context, repetitions, 100 % exact, new) per target language. A table
+   (one row per language, words with segments in brackets) plus one bar over all languages.
+   `csv_href` adds a "Download CSV" link. Accessible: the role="img" bar's aria-label is the
+   SINGLE place the overall figures are announced; the table is the per-language reading. Number
+   formatting is unified ({:,}) across aria-label, legend, title and table. #}
+{% macro leverage_report(report, csv_href=none) %}
+{% set tot = report.totals %}
+{% if tot.words and tot.words > 0 %}
 <div class="lev7">
   <div class="lev7-bar" role="img"
-       aria-label="Word-based TM leverage over {{ '{:,}'.format(total_words) }} source words: {% for r in rows %}{{ '{:,}'.format(r.words) }} {{ r.label }}{% if not loop.last %}, {% endif %}{% endfor %}.">
-    {% for r in rows %}
-      {% if r.words %}
-      <div class="lev7-seg lev7-{{ r.band }}" style="width:{{ (100.0 * r.words / total_words)|round(2) }}%"
-           title="{{ r.label }}: {{ '{:,}'.format(r.words) }} words ({{ (100 * r.words / total_words)|round }}%)"></div>
+       aria-label="Word-based TM leverage over {{ '{:,}'.format(tot.words) }} source words in {{ report.languages|length }} language{{ '' if report.languages|length == 1 else 's' }}: {% for b in report.bands %}{{ '{:,}'.format(tot.bands[b].words) }} {{ report.labels[b] }}{% if not loop.last %}, {% endif %}{% endfor %}.">
+    {% for b in report.bands %}
+      {% set w = tot.bands[b].words %}
+      {% if w %}
+      <div class="lev7-seg lev7-{{ b }}" style="width:{{ (100.0 * w / tot.words)|round(2) }}%"
+           title="{{ report.labels[b] }}: {{ '{:,}'.format(w) }} words ({{ (100 * w / tot.words)|round }}%)"></div>
       {% endif %}
     {% endfor %}
   </div>
   <ul class="lev7-legend">
-    {% for r in rows %}
-    <li class="lev7-key lev7-{{ r.band }}"><span class="lev7-swatch"></span>{{ r.label }}
-      <b class="data-mono">{{ '{:,}'.format(r.words) }}</b></li>
+    {% for b in report.bands %}
+    <li class="lev7-key lev7-{{ b }}"><span class="lev7-swatch"></span>{{ report.labels[b] }}
+      <b class="data-mono">{{ '{:,}'.format(tot.bands[b].words) }}</b></li>
     {% endfor %}
   </ul>
-  <p class="sr-only">
-    The repetitions, context and exact bands are already leveraged (no new human
-    translation); the three fuzzy tiers and the new band are the post-edit scope.
-  </p>
+  <table class="lev-table" data-leverage-table>
+    <caption class="sr-only">Source words per target language and TM leverage band (segments in brackets)</caption>
+    <thead>
+      <tr>
+        <th scope="col">Language</th>
+        {% for b in report.bands %}<th scope="col">{{ report.labels[b] }}</th>{% endfor %}
+        <th scope="col">Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lang in report.languages %}
+      <tr>
+        <th scope="row">{{ lang.locale }}</th>
+        {% for b in report.bands %}
+        <td class="data-mono">{{ '{:,}'.format(lang.bands[b].words) }} <span class="muted small">({{ '{:,}'.format(lang.bands[b].segments) }})</span></td>
+        {% endfor %}
+        <td class="data-mono">{{ '{:,}'.format(lang.words) }} <span class="muted small">({{ '{:,}'.format(lang.segments) }})</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    {% if report.languages|length > 1 %}
+    <tfoot>
+      <tr class="lev-total">
+        <th scope="row">All languages</th>
+        {% for b in report.bands %}
+        <td class="data-mono">{{ '{:,}'.format(tot.bands[b].words) }} <span class="muted small">({{ '{:,}'.format(tot.bands[b].segments) }})</span></td>
+        {% endfor %}
+        <td class="data-mono">{{ '{:,}'.format(tot.words) }} <span class="muted small">({{ '{:,}'.format(tot.segments) }})</span></td>
+      </tr>
+    </tfoot>
+    {% endif %}
+  </table>
+  <p class="muted small">Only the first occurrence of a repeated source is priced as 100 % or new.
+    Untranslated segments are looked up in the translation memory now, so this is a quote
+    before translation and the leverage actually used after it.
+    {% if csv_href %}<a href="{{ csv_href }}" download>Download CSV</a>{% endif %}</p>
 </div>
 {% else %}
 <p class="muted small">No segmented content yet - no word-based leverage to show.</p>

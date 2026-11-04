@@ -5,8 +5,9 @@ calls. The mock engine is deterministic, so every match/no-match is asserted
 EXACTLY.
 
 The isolation guarantee that is the whole point (spec §4.4): a 100% match stamped with
-one content type MUST NOT surface — on ANY of the three lookup paths (exact-hash, fuzzy and
-full-text) — for a project of a DIFFERENT content type. Because segment TM is
+one content type MUST NOT surface — on ANY of the lookup paths (exact-hash and
+full-text; the fuzzy path was removed, ADR 0102) — for a project of a DIFFERENT
+content type. Because segment TM is
 project-scoped (`project_id IN (pid, NULL)`), the content-type predicate is isolated as
 the deciding variable by seeding rows of DIFFERENT content types INTO ONE project's
 scope (same project_id) and reading that project — so only the content-type leg can be
@@ -158,7 +159,7 @@ def test_read_isolation_three_paths():
     """The #1 review target. One project scope holds a Marketing(X), a Product(Y) and a
     General(NULL) row so the CONTENT-TYPE leg is the only possible filter. Reading the
     project (typed Y = Product) must see Y + NULL and NEVER the X (Marketing) row — on
-    exact-hash, fuzzy and full-text."""
+    exact-hash and full-text (the fuzzy leg was removed, ADR 0102)."""
     with Session(engine) as s:
         X = ctsvc.create(s, "Mkt2").id
         Y = ctsvc.create(s, "Prod2").id
@@ -178,12 +179,12 @@ def test_read_isolation_three_paths():
         assert (tm.lookup(s, p.id, prod, SRC, TGT) or {}).get("match_pct") == 100
         assert (tm.lookup(s, p.id, gen, SRC, TGT) or {}).get("match_pct") == 100
 
-        # 2) FUZZY: a near-variant (not an exact hash) of each source.
+        # 2) ADR 0102: the fuzzy leg is gone. A near-variant (not an exact hash) of each
+        #    source now matches NOTHING, whatever its content type.
         mkt_v = "Quarterly brand campaign messaging!!"
         prod_v = "Database migration rollback procedure!!"
-        assert tm.lookup(s, p.id, mkt_v, SRC, TGT) is None, "fuzzy leaked Marketing!"
-        fp = tm.lookup(s, p.id, prod_v, SRC, TGT)
-        assert fp is not None and fp["target_text"] == "Slogan produit.", fp
+        assert tm.lookup(s, p.id, mkt_v, SRC, TGT) is None
+        assert tm.lookup(s, p.id, prod_v, SRC, TGT) is None
 
         # 3) FULL-TEXT: seed ft rows of each type into the same project scope.
         _seed_ft(s, p.id, X, "FT marketing whole doc.", "FT doc marketing.")
@@ -251,20 +252,19 @@ def test_no_retro_restamp():
 
 def test_byte_identical_untyped():
     """The backward-compat invariant: with NO content type in play, an untyped project's
-    three lookup paths behave EXACTLY as today (all matches surface)."""
+    lookup paths behave EXACTLY as today (all matches surface)."""
     with Session(engine) as s:
         p = _project(s, "PlainOld", content_type_id=None)
         tm.write_back(s, p.id, "Plain exact source.", "Cible exacte.", SRC, TGT)
         tm.ft_store(s, p.id, "Plain ft source.", "Cible ft.", SRC, TGT)
         # exact
         assert (tm.lookup(s, p.id, "Plain exact source.", SRC, TGT) or {}).get("match_pct") == 100
-        # fuzzy
-        fz = tm.lookup(s, p.id, "Plain exact source!!", SRC, TGT)
-        assert fz is not None and fz["target_text"] == "Cible exacte.", fz
+        # ADR 0102: no fuzzy leg - a near variant misses
+        assert tm.lookup(s, p.id, "Plain exact source!!", SRC, TGT) is None
         # full-text
         assert tm.ft_lookup(s, p.id, "Plain ft source.", SRC, TGT) == "Cible ft."
     print(
-        "  byte-identical: an untyped project's exact/fuzzy/full-text all "
+        "  byte-identical: an untyped project's exact/full-text all "
         "return today's results (NULL-in-scope predicate is a no-op): OK"
     )
 

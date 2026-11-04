@@ -534,12 +534,11 @@
     </p>
   {% endif %}
   {{ vm.tm_leverage_bar(stats.tm_leverage, stats.segments, heading="TM leverage") }}
-  {# CV-1: the 7-band WORD-based leverage (repetitions/context/exact/fuzzy hi-mid-lo/new)
-     - the real vendor-cost model, surfaced project-wide from the segments' persisted
-     TM-match data. Complements the coarse 4-band segment-count bar above. #}
-  {% if leverage7 and leverage7.total_words %}
-  <p class="tmlev-heading">Word-based leverage (7-band)</p>
-  {{ vm.leverage7_bar(leverage7_rows, leverage7.total_words) }}
+  {# ADR 0102: the WORD-based leverage report (101 % in-context, repetitions, 100 % exact,
+     new) per target language, from app.services.leverage. #}
+  {% if leverage_report and leverage_report.totals.words %}
+  <p class="tmlev-heading">Word-based leverage</p>
+  {{ vm.leverage_report(leverage_report, csv_href="/projects/" ~ project.id ~ "/leverage.csv") }}
   {% endif %}
 </section>
 
@@ -835,6 +834,34 @@
       · <span class="error-inline" id="tm-import-file-error">file too large: it exceeds the server's upload size limit</span>
     {% endif %}
   </p>
+  {# S6 (ADR 0094): a large TMX imports in the background; tm_import_progress.js polls
+     /jobs/{id}/status and rewrites these lines. Rendered server-side first, so the state is
+     right without JavaScript too (reload to refresh). #}
+  {% set _tm_jobs = tm_import_jobs | default([]) %}
+  {% if _tm_jobs %}
+    <ul class="tm-import-jobs" id="tm-import-jobs" aria-live="polite">
+      {% for j in _tm_jobs %}
+        <li class="tm-import-job" id="tm-import-job-{{ j.id }}" data-job-id="{{ j.id }}" data-active="{{ 1 if j.active else 0 }}">
+          TM import{% if j.filename %} of <strong>{{ j.filename }}</strong>{% endif %}:
+          <span class="tm-import-status">
+            {%- if j.status == 'completed' -%}
+              done: imported {{ (j.result.imported or 0)|int }} units, updated {{ (j.result.updated or 0)|int }}, skipped {{ (j.result.skipped or 0)|int }} unchanged
+              {%- if (j.result.skipped_refusal or 0)|int %}, skipped {{ j.result.skipped_refusal|int }} refusal(s){% endif -%}
+              {%- if (j.result.skipped_integrity or 0)|int %}, withheld {{ j.result.skipped_integrity|int }} with broken placeholders or inline tags (not saved to TM){% endif -%}
+              {%- if (j.result.concurrent_deleted or 0)|int %}, did not restore {{ j.result.concurrent_deleted|int }} entries deleted while the import ran{% endif -%}
+            {%- elif j.status == 'failed' -%}
+              <span class="error-inline">failed: {{ j.error }}</span>
+            {%- elif j.status == 'queued' -%}
+              waiting to start
+            {%- else -%}
+              {{ j.message or 'running' }}
+            {%- endif -%}
+          </span>
+          {% if j.active %}<progress class="tm-import-bar" max="{{ j.total or 1 }}" value="{{ j.done or 0 }}" aria-label="TM import progress"></progress>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
   <form method="post" action="/projects/{{ project.id }}/tm/import"
         enctype="multipart/form-data" class="form inline-form">
     {% include "_csrf.html" %}
@@ -1149,6 +1176,7 @@
 {% endcall %}
 {{ m.component_script() }}
 <script defer src="/static/project_sections.js?v={{ static_v('project_sections.js') }}"></script>
+<script defer src="/static/tm_import_progress.js?v={{ static_v('tm_import_progress.js') }}"></script>
 {% with layout_page = 'project' %}{% include "_page_layout.html" %}{% endwith %}
 
 <script defer src="/static/export_dialog.js?v={{ static_v('export_dialog.js') }}"></script>

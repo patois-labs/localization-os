@@ -19,17 +19,17 @@ already single-locale), one `<trans-unit>` per segment, `<source>` + prefilled
   provenance  ->  <target> state / state-qualifier         translate  alt-trans
   ----------      -----------------------------------       ---------  ---------
   tm_exact        state="translated" sq="exact-match"        no (lock)  --
-  tm_fuzzy        state="needs-review-translation" sq="fuzzy-match"     <alt-trans
-                                                                         match-quality="NN%">
   mt              state="needs-review-translation" sq="mt-suggestion"   --
   new             state="needs-translation"                             --
 
-STATE-QUALIFIER SAFETY: the mapping is keyed on the contract's 4-value `provenance`, so
-the writer only ever emits the three RESEARCH-VERIFIED core qualifiers `exact-match` /
-`fuzzy-match` / `mt-suggestion` (docs/research/cat-qa-engines-locking-
-provenance.md Topic B: "verified core"). The unverified `leveraged-*` long tail
-(vendor_cost.XLIFF_STATE_QUALIFIER, keyed on the 7-band model) is NEVER produced here,
-because the wire contract has already collapsed every covered band to `tm_exact`.
+STATE-QUALIFIER SAFETY: the mapping is keyed on the contract's `provenance`, so the writer
+only ever emits the RESEARCH-VERIFIED core qualifiers `exact-match` / `mt-suggestion`
+(docs/research/cat-qa-engines-locking-provenance.md Topic B: "verified core"). The
+unverified `leveraged-*` long tail (vendor_cost.XLIFF_STATE_QUALIFIER, keyed on the band
+model) is NEVER produced here, because the wire contract has already collapsed every covered
+band to `tm_exact`. ADR 0102: the fuzzy tiers are gone, so the writer no longer produces
+`fuzzy-match` or an `<alt-trans match-quality>`; a legacy `tm_fuzzy` package renders as a
+reviewable unit with no qualifier. The vendor-return parser still reads all of them.
 
 PLACEHOLDER ENCODING: Localization OS's inline-tag tokens (``⟦x1⟧`` and friends,
 app/services/segment.py) are carried as LITERAL TEXT inside `<source>`/`<target>`. They
@@ -227,11 +227,11 @@ def _make_parser() -> etree.XMLParser:
     return make_hardened_parser()
 
 
-# The three research-VERIFIED core state-qualifiers, keyed on the contract's provenance
-# vocabulary (NOT the 7-band model). Only these three are ever emitted.
+# The research-VERIFIED core state-qualifiers, keyed on the contract's provenance vocabulary
+# (NOT the band model). Only these are ever emitted (ADR 0102: no fuzzy-match).
 _STATE_BY_PROVENANCE = {
     "tm_exact": ("translated", "exact-match"),
-    "tm_fuzzy": ("needs-review-translation", "fuzzy-match"),
+    "tm_fuzzy": ("needs-review-translation", ""),  # legacy package only; never produced now
     "mt": ("needs-review-translation", "mt-suggestion"),
     "new": ("needs-translation", ""),
 }
@@ -402,23 +402,6 @@ def render_contract_xliff(contract: dict) -> bytes:
         if qualifier:
             target.set("state-qualifier", qualifier)
         target.text = _xml_safe(seg.get("target") or "")
-
-        # tm_fuzzy: carry the match percentage on a sibling <alt-trans> candidate, the
-        # standard 1.2 channel for a TM/MT match score (research §5).
-        if provenance == "tm_fuzzy":
-            score = seg.get("match_score")
-            if score is None:
-                score = seg.get("tm_match_pct")
-            if score is not None:
-                try:
-                    pct = int(round(float(score)))  # noqa: RUF046
-                except (TypeError, ValueError):
-                    pct = None
-                if pct is not None:
-                    alt = etree.SubElement(tu, "alt-trans")
-                    alt.set("match-quality", f"{pct}%")
-                    at = etree.SubElement(alt, "target")
-                    at.text = _xml_safe(seg.get("target") or "")
 
         # Wave 3 Train E (§7.4): the buyer query carry, one per-unit <note
         # from="loc-studio-query"> per open/answered thread. This travels buyer->vendor ONLY; the

@@ -897,7 +897,7 @@ TM_STRINGS = [
 # --- Do-Not-Translate brand terms (kept verbatim in every locale) ---
 # --- TRANSLATION MEMORY (100 source strings x 5 locales) ----------------------
 # Each row: (en-US, es-ES, fr-FR, de-DE, ja-JP, zh-CN). Varied lengths; some carry
-# {placeholders}; several are near-duplicates of a neighbor (fuzzy-match fodder).
+# {placeholders}; several are near-duplicates of a neighbor (semantic-retrieval fodder).
 # --- console output (ASCII-safe on any Windows console) -----------------------
 def _emit(line: str = "") -> None:
     """Print one line, degrading non-ASCII to backslash escapes on a cp1252 console

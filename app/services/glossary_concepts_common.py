@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func
 from sqlmodel import Session, select
@@ -39,7 +39,7 @@ _TERM_META_KEYS = ("part_of_speech", "usage_example")
 # sync with glossary._GLOSSARY_META_COLS. definition/subject_field/notes live on the
 # CONCEPT; part_of_speech/usage_example live on the source TERM.
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _sanitize(val) -> str:

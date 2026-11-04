@@ -443,65 +443,21 @@ def _project_show(args, emit) -> int:
 
 
 def _project_leverage(args, emit) -> int:
-    """CV-1: the 7-band WORD-based TM-leverage breakdown for a project — the SAME
-    vendor_cost.project_leverage seam the project page + GET /api/projects/{id}/leverage
-    call, so the numbers are byte-identical across surfaces."""
+    """The leverage report (ADR 0102) for a project: words per target language in four bands
+    (101 % in-context, repetitions, 100 % exact, new). The SAME leverage.analyze seam the project
+    page, GET /api/projects/{id}/leverage and the MCP view call. --csv / -o FILE: CSV to quote."""
     if remote_mode(args):
         return _remote_impl.project_leverage(args, emit)
     require_org_scope(args, emit)
-    from app.kernel import vendor_cost
+    from app.cli import _leverage_out
+    from app.kernel import leverage
 
     with _session() as session:
         project = _get_project(session, args.project_id, op_org_id(args))
-        estimate = vendor_cost.project_leverage(session, project.id)
-        rows = vendor_cost.estimate_band_rows(estimate)
-        # M6: note key-based content is excluded, so an empty result isn't misread.
-        note = None
-        if vendor_cost.project_has_key_docs(session, project.id):
-            note = (
-                "this project has key-based content; leverage covers only its "
-                "non-key documents (key catalogue values are excluded)."
-            )
-    if emit.as_json:
-        emit.json(
-            {
-                "ok": True,
-                "project_id": project.id,
-                "total_words": estimate.get("total_words", 0),
-                "total_segments": estimate.get("segment_count", 0),
-                "billable_words": estimate.get("billable_words", 0),
-                "covered_words": estimate.get("covered_words", 0),
-                "bands": [
-                    {
-                        "band": r["band"],
-                        "label": r["label"],
-                        "words": r["words"],
-                        "segments": r["segments"],
-                        "covered": r["covered"],
-                        "billable": r["billable"],
-                    }
-                    for r in rows
-                ],
-                "note": note,
-            }
-        )
-    else:
-        emit.say(f"Project #{project.id}: {project.name} - 7-band word leverage")
-        emit.table(
-            [
-                (r["label"], r["words"], r["segments"], "covered" if r["covered"] else "billable")
-                for r in rows
-            ],
-            headers=("band", "words", "segments", "scope"),
-        )
-        emit.say(
-            f"  total words: {estimate.get('total_words', 0)}   "
-            f"covered: {estimate.get('covered_words', 0)}   "
-            f"billable (post-edit): {estimate.get('billable_words', 0)}"
-        )
-        if note:
-            emit.say(f"  note: {note}")
-    return 0
+        report = leverage.analyze(session, project.id)
+    if _leverage_out.wants_csv(args):
+        return _leverage_out.deliver_csv(args, emit, leverage.to_csv(report))
+    return _leverage_out.deliver_report(emit, report)
 
 
 def _project_apply_langset(args, emit) -> int:

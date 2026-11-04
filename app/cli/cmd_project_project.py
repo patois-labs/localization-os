@@ -4,6 +4,7 @@ Documented in: docs/architecture/content-and-projects.md
 """
 
 import os
+from datetime import UTC
 
 from app.cli import _remote_impl
 from app.cli._common import (
@@ -792,7 +793,7 @@ def _tm_visible_pids(session, args):
 def _tm_filters(args):
     """Assemble the tm_module filter kwargs from the parsed --f_* flags. A blank
     date is ignored; an invalid date raises a clean CLI error."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     def _date(raw, label):
         raw = (raw or "").strip()
@@ -800,7 +801,7 @@ def _tm_filters(args):
             return None
         try:
             d = datetime.strptime(raw, "%Y-%m-%d")
-            return d.replace(tzinfo=timezone.utc).replace(tzinfo=None)
+            return d.replace(tzinfo=UTC).replace(tzinfo=None)
         except ValueError as e:
             raise CliError(f"--{label} must be YYYY-MM-DD, got {raw!r}.", EXIT_USAGE) from e
 

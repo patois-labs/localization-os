@@ -351,13 +351,12 @@ def run_ab(
 
     # TM few-shot examples: retrieved ONCE per segment and used IDENTICALLY in both arms.
     sources = [s.source_text for s in sample]
-    tm_examples_map = tm.example_matches_batch(
+    tm_examples_map = tm.example_matches_hybrid(
         session,
         project.id,
         sources,
         src,
         chosen,
-        floor=context_pkg.TM_EXAMPLES_FLOOR,
         window=context_pkg.TM_EXAMPLES_DEFAULT_WINDOW,
     )
 

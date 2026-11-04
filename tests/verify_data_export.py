@@ -776,7 +776,7 @@ def test_P_registry_completeness():
 
     tables = set(SQLModel.metadata.tables)
     classified = dx.classified_tables()
-    assert len(tables) == 103, (
+    assert len(tables) == 105, (
         "[P] expected 72 baseline + DataExportRun + KeyImage + DeliveryEmptyApproval + the four "
         "SPEC-advanced-workflows P0 tables (AdvancedMission/AdvancedRun/AdvancedTranscriptEntry/"
         "AdvancedStagedTarget) + the five SPEC-quality-lenses-p2 T1 tables (QualityLens/"
@@ -795,7 +795,9 @@ def test_P_registry_completeness():
         "project-automation Part B NotifyChannel/NotifyRoute/NotifyOutbox (notification "
         "channels, routes and delivery log, EXPLICIT_EXCLUSIONS) + the project automation "
         "ProjectAutomation/ProjectBindingClaim "
-        "(schedule and claim config, EXPLICIT_EXCLUSIONS) = 103, "
+        "(schedule and claim config, EXPLICIT_EXCLUSIONS) + the S3 LiveEvent (live-event bus, "
+        "EXPLICIT_EXCLUSIONS) + the S3c SharedState (rate-limit counters, replay ids and "
+        "one-time values, EXPLICIT_EXCLUSIONS) = 105, "
         f"got {len(tables)}"
     )
     assert tables == classified, (

@@ -38,7 +38,7 @@ import logging
 import os
 import threading
 import time
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from uuid import uuid4
 
 from sqlalchemy import delete, text
@@ -235,7 +235,7 @@ def status(*, org_id=None, customer_id=None, scoped=False, use_cache=False):
         "envelopes_enabled": tap_envelope.envelopes_enabled(),
         "raw_capture_enabled": raw_enabled,
         "retained_raw_files": len(timestamps),
-        "oldest_raw_date": datetime.fromtimestamp(min(timestamps), timezone.utc).date().isoformat()
+        "oldest_raw_date": datetime.fromtimestamp(min(timestamps), UTC).date().isoformat()
         if timestamps
         else None,
         "raw_age_out_frozen": not raw_enabled,
@@ -472,7 +472,7 @@ def purge(*, before, confirm="", apply=False, actor="cli", batch_size=BATCH_SIZE
     # The cutoff must be in the PAST: a future (or today's) date with a matching typed phrase
     # would delete every terminal envelope in the install (gate round-1 LOW-2). UTC to match
     # the exclusive UTC cutoff semantics below.
-    if parsed >= datetime.now(timezone.utc).date():
+    if parsed >= datetime.now(UTC).date():
         raise ValueError("before must be a past UTC date (earlier than today).")
     if confirm != f"purge envelopes before {before}":
         raise ValueError(f'Type exactly "purge envelopes before {before}".')

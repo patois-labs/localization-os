@@ -449,10 +449,10 @@ def render_prefix(pkg) -> str:
 # --- TM few-shot examples (SPEC-context-metadata phase 2B) -------------------
 # The headline quality lever (CONTEXT-METADATA-RESEARCH §1: TM-few-shot is the #1
 # evidenced lever, returns concentrate in the first 3-5 matches, and ONE bad match
-# is worse than none). Retrieval + relevance gating live in tm.example_matches_batch
-# (similarity FLOOR, skip-not-pad, dedupe, self-exclusion); THIS renders the already-
-# gated, best-first pairs into ONE labeled, injection-fenced, budget-capped block.
-TM_EXAMPLES_FLOOR = 75  # min similarity % for a match to be an example
+# is worse than none). Retrieval + relevance gating live behind tm.example_matches_hybrid
+# (an optional add-on retriever; the core ships none since ADR 0102 removed fuzzy); THIS
+# renders the already-gated, best-first pairs into ONE labeled, injection-fenced, budget-capped
+# block.
 TM_EXAMPLES_DEFAULT_WINDOW = 3  # top-N default (the MT plain path + step default)
 TM_EXAMPLES_MAX_WINDOW = 5  # clamp ceiling for the per-step window column
 TM_EXAMPLE_VALUE_CAP = 200  # per src/tgt char cap (one long TM row can't dominate)
@@ -475,7 +475,7 @@ def render_tm_examples(pairs) -> str:
     byte-identical to pre-2B).
 
     `pairs` is a best-first list of {"source_text","target_text"} (or (src, tgt)
-    tuples) — tm.example_matches_batch has ALREADY applied the similarity floor,
+    tuples) — tm.example_matches_hybrid has ALREADY applied the similarity floor,
     skip-not-pad, dedupe and self-exclusion; this function only renders + budget-caps.
 
     INJECTION SAFETY (spec: TM content is user/connector-sourced and could carry a
@@ -578,28 +578,66 @@ _MERGE_FIELDS = (
 )
 
 
-def _profile_context(
-    session: Session, *, org_id, customer_id, content_type_id, project_id
-) -> dict | None:
-    """The stored context of the ContextProfile at EXACTLY this scope combo (or None).
-    org_id, when given (multi-org scoped caller), also gates the row so a foreign
-    org's profile is never applied. A no-op filter when org_id is None (single-tenant,
-    byte-identical)."""
-    q = select(ContextProfile).where(
-        (ContextProfile.customer_id == customer_id)
-        if customer_id is not None
-        else ContextProfile.customer_id.is_(None),
-        (ContextProfile.content_type_id == content_type_id)
-        if content_type_id is not None
-        else ContextProfile.content_type_id.is_(None),
-        (ContextProfile.project_id == project_id)
-        if project_id is not None
-        else ContextProfile.project_id.is_(None),
-    )
-    if org_id is not None:
-        q = q.where(ContextProfile.org_id == org_id)
-    prof = session.exec(q.order_by(ContextProfile.id)).first()
-    return (prof.context or {}) if prof is not None else None
+def _profile_context(session: Session, *, org_id, scopes) -> dict:
+    """{(customer_id, content_type_id, project_id): stored context or None} for each scope
+    combo in `scopes`: the context of the ContextProfile at EXACTLY that combo (lowest id
+    first), or None when there is none. org_id, when given (multi-org scoped caller), also
+    gates the rows so a foreign org's profile is never applied. A no-op filter when org_id
+    is None (single-tenant, byte-identical).
+
+    ONE statement for every combo (S4 query diet, ADR 0093): `resolve` used to read each
+    layer separately (up to five reads per translation); each combo still gets exactly the
+    row its own read returned."""
+    import sqlalchemy as sa
+
+    from app import db
+
+    # S7b: built once per SHAPE (which scope values are NULL, whether an org
+    # gates it) and run with the values bound; same SQL, same rows.
+    def _eq(col, value, name):
+        return (col == sa.bindparam(name)) if value is not None else col.is_(None)
+
+    scopes = list(dict.fromkeys(scopes))
+    out: dict = dict.fromkeys(scopes)
+    if not scopes:
+        return out
+
+    org_gated = False
+    if org_id is not None:  # the org narrowing, applied inside _build
+        org_gated = True
+
+    def _build():
+        q = select(ContextProfile).where(
+            sa.or_(
+                *(
+                    sa.and_(
+                        _eq(ContextProfile.customer_id, c, f"c{i}"),
+                        _eq(ContextProfile.content_type_id, t, f"t{i}"),
+                        _eq(ContextProfile.project_id, p, f"p{i}"),
+                    )
+                    for i, (c, t, p) in enumerate(scopes)
+                )
+            )
+        )
+        if org_gated:  # decided by the enclosing function
+            q = q.where(ContextProfile.org_id == sa.bindparam("org_id"))
+        return q.order_by(ContextProfile.id)
+
+    shape = (org_gated, tuple((c is None, t is None, p is None) for c, t, p in scopes))
+    params = {"org_id": org_id} if org_id is not None else {}
+    for i, (c, t, p) in enumerate(scopes):
+        for name, value in ((f"c{i}", c), (f"t{i}", t), (f"p{i}", p)):
+            if value is not None:
+                params[name] = value
+    found: set = set()
+    for prof in session.exec(
+        db.prebuilt(f"context_pkg.profiles:{shape}", _build), params=params
+    ).all():
+        key = (prof.customer_id, prof.content_type_id, prof.project_id)
+        if key in out and key not in found:
+            found.add(key)
+            out[key] = prof.context or {}
+    return out
 
 
 def resolve(
@@ -639,43 +677,22 @@ def resolve(
         layers["request"] = request_ctx or {}
     if document is not None and getattr(document, "context", None):
         layers["document"] = document.context or {}
+    # The stored profile layers, most specific first, read in ONE statement (S4, ADR 0093).
+    profile_layers = []
     if project_id is not None:
-        p = _profile_context(
-            session, org_id=org_id, customer_id=None, content_type_id=None, project_id=project_id
-        )
-        if p:
-            layers["project"] = p
+        profile_layers.append(("project", (None, None, project_id)))
     if customer_id is not None and content_type_id is not None:
-        p = _profile_context(
-            session,
-            org_id=org_id,
-            customer_id=customer_id,
-            content_type_id=content_type_id,
-            project_id=None,
-        )
-        if p:
-            layers["customer_content_type"] = p
+        profile_layers.append(("customer_content_type", (customer_id, content_type_id, None)))
     if content_type_id is not None:
-        p = _profile_context(
-            session,
-            org_id=org_id,
-            customer_id=None,
-            content_type_id=content_type_id,
-            project_id=None,
-        )
-        if p:
-            layers["content_type"] = p
+        profile_layers.append(("content_type", (None, content_type_id, None)))
     if customer_id is not None:
-        p = _profile_context(
-            session, org_id=org_id, customer_id=customer_id, content_type_id=None, project_id=None
-        )
+        profile_layers.append(("customer", (customer_id, None, None)))
+    profile_layers.append(("org", (None, None, None)))
+    stored = _profile_context(session, org_id=org_id, scopes=[sc for _n, sc in profile_layers])
+    for name, sc in profile_layers:
+        p = stored.get(sc)
         if p:
-            layers["customer"] = p
-    org_default = _profile_context(
-        session, org_id=org_id, customer_id=None, content_type_id=None, project_id=None
-    )
-    if org_default:
-        layers["org"] = org_default
+            layers[name] = p
 
     effective: dict = {}
     provenance: dict = {}

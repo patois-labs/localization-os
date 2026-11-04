@@ -48,7 +48,7 @@ alembic==1.20.0
 # verify suite pay nothing for it.
 babel==2.18.0
 fluent.syntax==0.19.0     # Mozilla Project Fluent .ftl parse (Apache-2.0), app/filters/fluent_filter.py
-rapidfuzz==3.14.5        # fuzzy TM matching (Chunk 2)
+rapidfuzz==3.14.5        # edit-distance metrics (quality metrics, post-edit)
 lxml==6.1.3              # TMX/TBX/XLIFF parsing (Chunk 2/3)
 python-docx==1.2.0       # DOCX round-trip (Chunk 1)
 # PDF parse + page render for vision OCR (parse) and reflow of translated text
@@ -66,9 +66,9 @@ openpyxl==3.1.5          # XLSX round-trip (pure-python, offline-safe)
 # transitive dep (requirements.lock) to DIRECT per SPEC-image-localization 3.3.
 # The module's optional local-OCR extra (rapidocr + onnxruntime) is deliberately
 # NOT listed - opt-in via `pip install rapidocr onnxruntime` (D2).
-pillow==12.3.0
+pillow==13.0.0
 
-# Evaluations Lab Tier-0 MT metrics (PROPOSAL-evaluations-lab section 5): BLEU, chrF,
+# MT quality metrics of the shared metrics library: BLEU, chrF,
 # chrF++, TER, and - crucially - the SIGNATURE STRING that makes a BLEU number
 # comparable at all. Pure Python, no torch, no model download; pulls only portalocker,
 # regex, tabulate and numpy (all wheels, all already common). Imported LAZILY inside
@@ -88,7 +88,7 @@ regex==2026.9.29
 
 # MT/LLM providers (Chunk 4)
 anthropic==1.11.0
-google-genai==2.28.0     # coordinated with Pillow 12; core dependencies already locked
+google-genai==2.28.0     # Pillow is only its optional extra (Pillow 13 since 1.1.0); core dependencies locked
 # openai stays on 2.x: 3.x requires httpx2 (http_client typed httpx2.Client);
 # the httpx2 migration train comes first (BACKLOG 2026-09-13).
 openai==2.54.0

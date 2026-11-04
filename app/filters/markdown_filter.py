@@ -69,10 +69,9 @@ under walk 1 or 2 still exports under its own walk.
 
 import os
 import re
+import tomllib
 from bisect import bisect_right
 from dataclasses import dataclass, field
-
-import tomllib
 
 from app.filters import a11y
 from app.filters.base import (

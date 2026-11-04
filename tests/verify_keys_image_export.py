@@ -40,7 +40,7 @@ init_env("loctms_kiexport_")
 
 import json as _json
 from contextlib import redirect_stderr, redirect_stdout
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
@@ -174,7 +174,7 @@ def _cli(argv):
 def _build(pid, locale="", namespace=None, when=None):
     """Build a bundle through the service and return (zip_bytes, info, key_file_name). Reads the
     streamed spooled file to bytes via iter_bundle (which also closes it)."""
-    when = when or datetime.now(timezone.utc)
+    when = when or datetime.now(UTC)
     with Session(engine) as s:
         proj = s.get(Project, pid)
         ek: list = []
@@ -406,7 +406,7 @@ def test_zip_member_names_are_traversal_safe():
             key_file_name=fname,
             exported_keys=ek,
             qualify=False,
-            generated_at=datetime.now(timezone.utc),
+            generated_at=datetime.now(UTC),
         )
     zbytes = b"".join(key_images.iter_bundle(bundle))
     names = zipfile.ZipFile(io.BytesIO(zbytes)).namelist()
@@ -529,7 +529,7 @@ def test_bundle_streams_and_reads_one_blob_at_a_time():
                 key_file_name=fname,
                 exported_keys=ek,
                 qualify=True,
-                generated_at=datetime.now(timezone.utc),
+                generated_at=datetime.now(UTC),
             )
     finally:
         key_images.read_bytes = real
@@ -553,12 +553,12 @@ def test_archive_byte_stable():
     pid = _mk_key_project()
     kid = _add_key(pid, "stable.k")
     _attach(kid, _png(color=(7, 8, 9)), caption="cap")
-    fixed = datetime(2026, 9, 5, 12, 0, 0, tzinfo=timezone.utc)
+    fixed = datetime(2026, 9, 5, 12, 0, 0, tzinfo=UTC)
     z1, _i1, _f1 = _build(pid, when=fixed)
     z2, _i2, _f2 = _build(pid, when=fixed)
     assert z1 == z2, "same input + same generated_at must be byte-identical (M3)"
     # generated_at is the ONLY wall-clock input: a different one changes the manifest bytes.
-    z3, _i3, _f3 = _build(pid, when=datetime(2020, 1, 1, tzinfo=timezone.utc))
+    z3, _i3, _f3 = _build(pid, when=datetime(2020, 1, 1, tzinfo=UTC))
     assert z3 != z1, "a different generated_at must change the archive (proves it is injected)"
     m1 = _json.loads(zipfile.ZipFile(io.BytesIO(z1)).read("manifest.json"))
     assert m1["generated_at"] == "2026-09-05T12:00:00Z", m1

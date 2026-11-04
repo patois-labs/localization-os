@@ -121,7 +121,10 @@ def test_vendor_cli_happy_path_and_secret_never_printed():
     printed.append(out)
     assert payload["rate_card"]["bands"]["new"] == 0.2
     # merge (not replace): an untouched band is still present at its default.
-    assert "fuzzy_high" in payload["rate_card"]["bands"]
+    assert (
+        "exact" in payload["rate_card"]["bands"]
+        and "fuzzy_high" not in payload["rate_card"]["bands"]
+    )
     print("  vendor rate-card set/show (merged band) OK")
 
     # link-customer -----------------------------------------------------------

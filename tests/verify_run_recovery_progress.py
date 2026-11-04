@@ -1051,6 +1051,16 @@ def test_n1_startup_healer_spares_a_run_with_real_step_commits():
         _fail("fixture wrong: the real run left unstamped StepRuns")
     # An hour-old row whose real work happened moments ago -- the second-process shape.
     _age_run_row(rid, hours=1)
+    # S1 (ADR 0090): the real run stamped THIS process as its owner, and its thread is gone,
+    # so the owner record would (correctly) call it dead. A second process's run is judged by
+    # its owner's liveness now (verify_run_restart_resume [D]); this cell keeps pinning the
+    # activity window that still governs rows with no owner record (pre-S1 code).
+    with Session(engine) as s:
+        _row = s.get(WorkflowRun, rid)
+        _row.owner = None
+        _row.heartbeat_at = None
+        s.add(_row)
+        s.commit()
 
     orchestrator.recover_interrupted_runs()
     if _run_row(rid).status != RunStatus.RUNNING:

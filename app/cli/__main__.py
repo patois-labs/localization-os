@@ -384,6 +384,12 @@ def _configure_jobqueue_at_boot(args) -> None:
 
     try:
         jobqueue.configure_at_boot()
+        if jobqueue.DB_BACKEND_ARMED:
+            # One-shot process on the durable queue: jobs run via jobs.run_sync, and daemon
+            # workers started here would claim jobs the server owns, then die mid-run.
+            from app.kernel import jobs  # the shell reaches services through the kernel facade
+
+            jobs.set_cli_no_workers(True)
     except jobqueue.JobQueueError as exc:
         # The same {config, db} recovery surfaces blobstore carves out: both are the only way
         # to fix a REMOTE_IMMUTABLE topology switch from the CLI, so they must stay usable.
@@ -450,6 +456,16 @@ def _apply_settings_at_boot(args) -> None:
 
 
 def main(argv=None) -> int:
+    try:
+        return _main(argv)
+    finally:
+        # An in-process caller (tests, embedding) must get its job workers back afterwards.
+        _jobs = sys.modules.get("app.services.jobs")
+        if _jobs is not None:
+            _jobs.set_cli_no_workers(False)
+
+
+def _main(argv=None) -> int:
     _force_utf8_streams()
     # SSRF parity (P-F1 review F1): the in-process CLI drives connector pull/push, so it
     # needs the resolve-and-check layer the server installs at startup — else a plain DNS

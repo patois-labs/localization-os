@@ -14,6 +14,7 @@ Documented in: docs/architecture/string-keys.md
 
 import json
 import os
+from datetime import UTC
 
 from app.cli.keys_common import (
     _actor,
@@ -430,7 +431,7 @@ def _keys_export(args, emit) -> int:
                 exported_keys=ekeys,
             )
             if want_images:
-                from datetime import datetime, timezone
+                from datetime import datetime
 
                 loc = (args.locale or "").strip() or project.source_locale
                 stem = (args.namespace or "").strip() or "project"
@@ -444,7 +445,7 @@ def _keys_export(args, emit) -> int:
                         key_file_name=fname,
                         exported_keys=ekeys,
                         qualify=(not (args.namespace or "").strip()),
-                        generated_at=datetime.now(timezone.utc),
+                        generated_at=datetime.now(UTC),
                     )
                 except key_images.KeyImageError as exc:
                     # L1: carry the STRUCTURED code (key_image_export_max on a cap refusal) on the

@@ -3,6 +3,9 @@
 ## 1. Role
 
 Automated polls and fetch-based SSE streams send `X-Loc-Background` with value `1`.
+SSE streams read in-process state today; the cross-process bus they will move to when work
+runs in a worker process is `app/services/events.py` (integration point in its module docstring,
+design in ADR 0110, documented in data-and-migrations).
 The session service checks idle and absolute expiry but does not advance last activity for
 these requests. Status transitions reload the page once. Trusted human input retains the
 existing keepalive behavior. Pregate requires Chromium keyboard tests for every template or

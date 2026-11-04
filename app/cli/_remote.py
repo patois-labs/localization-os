@@ -558,8 +558,9 @@ class RemoteClient:
     def delete(self, path: str, params: dict | None = None):
         return self._decode(self._send("DELETE", path, params=params))
 
-    def upload(self, path: str, filename: str, data: bytes, form: dict | None = None):
-        """multipart POST of one file (mirrors the web upload)."""
+    def upload(self, path: str, filename: str, data, form: dict | None = None):
+        """multipart POST of one file (mirrors the web upload). `data` is bytes or an open
+        binary file, which httpx streams (S6: a large TMX is never read into memory)."""
         resp = self._send("POST", path, data=form or {}, files={"file": (filename, data)})
         return self._decode(resp)
 

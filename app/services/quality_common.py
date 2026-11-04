@@ -10,7 +10,7 @@ import unicodedata
 
 from app import config
 from app.models import StringKey
-from app.services import ai_tagging, qa, segment
+from app.services import ai_tagging, native, qa, segment
 
 DNT_FLAG_TYPE = "dnt_violation"
 
@@ -493,6 +493,12 @@ def _residue_excerpt(text: str) -> str:
         + frag
         + ("..." if start + _RESIDUE_EXCERPT_CAP < len(flat) else "")
     )
+
+
+# Native fast path (ADR 0091): `tag_damage_py` stays the reference and the fallback. Editing it
+# (or a segment / ai_tagging helper it reads, see native.SPECS) switches the native twin off.
+tag_damage_py = tag_damage
+tag_damage = native.bind("tag_damage", tag_damage_py)
 
 
 STEP_ERROR_FLAG_TYPE = "step_error"

@@ -48,7 +48,9 @@
     {% if feature_installed('evaluations') %}
     <label><input type="checkbox" name="include_eval" value="1"> Include Evaluations Lab data (off by default)</label>
     {% endif %}
+    {% if feature_installed('semantic_tm') %}
     <label><input type="checkbox" name="include_embeddings" value="1"> Include embedding vectors (large; off by default)</label>
+    {% endif %}
     {% if is_admin %}
     <label><input type="checkbox" name="include_audit" value="1"> Include the admin audit slice (workspace scope only)</label>
     {% endif %}

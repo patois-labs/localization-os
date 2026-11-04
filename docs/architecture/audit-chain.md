@@ -42,8 +42,8 @@ keys by the filesystem boundaries and checks both signatures at each boundary.
 Stop other writer processes for rotation, as for other host maintenance. The existing
 chain writer lock serializes threads within a process; it is not a distributed lock.
 Filesystem state uses private files, fsync, and atomic replacement. A process crash
-between committing a row and updating its witness can leave the witness one write
-behind; verification still checks every available row. DB-only rollback protection
+between committing a group of rows and updating its witness can leave the witness one
+group (at most 64 rows) behind; verification still checks every available row. DB-only rollback protection
 starts when the first witness is persisted. Restoring the trust files with an old DB
 is outside the DB-only attacker model. See `docs/SECRETS.md` for migration and recovery.
 
@@ -56,14 +56,48 @@ set from user space, so an in-place edit that restores the old mtime is still se
 `audit_state.read(trust_own_publish=True)` reuses the witness this process itself last published (any
 other process's publish, an edit, a restore or a deletion changes the signature and forces the full
 read and MAC check; both caches work only inside `audit_state.cached_trust()`, which only `log()` enters,
-so verification and every maintenance command always read every trust file), and `log()`
-hands its one anchor read to `_write_anchor`. Measured locally: 54 to about 99 rows per second.
-The durability guarantee is unchanged and no write is batched or deferred: `log()` returns only after
-the row is committed (SQLite WAL with `synchronous=NORMAL`, so the commit itself is not fsynced), the
-anchor is committed, and the witness file is fsynced and atomically replaced. A crash can still lose
-only a row whose `log()` had not returned, and can still leave the anchor or witness one write behind.
-What remains per row is two DB commits and one witness fsync; folding the row and anchor commits into
-one transaction is a possible follow-up (the shed tests inspect `session.new` between the two).
+so verification and every maintenance command always read every trust file), and the append read
+the anchor once. Measured locally: 54 to about 99 rows per second.
+
+**Group commit (ADR 0100).** The threads of one process that append at the same moment
+form a group: the first caller that finds no active leader (`app/services/audit.py::_submit`) takes
+the audit locks once and writes up to `GROUP_MAX` (64) queued events, oldest first, as one chained
+append (`app/services/audit.py::_append_group_locked`): on Postgres a transaction-scoped advisory
+lock first, then ONE read of the predecessor, the witness row and the anchor (the witness check,
+still before any insert; ADR 0104), every row linked and HMAC'd in arrival order, a check that the
+assigned ids ascend in link order, and the head anchor, all in ONE transaction and one commit; then one
+witness fsync and publish. No timer, no background thread: a group is whatever queued while the
+previous group held the locks. Processes take turns on `.audit_lock` one group per turn. Every write is
+still synchronous: `log()` returns only after its group's rows and anchor are committed (SQLite WAL
+with `synchronous=NORMAL`, so the commit itself is not fsynced) and the witness file is fsynced and
+atomically replaced, or with its own shed or refusal. A crash can still lose only rows whose `log()`
+had not returned (a whole uncommitted group), can no longer leave the anchor behind the rows, and can
+leave the witness at most one group behind (it was one row). A shed group sheds every row in it and
+each caller applies its own posture; a non-lock error before the commit rewrites the group one event
+at a time, each in its own caller's captured context, so only the offending caller raises; an error
+from the commit itself (rows possibly durable) is never rewritten and reaches every caller of the
+group. A thread already holding the audit locks (rotate-key, reset-anchor, ledger ceremonies) and a
+caller in a relief scope (which must keep its own pool-less routing) write inline as a group of one.
+Groups are per routing lane (`app/services/audit.py::_LANES`, ADR 0104): a bookkeeping caller (the
+middleware's audit tail, `bookkeeping.scope()`) groups only with other bookkeeping callers, so a
+group's leader routes exactly as each of its followers would. `streaming.AUDIT_WORKERS` (32) caps how
+many middleware rows one web process can put into a group.
+
+**Less work under the locks .** The group append holds the cross-process lock, so
+everything in it is paid by every appender of every process. It builds no SQLModel object: each
+`_Event` carries its row values (built on the caller's thread before any lock), the locked section adds
+only `ts`, `prev_hash` and `row_hash` (the same `_compute_hash`, the same clock, per row in link order)
+and writes the group with ONE statement with RETURNING (on Postgres an `unnest` over ten array
+parameters, whose text never changes so the driver caches it and the server prepares it; elsewhere a
+Core multi-row INSERT, or one INSERT per row on a SQLite without RETURNING). The combined read and the
+anchor UPDATE are prebuilt statements run on the transaction's connection; the Postgres advisory lock
+stays its own constant statement before the read. The
+returned ids are paired with their rows by `row_hash`, never by return order, and the ids-ascend check
+is unchanged. A stage records its rows as plain dicts in `session.info["audit_group_rows"]`, the place
+a `commit_or_shed` stand-in in a suite looks for the audit rows a transaction carries. The per-row
+`_actor_org_id` stamp (a read on the caller's thread, outside the locks) is one prebuilt statement on an
+autocommit connection. Chain format, hash inputs, anchor and witness rules, the acknowledgement point and
+every failure path are byte-identical to before (`verify_audit_group_s9`).
 
 Beyond writing and verifying, the subsystem runs a **scheduled sweep** (piggybacked on the
 scheduler tick) that re-verifies on a cadence, records a forced `chain_broken` row on
@@ -117,7 +151,7 @@ this module publishes).
 | Concern | Pin | One line |
 |---|---|---|
 | Witnesses | `app/services/audit_state.py::advance` | Pins head and epochs outside the DB. |
-| Append a row | `app/services/audit.py::log` · `app/services/audit_break_class_helpers_log_.py::AUDIT_WRITE_ATTEMPTS` | Chains a new row under a lock and updates the head anchor; forced rows bypass only the gate. |
+| Append a row | `app/services/audit.py::log` · `app/services/audit.py::_submit` · `app/services/audit.py::_append_group_locked` · `app/services/audit_break_class_helpers_log_.py::AUDIT_WRITE_ATTEMPTS` | Hands the row to a group that chains its rows and the head anchor in one transaction under the locks; forced rows bypass only the gate. |
 | Verify the chain | `app/services/audit.py::verify_chain` | Walks the log in batches recomputing hashes and checks the tail against the anchor. |
 | The keyed hash | `app/services/audit_break_class_helpers_log_.py::_compute_hash` · `app/services/audit_break_class_helpers_log_.py::_legacy_hash` | The HMAC row hash, plus the pre-upgrade unkeyed hash accepted only for old rows. |
 | The head anchor | `app/services/audit_break_class_helpers_log_.py::_anchor_mac` · `app/services/audit.py::_read_anchor` · `app/services/audit.py::_write_anchor` | Computes, reads, and monotonically writes the MAC'd tail-truncation anchor. |
@@ -214,6 +248,18 @@ this module publishes).
 - `verify_audit_perf_618`: the write path's cost budget (#618) as deterministic call counts (no
   trust-file reads and one anchor read per steady-state row), plus the tamper, truncation,
   swapped-witness, deleted-key, threads and multi-process cases run through the cached path.
+- `verify_audit_group_commit`: group commit (ADR 0100): groups form and chain event by event,
+  concurrent appenders across processes, a crash mid-group and a crash before the witness
+  publish (every acknowledged row present), tamper on grouped rows, per-caller shed posture,
+  poison-event isolation, the out-of-order id fallback, inline nested writers, and bookkeeping
+  callers grouping on their own lane (ADR 0104).
+- `verify_audit_group_s9`: the group append builds no SQLModel object, costs a fixed number of
+  statements whatever the group size, stores exactly the canonical row (every hash recomputed from the
+  stored columns, awkward values included), pairs returned ids with rows by hash, and keeps the
+  per-row fallback for a SQLite without RETURNING.
+- `verify_save_path_s7d`: a segment save's audit row rides a bookkeeping group, and the save
+  re-reads nothing after its own commit while recording the same response, memory add-on event and
+  post-edit episode (ADR 0104).
 - `verify_audit_actor_unauthenticated` - every row names who or what acted: an unidentified
   caller is `unauthenticated <ip>` with the refusal status, a wrong token shows only its
   prefix, identified callers keep their own attribution, and no row says `anonymous`.
@@ -272,7 +318,8 @@ Reset replaces a corrupt or foreign-MAC witness and records `witness_replaced=1`
 its forced audit row; it cannot repair damaged history or reconstruct missing keys.
 
 Witness advancement follows a successful anchor commit (or its monotonic no-op).
-A shed first anchor therefore self-heals on the next write. Initializing a missing
+A normal append commits its anchor with its rows, so only a standalone anchor write
+(rotate-key, reset-anchor) can shed alone; both refuse and ask for a retry. Initializing a missing
 witness when a DB anchor already exists emits WARNING and a status/CLI note, including
 on upgrade. Full backup/restore carries the DB and all audit trust files together;
 DB-only rollback needs the explicit reset described in [BACKUP.md](../BACKUP.md).
@@ -312,7 +359,9 @@ It also overlaps envelope setting and purge ceremonies with witness publication.
   keyfile *as well as* the database can rewrite rows and recompute a verifying chain; that
   requires filesystem access, at which point nothing app-level survives - stated plainly in
   the module docstring.
-- **Under sustained write contention a row can be shed.** The audit write is bounded-retry;
+- **Under sustained write contention a row can be shed.** The audit write is bounded-retry
+  (per group since ADR 0100: a shed group sheds each of its rows, every one counted, and each
+  caller applies its own posture);
   on exhaustion the `setting:audit_fail_open` posture decides whether the mutating request
   proceeds unaudited (with a loud WARN and an ERROR carrying the running drop count) or is
   refused with a retryable 503 before its handler runs, an availability vs. completeness

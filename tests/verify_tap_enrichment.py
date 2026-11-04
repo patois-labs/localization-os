@@ -432,6 +432,130 @@ def test_direct_mt_enrichment():
     print("  (MAN) direct MT: manifest + detail + not_checked adherence OK")
 
 
+# --- S4F: the direct-MT enrich reports the run's own resolutions -------------
+def test_s4f_direct_enrich_reuses_run_reads():
+    """S4 query-diet follow-up: a direct-MT leg's enrich reads the translate run's cache.
+
+    (a) Sense selection is an engine call. The enrich used to REPLAY it for every
+        sense-bearing segment after the run (one more paid call each); it now reports the
+        matches the run made, so the choice runs once per segment, inside the run.
+    (b) The LLMemory manifest compares locales the way recall does (normalized), so a
+        pair-scoped memory the run could recall is listed; raw "en-US" never matched one.
+    (c) A segment the run did not match (a 100% TM fill) is still replayed, as before."""
+    from app.models import (
+        Customer,
+        GlossarySense,
+        MemoryEntry,
+        MemoryKind,
+        MemoryStatus,
+        ProjectTmSource,
+    )
+    from app.services import glossary_hub
+    from app.services import tm as tm_svc
+
+    _reset()
+    with Session(engine) as s:
+        cust = Customer(name="s4f-%d" % _seq())  # noqa: UP031
+        s.add(cust)
+        s.commit()
+        s.refresh(cust)
+        proj = _mk_project(s)
+        proj.customer_id = cust.id
+        s.add(proj)
+        entry = GlossaryEntry(
+            project_id=proj.id,
+            source_term="bundle",
+            target_term="lote",
+            source_locale="en-US",
+            target_locale="es-ES",
+        )
+        s.add(entry)
+        s.commit()
+        s.refresh(entry)
+        s.add(
+            GlossarySense(
+                glossary_entry_id=entry.id,
+                sense_label="retail",
+                context_cue="products sold together",
+                target_term="paquete",
+            )
+        )
+        s.add(
+            MemoryEntry(
+                kind=MemoryKind.TERM_DECISION,
+                status=MemoryStatus.ACTIVE,
+                origin="manual",
+                customer_id=cust.id,
+                source_term="snow",
+                target_term="nieve",
+                source_term_norm="snow",
+                source_locale="en-US",
+                target_locale="es-ES",
+            )
+        )
+        guide = StyleGuide(
+            name="s4f-guide",
+            status=StyleGuideStatus.APPROVED,
+            customer_id=cust.id,
+            body="Friendly tone.",
+        )
+        src_proj = Project(name="s4f-src", source_locale="en-US", default_provider="mock")
+        s.add(guide)
+        s.add(src_proj)
+        s.commit()
+        s.refresh(guide)
+        s.refresh(src_proj)
+        guide_id, src_pid = guide.id, src_proj.id
+        s.add(ProjectTmSource(project_id=proj.id, source_project_id=src_pid))
+        s.commit()
+        tm_svc.write_back(s, proj.id, "Keep the bundle dry.", "TM lote seco", "en-US", "es-ES")
+        s.commit()
+        doc = _mk_doc(
+            s, proj, ["Buy the bundle.", "The bundle ships today.", "Keep the bundle dry."]
+        )
+        doc_id = doc.id
+        proj_id = proj.id
+    calls = []
+    orig = glossary_hub._choose_sense
+
+    def _counting(segment_text, *a, **k):
+        calls.append(segment_text)
+        return orig(segment_text, *a, **k)
+
+    glossary_hub._choose_sense = _counting
+    try:
+        with Session(engine) as s:
+            for _ in translate.pretranslate_stream(s, doc_id, "es-ES"):
+                pass
+    finally:
+        glossary_hub._choose_sense = orig
+    a, r = _one_action_run()
+    # (a) the two machine-translated segments chose once each (in the run); the TM-filled
+    # third is replayed by enrich, as before: 3 calls in all, not 5.
+    assert sorted(calls) == sorted(
+        ["Buy the bundle.", "The bundle ships today.", "Keep the bundle dry."]
+    ), calls
+    matched = r.detail["glossary"]["matched_terms"]
+    assert len(matched) == 1 and len(matched[0]["segment_ids"]) == 3, matched
+    # (b) without the memory add-on the manifest records no memory
+    mem = r.detail["manifest"]["llmemory"]
+    assert mem is None, mem
+    assert a.manifest["by_locale"]["es-ES"]["llmemory"] == mem, a.manifest
+    # (d) the style guide and the attached TM source the run resolved are the manifest's
+    man = r.detail["manifest"]
+    assert (man["style_guide"] or {}).get("id") == guide_id, man["style_guide"]
+    assert man["tm"]["precedence"] == [proj_id, src_pid], man["tm"]
+    with Session(engine) as s:  # later tests delete glossary entries / guides: drop ours first
+        for model in (GlossarySense, ProjectTmSource):
+            for row in s.exec(select(model)).all():
+                s.delete(row)
+        g = s.get(StyleGuide, guide_id)
+        if g is not None:
+            s.delete(g)
+        s.commit()
+    print("  (S4F) direct enrich: no replayed sense call, pair-scoped memory listed OK")
+
+
 # --- DANG: a deleted asset is safe to read back / re-enrich ------------------
 def test_dangling_asset_read_and_reenrich_safe():
     _reset()
@@ -1423,6 +1547,7 @@ def main():
     test_adherence_violated_via_reenrich()
     test_adherence_unit_three_states()
     test_direct_mt_enrichment()
+    test_s4f_direct_enrich_reuses_run_reads()
     test_dangling_asset_read_and_reenrich_safe()
     test_observer_purity_enrich_failure()
     test_non_terminal_leg_not_enriched()

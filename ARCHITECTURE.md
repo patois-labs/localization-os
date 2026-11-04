@@ -241,6 +241,7 @@ doc-truth guard fails if a doc exists that either index omits.
 [inline-tags](docs/architecture/inline-tags.md) ·
 [style-guides](docs/architecture/style-guides.md) ·
 [segmentation](docs/architecture/segmentation.md) ·
+[native-module](docs/architecture/native-module.md) ·
 [collaboration-and-review](docs/architecture/collaboration-and-review.md) ·
 [reporting-and-dashboard](docs/architecture/reporting-and-dashboard.md) ·
 [cost-and-budgets](docs/architecture/cost-and-budgets.md) ·

@@ -38,7 +38,7 @@ def _cards():
     from app.kernel import settings
 
     cards = []
-    for f in ee.FEATURES:
+    for f in ee.listed_features():
         pf = ee.preflight(f.key, run_network=False)
         fields = []
         for fld in f.fields:

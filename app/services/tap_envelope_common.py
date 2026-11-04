@@ -3,7 +3,7 @@
 Documented in: docs/architecture/connectors.md
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def _now() -> datetime:
@@ -14,7 +14,7 @@ def _now() -> datetime:
 
 def _iso(dt: datetime) -> str:
     """UTC ISO-8601, for anywhere a string timestamp is wanted (section 4)."""
-    return dt.replace(tzinfo=timezone.utc).isoformat()
+    return dt.replace(tzinfo=UTC).isoformat()
 
 
 def _action_rollup_status(statuses):

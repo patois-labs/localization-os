@@ -278,7 +278,13 @@ def document_detail(
         provider = get_provider(project.default_provider if project else None)
     except DeadEngineError:
         provider = MockProvider()
-    matches = tm.grid_matches(session, project, selected, [s.source_text for s in page_segments])
+    matches = tm.grid_matches(
+        session,
+        project,
+        selected,
+        [s.source_text for s in page_segments],
+        contexts=tm.grid_contexts(session, segments, page_segments),
+    )
     rows = []
     for s in page_segments:
         terms = []
@@ -642,7 +648,13 @@ def editor(
     except DeadEngineError:
         provider = MockProvider()
 
-    matches = tm.grid_matches(session, project, selected, [s.source_text for s in page_segments])
+    matches = tm.grid_matches(
+        session,
+        project,
+        selected,
+        [s.source_text for s in page_segments],
+        contexts=tm.grid_contexts(session, segments, page_segments),
+    )
     # K8: a key value's char_limit surfaced in the CAT editor (spec §8). Batch-resolved
     # from the page's key_ids in ONE query (no N+1), NOT from Segment.meta -- that column
     # is reserved for the phase-2 per-unit override and nothing writes it yet. A document

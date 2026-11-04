@@ -489,13 +489,6 @@ MODULES: tuple[Module, ...] = (
                 "Segment fields, deliberately NOT vendor-gated (works with vendors off).",
             ),
             (
-                "app/web/api_cli_projects_1.py",  # SRP split 2026-09-14 (shim/piece importer)
-                "the shared /api+CLI surface; every /api/vendors route is gated first-line by "
-                "deps.feature_api_block. ALSO reads vendor_cost's 7-band leverage SEAM for "
-                "GET /api/projects/{id}/leverage (CV-1) — a pure classification over persisted "
-                "Segment fields, deliberately NOT vendor-gated (works with vendors off).",
-            ),
-            (
                 "app/web/api_cli_misc_3.py",  # SRP split 2026-09-14 (shim/piece importer)
                 "the shared /api+CLI surface; every /api/vendors route is gated first-line by "
                 "deps.feature_api_block. ALSO reads vendor_cost's 7-band leverage SEAM for "
@@ -586,20 +579,6 @@ MODULES: tuple[Module, ...] = (
                 "app/filters/xliff_filter.py",
                 "reuses vendor_xliff's hardened XLIFF PARSE seam so the two parse paths cannot "
                 "drift; pure format code, no vendor egress.",
-            ),
-            (
-                "app/web/queries.py",
-                "CV-1 project page reads vendor_cost's 7-band leverage SEAM "
-                "(leverage_over_segments/estimate_band_rows) — a PURE classification over "
-                "persisted Segment fields (tm_match_pct/lock_band/source), no dispatch; works "
-                "with vendors_enabled=0 (verified).",
-            ),
-            (
-                "app/cli/cmd_project_part2.py",  # SRP split 2026-09-14
-                "the `project leverage` verb reads vendor_cost's 7-band leverage SEAM "
-                "(project_leverage/estimate_band_rows/project_has_key_docs) — a PURE "
-                "classification over persisted Segment fields, no dispatch; works with "
-                "vendors_enabled=0 (verified).",
             ),
         ),
     ),

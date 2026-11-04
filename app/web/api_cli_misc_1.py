@@ -5,8 +5,10 @@ Documented in: docs/architecture/surfaces-and-parity.md
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import exists
 from sqlmodel import Session, select
 
+from app import db as _db
 from app.db import engine
 from app.kernel import (
     access,
@@ -24,8 +26,11 @@ from app.kernel import (
 )
 from app.kernel import ids as ids
 from app.models import (
+    Document,
     Project,
+    RunStatus,
     Segment,
+    WorkflowRun,
 )
 from app.web import deps
 from app.web.api_cli_common import (
@@ -45,6 +50,7 @@ from app.web.api_cli_common import (
     _lqa_finding_dict,
     _lqa_finding_review_block,
     _project_in_org,
+    _ring_light,
     _role_block,
     _visible_document,
     _write_block,
@@ -266,6 +272,49 @@ def _segment_detail_row(seg, *, session=None, drift=None) -> dict:
     return row
 
 
+def _doc_project_paused_stmt(light: bool = False):
+    """S9: a document, its project and "does any run of it sit paused" in one select. Built once
+    per shape (db.prebuilt); the caller binds `doc_id`. `light`: the project comes back as its
+    org and customer columns only (the row is [document, org_id, customer_id, any_paused]),
+    for a caller whose visibility those two columns plus access.can_view_project decide."""
+    from sqlalchemy import bindparam
+
+    project_cols = (Project.org_id, Project.customer_id) if light else (Project,)
+    return (
+        select(
+            Document,
+            *project_cols,
+            exists()
+            .where(WorkflowRun.document_id == Document.id, WorkflowRun.status == RunStatus.PAUSED)
+            .correlate(Document)
+            .label("any_paused"),
+        )
+        .join(Project, Project.id == Document.project_id)
+        .where(Document.id == bindparam("doc_id"))
+    )
+
+
+def _doc_segments_stmt(detail: bool):
+    """S9: the segment columns GET /api/documents/{id}/segments reads. The light shape needs the
+    locale, order, target and status; the detail shape adds what _segment_detail_row and
+    tm_lock read (id, qa_flags, meta, lock_band, lock_hard). Built once per shape."""
+    from sqlalchemy import bindparam
+
+    cols = [Segment.target_locale, Segment.order_index, Segment.target_text, Segment.status]
+    if detail:
+        cols += [Segment.id, Segment.qa_flags, Segment.meta, Segment.lock_band, Segment.lock_hard]
+    return select(*cols).where(Segment.document_id == bindparam("doc_id"))
+
+
+def _paused_locales_stmt():
+    from sqlalchemy import bindparam
+
+    return select(WorkflowRun.target_locale).where(
+        WorkflowRun.document_id == bindparam("doc_id"),
+        WorkflowRun.status == bindparam("paused"),
+    )
+
+
 @router.get("/api/documents/{doc_id}/segments")
 def api_document_segments(doc_id: int, request: Request):
     """Per-locale segment + translated counts (mirrors `doc show`).
@@ -283,10 +332,50 @@ def api_document_segments(doc_id: int, request: Request):
 
     detail = request.query_params.get("detail") == "segments"
     with Session(engine) as s:
-        doc = _visible_document(s, doc_id)
-        if doc is None or _project_in_org(s, doc.project_id, org_id, ident) is None:
+        # S9: the document, its project and "does any run of it sit paused" in ONE statement.
+        # Both rows land in the session's identity map (held by `pre`: the map is weak), so
+        # the unchanged `_visible_document` and `_project_in_org` below answer from it. A
+        # missing document (or one whose project is gone) is the same 404 they would answer.
+        # An unrestricted caller needs only the project's two ring columns, not its whole row.
+        light = _ring_light(ident)
+        pre = s.exec(
+            _db.prebuilt(
+                f"api_cli_misc_1.doc_project_paused:{int(light)}",
+                lambda: _doc_project_paused_stmt(light),
+            ),
+            params={"doc_id": doc_id},
+        ).first()
+        if pre is None:
             return JSONResponse(_NOT_FOUND, status_code=404)
-        segs = s.exec(select(Segment).where(Segment.document_id == doc_id)).all()
+        doc = _visible_document(s, doc_id)
+        if doc is None:
+            return JSONResponse(_NOT_FOUND, status_code=404)
+        ring = (pre[1], pre[2]) if light else None
+        if _project_in_org(s, doc.project_id, org_id, ident, ring=ring) is None:
+            return JSONResponse(_NOT_FOUND, status_code=404)
+        # S9: only the columns this payload reads (never source_text / inline_tags), as rows,
+        # not Segment objects. The light shape needs just locale, order and target; the
+        # detail shape adds what _segment_detail_row and tm_lock read.
+        segs = s.exec(
+            _db.prebuilt(
+                f"api_cli_misc_1.doc_segments:{int(detail)}", lambda: _doc_segments_stmt(detail)
+            ),
+            params={"doc_id": doc_id},
+        ).all()
+        # S3c (ADR 0097): "which locales have a paused run at all"; the human review lookup
+        # below then runs only for those (it was one read per locale, every poll, and almost
+        # every document has none). S9: the existence flag rode the first statement, so the
+        # locale read only runs for a document that has a paused run.
+        paused_locales = (
+            set(
+                s.exec(
+                    _db.prebuilt("api_cli_misc_1.paused_locales", _paused_locales_stmt),
+                    params={"doc_id": doc_id, "paused": RunStatus.PAUSED},
+                ).all()
+            )
+            if pre[-1]
+            else set()
+        )
         by_locale: dict = {}
         for sg in segs:
             by_locale.setdefault(sg.target_locale, []).append(sg)
@@ -297,7 +386,9 @@ def api_document_segments(doc_id: int, request: Request):
             entry = {"segments": len(group), "translated": translated}
             # #617: a run parked on a human_review step (key absent otherwise, so every
             # other payload is byte-identical). `pending_mt` rides on the detail rows.
-            waiting = orchestrator.waiting_human_review(s, doc_id, loc)
+            waiting = (
+                orchestrator.waiting_human_review(s, doc_id, loc) if loc in paused_locales else None
+            )
             if waiting:
                 entry["awaiting_review"] = {
                     "run_id": waiting["run_id"],
@@ -322,7 +413,9 @@ def api_document_segments(doc_id: int, request: Request):
             "mode": doc.mode,
             # #563: the derived lifecycle (new, in_translation, in_review, done), not the
             # stored column that never moves off "new".
-            "status": lifecycle.document_status(s, doc),
+            # S9: derived from the segments read above (the same buckets the grouped query
+            # counts), not a second pass over them.
+            "status": lifecycle.document_status_from_segments(segs),
             "locales": locales,
         }
         # VPAT 504.3 prompt, headless: present ONLY for a document whose format carries

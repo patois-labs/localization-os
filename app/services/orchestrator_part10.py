@@ -212,7 +212,41 @@ class _ProgressTicker:
             _progress_forget(self.run_id)
 
 
+#: S3 (ADR 0095): in the web role a run stream waits on the run's events channel (published by
+#: the worker that executes it, `wake.run_changed`) and re-reads the run at once when one
+#: arrives; it still re-reads at least this often, so a lost event costs only this long.
+WEB_OBSERVE_FALLBACK_S = 2.0
+
+
 def observe_run(run_id: int, poll_interval: float = 0.4, max_seconds: float = 900.0):
+    """Read-only SSE generator over a run's rows (see `_observe_run`). In the web role (S3,
+    ADR 0095) the waits between reads are woken by the worker's run events."""
+    from app import config
+
+    sub = None
+    if config.ROLE == "web":
+        try:
+            from app.services import events
+
+            sub = events.subscribe(events.run_channel(run_id))
+        except Exception:
+            log.debug("run %s stream: no events subscription; polling", run_id, exc_info=True)
+            sub = None
+
+    def _wait():
+        if sub is None:
+            time.sleep(poll_interval)
+        else:
+            sub.poll(timeout=WEB_OBSERVE_FALLBACK_S)
+
+    try:
+        yield from _observe_run(run_id, poll_interval, max_seconds, _wait)
+    finally:
+        if sub is not None:
+            sub.close()
+
+
+def _observe_run(run_id: int, poll_interval: float, max_seconds: float, _wait):
     """Read-only SSE generator: poll a run's StepRun/WorkflowRun rows and yield
     the same event shapes run_view.html consumes (run_started, step, paused,
     done, closed). Never executes anything — reconnects/second tabs are safe.
@@ -294,7 +328,7 @@ def observe_run(run_id: int, poll_interval: float = 0.4, max_seconds: float = 90
             if time.time() > deadline:
                 yield None, {"type": "closed", "run_id": run_id, "status": None}
                 return
-            time.sleep(poll_interval)
+            _wait()
             continue
         with _poll_session as s:
             run = s.get(WorkflowRun, run_id)
@@ -480,4 +514,4 @@ def observe_run(run_id: int, poll_interval: float = 0.4, max_seconds: float = 90
             # RUNNING). Reported honestly rather than as a terminal verdict.
             yield None, {"type": "closed", "run_id": run_id, "status": status}
             return
-        time.sleep(poll_interval)
+        _wait()

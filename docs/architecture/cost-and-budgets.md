@@ -35,8 +35,6 @@ surface here also saves the department budgets, whose service lives in connector
   estimated from the prompt and received output; unseen vendor-side work is unknowable.
 - Direct glossary sense selection, glossary building, term pruning and term proposals
   use the same accounting rules, estimating prompt/output tokens if usage is absent.
-- OpenAI semantic-TM embeddings check the cap and book input tokens for lookup, write-back
-  and backfill. A blocked embed returns no vectors and retains fuzzy-only behavior.
 - Local completion engines on tailnet hosts (`*.ts.net` or CGNAT literals) are free
   without DNS, including a SOCKS-sidecar topology. Other hosts are free only when
   all addresses are loopback, RFC1918 or IPv6 ULA (including Tailscale IPv6).
@@ -131,6 +129,7 @@ surface here also saves the department budgets, whose service lives in connector
   at 100% exactly like a classic one (`ProjectBudgetExhausted`; 429 on `/api`), including each
   LTB arm E mission, which is refused before its mission row is written. Enforced by
   `verify_project_budgets`.
+- **Vendor human cost is priced per leverage band.** `app/services/vendor_cost.py::estimate_from_segments` prices a dispatch by the four bands of ADR 0102 (101 % in-context, repetitions, 100 % exact, new), the same bands the leverage report counts (the Leverage section of tm-and-glossary.md); a rate card stored with the removed fuzzy bands loads with them dropped.
 - **Routing is deterministic, audit-logged, and never overrides a human.**
   `app/services/routing.py::resolve` applies the first active matching rule by priority; a
   caller-explicit override wins and is a no-op decision that is not audited. Enforced by
@@ -142,7 +141,7 @@ surface here also saves the department budgets, whose service lives in connector
 |---|---|---|
 | Spend cap | `app/services/spend.py::would_block` · `app/services/spend.py::record_usage` · `app/services/spend.py::note_trip` · `app/services/spend.py::meter_state` | The per-period actual-spend ledger, the pre-call check, and the first-trip audit. |
 | Model pricing | `app/services/pricing.py::cost_usd` · `app/services/pricing.py::rates_for` | The static per-model USD table with a conservative unknown fallback. |
-| Project budgets | `app/services/project_budgets.py::project_check` · `app/services/project_budgets.py::upsert_project_budget` · `app/services/project_budgets.py::budget_state` | Per-project monthly USD caps over AI and vendor spend. |
+| Project budgets | `app/services/project_budgets.py::project_check` · `app/services/project_budgets.py::upsert_project_budget` · `app/services/project_budgets.py::budget_state` · `app/services/project_budgets.py::budget_state_cached` | Per-project monthly USD caps over AI and vendor spend. The read surfaces (project page meter, `GET /api/projects/{id}`) use `budget_state_cached`: at most 15 s stale, refreshed in the background, forgotten when a job finishes (`evaluate_thresholds`) or a budget changes. Its AI-job figure comes from one shared scan of the month's cost-bearing jobs (`app/services/project_budgets.py::_month_job_index`, first-hit attribution like `_job_attributes_to`, rebuilt at most every 15 s by ONE caller per process at a time, from only the five Job columns the pricing reads; concurrent callers get the previous index while one build runs, so while a project is read its AI-job figure is under 3 x 15 s plus a refresh and two builds behind real spend, typically 2 x 15 s) instead of a re-scan per project. Every gate reads the live figure (measured: project GET p95 7.7 s to 0.19 s with a 1.7M-unit TM). |
 | Content routing | `app/services/routing.py::resolve` · `app/services/routing.py::create_rule` · `app/services/routing.py::validate_rule` · `app/services/routing.py::department_for` | Deterministic ext/department routing to a project and provider. |
 | Web surface | `app/web/routing.py::routing_index` · `app/web/routing.py::routing_create` · `app/web/routing.py::budget_save` · `app/web/routing.py::project_budget_save` | The `/routing` rule CRUD and the department + project budget save routes. |
 | CLI surface | `app/cli/cmd_routing.py::register` | The `routing` command group (the feature-gated top-level twin). |

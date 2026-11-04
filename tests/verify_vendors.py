@@ -70,9 +70,6 @@ RATE_CARD = {
     "currency": "USD",
     "bands": {
         "new": 0.20,
-        "fuzzy_high": 0.10,
-        "fuzzy_mid": 0.12,
-        "fuzzy_low": 0.08,
         "exact": 0.0,
         "context": 0.0,
         "repetitions": 0.0,
@@ -323,12 +320,19 @@ def test_rate_card_normalization():
         v = vendors.create(s, "Priced")
         # A VALID card stores + normalizes (missing bands -> 0.0, currency upper).
         vendors.set_rate_card(
-            s, v.id, {"currency": "eur", "bands": {"new": "0.25", "fuzzy_low": 0.05}}
+            s, v.id, {"currency": "eur", "bands": {"new": "0.25", "context": 0.05}}
         )
         card = vendors.rate_card_for(vendors.get(s, v.id))
         assert card["currency"] == "EUR"
         assert card["bands"]["new"] == 0.25
-        assert card["bands"]["fuzzy_low"] == 0.05
+        assert card["bands"]["context"] == 0.05
+        # ADR 0102: the fuzzy rate bands are gone; saving one is refused
+        try:
+            vendors.set_rate_card(s, v.id, {"bands": {"fuzzy_low": 0.05}})
+        except vendors.VendorError as exc:
+            assert "fuzzy rate bands were removed" in str(exc), exc
+        else:
+            raise AssertionError("a fuzzy_* rate band must be refused")
         assert card["bands"]["exact"] == 0.0, "missing band defaults to 0.0"
         assert set(card["bands"]) == set(vendor_cost.BANDS)
     print("  [C] rate-card normalization (missing -> 0.0, currency upper): OK")
@@ -385,10 +389,10 @@ def _banded_doc():
         rows = [
             ("Alpha beta gamma", None, None),  # 3w new (billable)
             ("Delta epsilon", 100, None),  # 2w exact (covered)
-            ("Zeta eta theta iota", 88, None),  # 4w fuzzy_mid (billable)
+            ("Zeta eta theta iota", 88, None),  # 4w old 88 stamp -> new (ADR 0102, billable)
             ("Alpha beta gamma", None, None),  # 3w repetition of seg0 (covered)
             ("Kappa", None, "100"),  # 1w locked-100 -> exact (covered)
-            ("Lambda mu", 96, None),  # 2w fuzzy_high (billable)
+            ("Lambda mu", 96, None),  # 2w old 96 stamp -> new (ADR 0102, billable)
         ]
         for i, (src, pct, band) in enumerate(rows):
             s.add(
@@ -414,20 +418,20 @@ def test_scoping_estimate_bands_and_exclusions():
         est = vendor_cost.scoping_estimate(s, doc, ["es-ES"], v)
         b = est["bands"]
         # Every band counted correctly.
-        assert b["new"]["words"] == 3 and b["new"]["segments"] == 1
-        assert b["fuzzy_mid"]["words"] == 4
-        assert b["fuzzy_high"]["words"] == 2
+        # ADR 0102: the old 88 and 96 stamps are not leverage any more, so they are new too.
+        assert b["new"]["words"] == 9 and b["new"]["segments"] == 3
+        assert set(b) == set(vendor_cost.BANDS)
         # exact = the pct-100 seg (2w) + the hard-locked seg (1w).
         assert b["exact"]["words"] == 3 and b["exact"]["segments"] == 2
         assert b["repetitions"]["words"] == 3 and b["repetitions"]["segments"] == 1
         # Covered bands are priced 0 (excluded from the billable human-work scope).
         assert b["exact"]["cost"] == 0.0 and b["repetitions"]["cost"] == 0.0
-        # Billable = new(3*0.20) + fuzzy_mid(4*0.12) + fuzzy_high(2*0.10) = 1.28.
-        assert est["billable_cost"] == 1.28, est
+        # Billable = new (3 + 4 + 2 words) * 0.20 = 1.80.
+        assert est["billable_cost"] == 1.8, est
         assert est["billable_words"] == 9
         assert est["covered_words"] == 6  # exact 3 + repetitions 3
         assert est["total_words"] == 15
-        assert est["total_cost"] == 1.28  # covered rates are 0
+        assert est["total_cost"] == 1.8  # covered rates are 0
         assert est["segment_count"] == 6
     print("  [D] scoping estimate: bands correct, locked/100%/reps excluded: OK")
 

@@ -120,6 +120,18 @@ class FeatureValueInvalid(FeatureAdminError):
     """`enabled` was not a real boolean."""
 
 
+class FeatureNotInstalled(FeatureAdminError):
+    """The feature ships in a paid add-on that is not installed: it cannot be turned on."""
+
+    def __init__(self, slug: str, addon_label: str):
+        self.slug = slug
+        label = (addon_label or "paid").removesuffix(" add-on")
+        super().__init__(
+            f"{slug} cannot be enabled: it ships in the {label} add-on, which is not "
+            "installed in this edition. Nothing was changed."
+        )
+
+
 def resolve(slug: str) -> features.Feature:
     """The registry Feature for `slug`, or a refusal.
 
@@ -164,7 +176,9 @@ def list_features() -> list[dict]:
     Built ON TOP of features.ui_cards() (the same rows the Settings card renders,
     rebranded), never a re-derivation -- so the web card, the CLI table and GET
     /api/admin/features can never disagree about what the features ARE."""
-    cards = {c["slug"]: c for c in features.ui_cards()}
+    # Open-core edition: a feature whose add-on is not installed is not listed (it cannot be
+    # turned on here, and the core shows no paid features).
+    cards = {c["slug"]: c for c in features.ui_cards() if c.get("installed", True)}
     return [_row(f, cards[f.slug]) for f in features.FEATURES if f.slug in cards]
 
 
@@ -185,6 +199,14 @@ def set_feature_enabled(
     Returns {"slug", "setting_key", "enabled", "changed"}. `changed` is False on a
     same-state write, which writes nothing and audits nothing."""
     feat = resolve(slug)
+    from app import editions
+
+    installed = editions.feature_installed(feat.slug)
+    if enabled is True and not installed:
+        # Refuse BEFORE any write (and before the install-lock refusal, which would hide the
+        # real reason): enabling an add-on feature without its code would store a "1" that
+        # nothing honours (the feature still reads as off everywhere).
+        raise FeatureNotInstalled(feat.slug, editions.edition_label(feat.slug))
     if remote and feat.setting_key in settings.REMOTE_IMMUTABLE_KEYS:
         raise FeatureLocalOnly(feat.slug, feat.setting_key)
     if not isinstance(enabled, bool):
@@ -198,7 +220,12 @@ def set_feature_enabled(
         )
 
     value = "1" if enabled else "0"
-    changed = feat.is_enabled() != enabled
+    if installed:
+        changed = feat.is_enabled() != enabled
+    else:
+        # A not-installed feature always reads as off, so compare the STORED value: a stale
+        # "1" (written before this refusal existed, or by `config set`) is cleared.
+        changed = str(settings.get(feat.setting_key) or "0") != value
     if changed:
         # set_many, exactly as the Settings card has always written it: audited by the
         # caller below, version-bumped, so a running server picks the flip up within

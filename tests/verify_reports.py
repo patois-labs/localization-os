@@ -1199,8 +1199,9 @@ def test_derived_words_labeled():
 # 9. TM-LEVERAGE BAR (viz quick-win, VIZ-RESEARCH-2026-07-21)
 # ============================================================================
 def test_tm_leverage_bands():
-    """tm.leverage_bands() buckets segments into exact/fuzzy/new/untranslated
-    (the bands the persisted tm_match_pct data actually supports - see the
+    """tm.leverage_bands() buckets segments into context/exact/new/untranslated
+    (ADR 0102: 101 -> context, 100 -> exact, an old 75-99 stamp -> new; the bands the
+    persisted tm_match_pct data actually supports - see the
     function's docstring for why "semantic" isn't a 5th band); every segment
     lands in exactly one band, so counts sum to the total. Both /reports (the
     aggregate) and a project's Overview (project-scoped) render the bar."""
@@ -1212,9 +1213,10 @@ def test_tm_leverage_bands():
         pid,
         [
             ("exact one", "t1"),  # -> tm_match_pct=100 below
-            ("fuzzy one", "t2"),  # -> tm_match_pct=88 below
+            ("context one", "t2"),  # -> tm_match_pct=101 below
             ("fresh one", "t3"),  # tm_match_pct stays None, translated -> "new"
             ("untranslated one", ""),  # no target -> "untranslated"
+            ("old fuzzy one", "t5"),  # old 88 stamp -> "new" (ADR 0102)
         ],
     )
     with Session(engine) as s:
@@ -1222,7 +1224,8 @@ def test_tm_leverage_bands():
             select(Segment).where(Segment.document_id == doc_id).order_by(Segment.order_index)
         ).all()
         segs[0].tm_match_pct = 100
-        segs[1].tm_match_pct = 88
+        segs[1].tm_match_pct = 101
+        segs[4].tm_match_pct = 88
         for row in segs:
             s.add(row)
         s.commit()
@@ -1230,8 +1233,8 @@ def test_tm_leverage_bands():
     with Session(engine) as s:
         segs = s.exec(select(Segment).where(Segment.document_id == doc_id)).all()
         bands = tm.leverage_bands(segs)
-    assert bands == {"exact": 1, "fuzzy": 1, "new": 1, "untranslated": 1}, bands
-    assert sum(bands.values()) == len(segs) == 4, "bands must sum to the total"
+    assert bands == {"context": 1, "exact": 1, "new": 2, "untranslated": 1}, bands
+    assert sum(bands.values()) == len(segs) == 5, "bands must sum to the total"
 
     client = TestClient(app)
     # /reports: the aggregate bar renders with every band labeled (counts vary -
@@ -1241,7 +1244,8 @@ def test_tm_leverage_bands():
     r = client.get("/reports")
     assert r.status_code == 200
     assert 'class="tmlev-bar"' in r.text and "TM leverage" in r.text
-    assert "Exact match" in r.text and "Fuzzy match" in r.text
+    assert "100 % exact" in r.text and "101 % in-context" in r.text
+    assert "Fuzzy match" not in r.text
     assert "No TM match" in r.text and "Untranslated" in r.text
     assert "New (MT)" not in r.text, "the misleading MT-only wording must be gone"
 
@@ -1250,8 +1254,8 @@ def test_tm_leverage_bands():
     r = client.get(f"/projects/{pid}")
     assert r.status_code == 200
     assert 'class="tmlev-bar"' in r.text
-    assert r.text.count('<b class="data-mono">1</b>') >= 4, (
-        "each of the 4 bands (count=1 each) must render in the project's legend"
+    assert r.text.count('<b class="data-mono">1</b>') >= 3, (
+        "the bands with count 1 must render in the project's legend"
     )
     assert "New (MT)" not in r.text
     print(
@@ -1294,7 +1298,7 @@ def test_tm_leverage_no_tm_match_label_is_honest():
             "the real editor save path must NOT stamp tm_match_pct (confirms the premise)"
         )
         bands = tm.leverage_bands([seg])
-    assert bands == {"exact": 0, "fuzzy": 0, "new": 1, "untranslated": 0}, bands
+    assert bands == {"context": 0, "exact": 0, "new": 1, "untranslated": 0}, bands
 
     r = client.get(f"/projects/{pid}")
     assert r.status_code == 200
@@ -1483,23 +1487,23 @@ def test_cost_report_kind_is_manager_gated():
 # ============================================================================
 # CV-1: 7-band WORD-based project leverage (vendor_cost model, surfaced project-wide)
 # ============================================================================
-def test_project_leverage_7band():
-    """CV-1: vendor_cost.project_leverage classifies a project's segments into the real
-    7-band model (repetitions/context/exact/fuzzy hi-mid-lo/new) by their PERSISTED
-    tm_match_pct / lock_band, WORD-counted. The project page, GET /api/projects/{id}/
-    leverage and `project leverage --json` all read the SAME seam (parity)."""
-    from app.services import vendor_cost
+def test_project_leverage_four_band():
+    """ADR 0102: leverage.analyze classifies a project's segments into the four bands
+    (context / repetitions / exact / new) by their PERSISTED tm_match_pct / lock_band,
+    WORD-counted. The project page, GET /api/projects/{id}/leverage and `project leverage
+    --json` all read the SAME seam (parity)."""
+    from app.services import leverage
 
-    cid = _mk_customer("Lev7Cust")
-    pid = _mk_project("Lev7Proj", customer_id=cid)
+    cid = _mk_customer("Lev4Cust")
+    pid = _mk_project("Lev4Proj", customer_id=cid)
     # 8 segments, 3 words each, one locale -> one repetition group.
     doc_id = _add_segments(
         pid,
         [
             ("alpha one two", "t"),  # pct=100         -> exact
-            ("beta three four", "t"),  # pct=96          -> fuzzy_high
-            ("gamma five six", "t"),  # pct=88          -> fuzzy_mid
-            ("delta seven eight", "t"),  # pct=80          -> fuzzy_low
+            ("beta three four", "t"),  # pct=96          -> new (old fuzzy stamp)
+            ("gamma five six", "t"),  # pct=88          -> new (old fuzzy stamp)
+            ("delta seven eight", "t"),  # pct=80          -> new (old fuzzy stamp)
             ("epsilon nine ten", "t"),  # pct=None        -> new
             ("epsilon nine ten", "t"),  # duplicate       -> repetitions
             ("zeta eleven twelve", "t"),  # lock_band=context -> context
@@ -1523,27 +1527,20 @@ def test_project_leverage_7band():
         s.commit()
 
     with Session(engine) as s:
-        est = vendor_cost.project_leverage(s, pid)
-    words = {b: est["bands"][b]["words"] for b in vendor_cost.BANDS}
-    assert words == {
-        "repetitions": 3,
-        "context": 3,
-        "exact": 6,
-        "fuzzy_high": 3,
-        "fuzzy_mid": 3,
-        "fuzzy_low": 3,
-        "new": 3,
-    }, words
-    assert est["total_words"] == 24 and est["segment_count"] == 8, est
-    # covered = reps+context+exact = 12; billable (post-edit) = 3 fuzzy + new = 12.
-    assert est["covered_words"] == 12 and est["billable_words"] == 12, est
+        rep = leverage.analyze(s, pid)
+    lang = rep["languages"][0]
+    words = {b: lang["bands"][b]["words"] for b in leverage.BANDS}
+    assert words == {"context": 3, "repetitions": 3, "exact": 6, "new": 12}, words
+    assert rep["totals"]["words"] == 24 and rep["totals"]["segments"] == 8, rep["totals"]
 
     client = TestClient(app)
-    # --- web: the project page renders the accessible 7-band bar ---
+    # --- web: the project page renders the accessible per-language table and bar ---
     r = client.get(f"/projects/{pid}")
     assert r.status_code == 200
-    assert 'class="lev7-bar"' in r.text and "Word-based leverage (7-band)" in r.text
-    assert "Repetitions" in r.text and "Fuzzy 95-99%" in r.text and "New / no match" in r.text
+    assert 'class="lev7-bar"' in r.text and "Word-based leverage" in r.text
+    assert "data-leverage-table" in r.text and "Download CSV" in r.text
+    assert "Repetitions" in r.text and "101 % in-context" in r.text and "100 % exact" in r.text
+    assert "Fuzzy 95-99%" not in r.text and "New / no match" not in r.text
 
     # --- /api twin: byte-identical band words ---
     au = security.create_user("lev7-api@x", "L7", Role.ADMIN, FIXTURE_PW)
@@ -1551,9 +1548,9 @@ def test_project_leverage_7band():
     r = client.get(f"/api/projects/{pid}/leverage", headers={"X-Loc-Token": raw})
     assert r.status_code == 200, r.text
     api_out = r.json()
-    api_words = {b["band"]: b["words"] for b in api_out["bands"]}
+    api_words = {b: api_out["languages"][0]["bands"][b]["words"] for b in api_out["bands"]}
     assert api_words == words, (api_words, words)
-    assert api_out["total_words"] == 24 and api_out["billable_words"] == 12
+    assert api_out["totals"]["words"] == 24
 
     # --- CLI twin (--json, in-process): same bands ---
     from app.cli.__main__ import main as cli_main
@@ -1563,50 +1560,24 @@ def test_project_leverage_7band():
         rc = cli_main(["--json", "project", "leverage", str(pid)])
     assert rc == 0
     cli_out = _json.loads(buf.getvalue().strip().splitlines()[-1])
-    cli_words = {b["band"]: b["words"] for b in cli_out["bands"]}
+    cli_words = {b: cli_out["languages"][0]["bands"][b]["words"] for b in cli_out["bands"]}
     assert cli_words == words, (cli_words, words)
     print(
-        "  CV-1: project_leverage 7-band WORD model (reps/context/exact/fuzzy/new) "
-        "from persisted TM data; web bar + /api + CLI parity OK"
+        "  ADR 0102: leverage.analyze four-band WORD model (context/repetitions/exact/new) "
+        "from persisted TM data; web table + /api + CLI parity OK"
     )
 
 
-def test_project_leverage_over_150_docs_page_api_identity():
-    """N1: past the 150-doc chunk boundary the WEB path (_project_stats, its own doc-id
-    order) and the /api+CLI seam (vendor_cost.project_leverage, its own doc-id order) must
-    draw BYTE-IDENTICAL bands. A per-chunk ORDER BY diverged (page drew fuzzy_high where
-    /api drew new); the fix collects across chunks then sorts ONCE globally. Also proves
-    _project_stats chunks its IN() (a >999-doc project would otherwise blow the bind)."""
-    from app.services import vendor_cost
-    from app.web.queries import _project_stats
+def test_project_leverage_over_150_docs_global_order():
+    """N1: past the 150-doc chunk boundary the leverage report must still draw the repetition
+    split in one global document order (the first occurrence is the one in the lowest document,
+    then order_index), and load a project of >150 documents (the IN() is chunked)."""
+    from app.services import leverage
 
     cid = _mk_customer("Big150Cust")
     pid = _mk_project("Big150Proj", customer_id=cid)
 
-    def _rep_doc(sess, order_index, pct):
-        d = Document(
-            project_id=pid,
-            filename=f"rep{order_index}.txt",
-            fmt="txt",
-            mode="segmented",
-            status="parsed",
-        )
-        sess.add(d)
-        sess.commit()
-        sess.refresh(d)
-        sess.add(
-            Segment(
-                document_id=d.id,
-                source_text="rep target",
-                target_text="t",
-                target_locale="fr-FR",
-                order_index=order_index,
-                tm_match_pct=pct,
-            )
-        )
-        sess.commit()
-
-    def _filler(sess, i):
+    def _doc(sess, i, src, order_index, pct=None):
         d = Document(
             project_id=pid, filename=f"f{i}.txt", fmt="txt", mode="segmented", status="parsed"
         )
@@ -1616,58 +1587,32 @@ def test_project_leverage_over_150_docs_page_api_identity():
         sess.add(
             Segment(
                 document_id=d.id,
-                source_text=f"filler{i} alpha beta",
+                source_text=src,
                 target_text="t",
                 target_locale="fr-FR",
-                order_index=i + 300,
+                order_index=order_index,
+                tm_match_pct=pct,
             )
         )
         sess.commit()
 
-    # The repetition pair must STRADDLE the 150-doc chunk boundary INVERTED (the gate's
-    # non-vacuity requirement): the member that must sort FIRST globally goes in a LATER
-    # chunk, so a per-chunk (broken) sort orders them the WRONG way.
-    #   doc A: created ~#5  -> chunk 1 (small id);  order_index 200, tm_match_pct None
-    #   doc B: created last -> chunk 2 (large id);  order_index 1,   tm_match_pct 96
-    # GLOBAL sort -> B (order_index 1) is the FIRST 'rep target' => fuzzy_high, A => rep.
-    # PER-CHUNK sort -> A (chunk 1) emits before B (chunk 2) => A 'new', B => rep: the
-    # exact divergence (fuzzy_high vs new) the fix closes.
+    # The repetition pair STRADDLES the 150-doc chunk boundary: the first occurrence (a 100)
+    # is in an early document, the repeat (an MT segment) in a late one.
     with Session(engine) as s:
-        for i in range(4):
-            _filler(s, i)  # docs #1..#4
-        _rep_doc(s, 200, None)  # doc A (~#5, chunk 1, high order_index, 'new'-if-first)
-        for i in range(4, 158):
-            _filler(s, i)  # docs #6..#159  (154 more fillers)
-        _rep_doc(s, 1, 96)  # doc B (#160, chunk 2, low order_index, fuzzy-if-first)
-
+        _doc(s, 0, "rep target", 5, 100)
+        for i in range(1, 159):
+            _doc(s, i, f"filler{i} alpha beta", i)
+        _doc(s, 159, "rep target", 1, None)
     with Session(engine) as s:
-        # WEB path: doc ids in created_at DESC order (exactly what project_detail passes).
-        doc_ids_desc = [  # noqa: C416
-            d
-            for d in s.exec(
-                select(Document.id)
-                .where(Document.project_id == pid)
-                .order_by(Document.created_at.desc())
-            ).all()
-        ]
-        assert len(doc_ids_desc) == 160, "160 docs -> forces >1 chunk"
-        web = _project_stats(s, doc_ids_desc, with_leverage7=True)["leverage7"]
-        # /api + CLI seam: builds its own doc-id order (id asc).
-        api = vendor_cost.project_leverage(s, pid)
-    web_words = {b: web["bands"][b]["words"] for b in vendor_cost.BANDS}
-    api_words = {b: api["bands"][b]["words"] for b in vendor_cost.BANDS}
-    assert web_words == api_words, (
-        "page vs api band divergence past chunk boundary",
-        web_words,
-        api_words,
-    )
-    assert web["total_words"] == api["total_words"] == 158 * 3 + 2 + 2
-    # global-sort determinism: B (order_index 1, fuzzy) is the FIRST 'rep target', A the rep
-    assert api_words["fuzzy_high"] == 2 and api_words["repetitions"] == 2, api_words
-    assert api_words["new"] == 158 * 3, "the 158 unique fillers"
+        rep = leverage.analyze(s, pid)
+    fr = rep["languages"][0]["bands"]
+    assert rep["totals"]["segments"] == 160
+    assert fr["exact"] == {"segments": 1, "words": 2}, fr
+    assert fr["repetitions"] == {"segments": 1, "words": 2}, fr
+    assert fr["new"] == {"segments": 158, "words": 158 * 3}, "the 158 unique fillers"
     print(
-        "  N1: >150-doc project — web (_project_stats) and /api (project_leverage) draw "
-        "byte-identical bands via one global sort; _project_stats chunks its IN() OK"
+        "  N1: >150-doc project - the leverage report loads across the chunk boundary and "
+        "draws one global repetition order OK"
     )
 
 
@@ -3818,8 +3763,8 @@ def main():
     test_caveats_surface_on_csv_and_api()
     test_human_cost_column_is_admin_only()
     test_cost_report_kind_is_manager_gated()
-    test_project_leverage_7band()
-    test_project_leverage_over_150_docs_page_api_identity()
+    test_project_leverage_four_band()
+    test_project_leverage_over_150_docs_global_order()
     test_locale_axis()
     test_vendor_axis()
     test_vendor_money_counts_only_returned_legs()

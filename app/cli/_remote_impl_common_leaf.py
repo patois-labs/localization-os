@@ -308,13 +308,13 @@ def _add_step_body(args) -> dict:
         "qe_autofix_provider": getattr(args, "qe_autofix_provider", ""),
         "qe_autofix_max_rounds": getattr(args, "qe_autofix_max_rounds", 3),
         "qe_autofix_cross_check": bool(getattr(args, "qe_autofix_cross_check", False)),
-        "tm_examples": bool(getattr(args, "tm_examples", True)),
+        "tm_examples": bool(getattr(args, "tm_examples", False)),
         "tm_examples_window": getattr(args, "tm_examples_window", 3),
         "tm_protect": getattr(args, "tm_protect", "auto"),
         # run-190 Item D / M5: the over-translation guard opt-out on the wire (add-step arm).
         "over_translation_guard": getattr(args, "over_translation_guard", "auto"),
         "memory_mode": getattr(args, "memory_mode", "auto"),
-        # Batch 15 T1 (SPEC-tm-match-step-config §8.D): the six tm_match config overrides
+        # Batch 15 T1 (SPEC-tm-match-step-config §8.D): the tm_match config overrides
         # on the wire (mirrors _wf_add_step so --remote validates exactly what the
         # in-process arm would). Defaults mean inherit -> seed on a new tm_match step.
         "tm_fill_threshold": getattr(args, "tm_fill_threshold", None),

@@ -331,10 +331,10 @@ def build_contract(
     under contract_version 1.0). Per segment, derived PURELY from what Localization OS already
     knows — the vendor_cost TM-band classification (the SAME one that prices the estimate,
     incl. within-packaging repetition accounting) plus target presence:
-      * `provenance`   -- tm_exact | tm_fuzzy | mt | new (covered bands -> tm_exact; the
-                          three fuzzy tiers -> tm_fuzzy; `new` -> "mt" when the current
-                          value came from MT, i.e. a target is present, else "new").
-      * `match_score`  -- the TM match %, on tm_fuzzy segments only (else omitted).
+      * `provenance`   -- tm_exact | mt | new (covered bands -> tm_exact; `new` -> "mt" when the
+                          current value came from MT, i.e. a target is present, else "new").
+                          ADR 0102: tm_fuzzy and match_score are no longer produced (the fuzzy
+                          engine is gone); the vendor side still reads them on import.
       * `locked` / `locked_reason` -- True + a band-naming reason ("100% TM match",
                           "context match", "repetition") on COVERED-band segments (the
                           visible-but-locked research decision).
@@ -372,7 +372,7 @@ def build_contract(
         locked = band in vendor_cost.COVERED_BANDS
         provenance = vendor_cost.PROVENANCE_BY_BAND.get(band, "new")
         # `new` band -> "mt" when the current working value came from MT (a target is present),
-        # else genuinely "new" (nothing usable yet). Covered/fuzzy provenance is band-fixed.
+        # else genuinely "new" (nothing usable yet). Covered provenance is band-fixed.
         if provenance == "new" and (tgt or "").strip():
             provenance = "mt"
         # omit_locked_targets: blank the target on a locked segment (source + marker only).
@@ -387,15 +387,11 @@ def build_contract(
             "target": wire_target,
             "state": "needs-review-translation" if has_content else "needs-translation",
         }
-        if pcts is not None:
+        if pcts is not None and band != "new":
+            # ADR 0102: an old 75-99 stamp is not a TM match any more, so it is not shipped.
             entry["tm_match_pct"] = pcts
         # --- VP-0 enrichment (additive) ---
         entry["provenance"] = provenance
-        if provenance == "tm_fuzzy" and pcts is not None:
-            try:  # noqa: SIM105
-                entry["match_score"] = int(pcts)
-            except (TypeError, ValueError):
-                pass
         if locked:
             entry["locked"] = True
             entry["locked_reason"] = vendor_cost.LOCKED_REASONS.get(band, "TM match")
@@ -426,7 +422,7 @@ def build_contract(
                 entry["queries_truncated"] = True
                 entry["queries_omitted"] = int(q.get("queries_omitted") or 0)
         seg_out.append(entry)
-        key = (src or "").strip()
+        key = vendor_cost.normalize_source(src)
         if key:
             seen.add(key)
     contract = {

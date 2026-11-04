@@ -135,6 +135,10 @@ def _identity(row: SegmentPostEdit) -> tuple:
     return (row.actor_kind or "", row.actor or "", row.vendor_id, row.dispatch_id)
 
 
+# `prefetched_last` default: "not given", distinct from None ("this segment has no episode yet").
+_NOT_GIVEN = object()
+
+
 def capture(
     session: Session,
     *,
@@ -151,6 +155,7 @@ def capture(
     tm_match_pct=None,
     lock_band=None,
     now: datetime | None = None,
+    prefetched_last=_NOT_GIVEN,
 ) -> SegmentPostEdit | None:
     """Record ONE edit into its episode row (§3.2.4). Returns the row, or None on a no-op.
 
@@ -158,6 +163,11 @@ def capture(
     `final_sha` still describes the pre-write text (N1: an intervening machine re-commit
     breaks the lineage and opens a fresh episode). Otherwise opens a new episode baselined
     on `pre`. Does NOT commit — the seam owns the outer transaction (N4).
+
+    `prefetched_last` (save path, 2026-10-26): the segment's last episode row (or None for no
+    episode) when the caller already loaded it in this session and transaction, which saves
+    the last-episode SELECT. `capture_guarded` passes it to the FIRST attempt only: its race
+    retry re-reads, so a concurrent save that opened a newer episode is still seen.
     """
     pre = pre or ""
     post = post or ""
@@ -177,12 +187,42 @@ def capture(
     # final_sha lineage check) and the FIRST episode (cum_* origin baseline) — never every
     # full-body row of the segment's history. `baseline_text` can be a whole document on a
     # full_text unit, so an ORDER-BY-all load is the F1-shaped cost this avoids.
-    last = session.exec(
-        select(SegmentPostEdit)
-        .where(SegmentPostEdit.segment_id == segment.id)
-        .order_by(SegmentPostEdit.episode_seq.desc())
-        .limit(1)
-    ).first()
+    from sqlalchemy import bindparam
+
+    from app import db
+
+    if prefetched_last is not _NOT_GIVEN:
+        last = prefetched_last
+    else:
+        last = session.exec(
+            db.prebuilt(  # S9: built once per process; the save runs this on every changed save
+                "postedit.last_episode",
+                lambda: (
+                    select(SegmentPostEdit)
+                    .where(SegmentPostEdit.segment_id == bindparam("segment_id"))
+                    .order_by(SegmentPostEdit.episode_seq.desc())
+                    .limit(1)
+                ),
+            ),
+            params={"segment_id": segment.id},
+        ).first()
+
+    # cum_* origin = episode 1's baseline. S9: resolved HERE, before this call stages or
+    # mutates anything on the session, so the lookup (an autoflush point) no longer writes
+    # the episode twice (once at the lookup, again for cum_*): one INSERT/UPDATE per call.
+    # `episode_seq` is assigned only in this function and starts at 1, so when the LAST
+    # episode is number 1 it IS the first and the second SELECT is skipped.
+    if last is None:
+        origin = None  # this call opens episode 1: the origin is the new row itself
+    elif last.episode_seq == 1:
+        origin = last
+    else:
+        origin = session.exec(
+            select(SegmentPostEdit)
+            .where(SegmentPostEdit.segment_id == segment.id)
+            .order_by(SegmentPostEdit.episode_seq.asc())
+            .limit(1)
+        ).first()
 
     if last is not None and _identity(last) == ident and last.final_sha == _sha(pre):
         ep = last  # same actor, unbroken lineage (N1)
@@ -221,17 +261,8 @@ def capture(
     else:
         ep.distance_char, ep.distance_word, ep.distance_pct = distances(ep.baseline_text, post)
 
-    # cum_* origin = episode 1's baseline. When this IS episode 1 (no prior rows) the origin
-    # is `ep` itself; otherwise fetch the min-episode_seq row (one row, not the whole tail).
-    if last is None:
+    if origin is None:
         origin = ep
-    else:
-        origin = session.exec(
-            select(SegmentPostEdit)
-            .where(SegmentPostEdit.segment_id == segment.id)
-            .order_by(SegmentPostEdit.episode_seq.asc())
-            .limit(1)
-        ).first()
     if origin.baseline_kind in ("mt", "tm"):
         ep.cum_distance_char, ep.cum_distance_word, ep.cum_distance_pct = distances(
             origin.baseline_text, post
@@ -258,7 +289,9 @@ def capture_guarded(session: Session, **kwargs) -> SegmentPostEdit | None:
             return capture(session, **kwargs)
     except IntegrityError:
         # N9: two concurrent saves raced the unique index. Retry ONCE in a fresh
-        # savepoint (capture re-reads the episode rows, so it recomputes episode_seq).
+        # savepoint (capture re-reads the episode rows, so it recomputes episode_seq). A
+        # caller's prefetched last episode is exactly what the race made stale: dropped here.
+        kwargs.pop("prefetched_last", None)
         try:
             with session.begin_nested():
                 return capture(session, **kwargs)

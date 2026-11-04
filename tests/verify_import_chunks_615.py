@@ -145,13 +145,33 @@ class _Knobs:
         return False
 
 
+def _insert_rows(statement, parameters, executemany):
+    """(rows, bound parameters) one INSERT INTO segmenttm statement carries, for both shapes
+    SQLAlchemy sends: an executemany list of parameter sets (rows = its length), and the
+    insertmanyvalues form (ADR 0105: INSERT ... ON CONFLICT ... RETURNING), ONE multi-VALUES
+    statement with a flat parameter tuple (rows = flat parameter count / columns per row)."""
+    head = statement.split("VALUES", 1)[0]
+    cols = head[head.index("(") + 1 : head.index(")")].count(",") + 1
+    if isinstance(parameters, dict):  # psycopg's multi-VALUES form: one flat dict
+        n = len(parameters)
+        return n // cols, n
+    if parameters and isinstance(parameters[0], (tuple, list, dict)):
+        return len(parameters), len(parameters) * cols
+    n = len(parameters)
+    if n % cols:
+        _fail(f"flat parameter count {n} is not a multiple of {cols} columns")
+    return n // cols, n
+
+
 def test_chunk_bound():
     pid = _project("ic615-bound")
-    sizes, commits = [], []
+    sizes, commits, binds = [], [], []
 
     def spy(conn, cursor, statement, parameters, context, executemany):
-        if statement.lstrip().upper().startswith("INSERT INTO SEGMENTTM") and executemany:
-            sizes.append(len(parameters))
+        if statement.lstrip().upper().startswith("INSERT INTO SEGMENTTM"):
+            rows, params = _insert_rows(statement, parameters, executemany)
+            sizes.append(rows)
+            binds.append(params)
 
     def on_commit(conn):
         commits.append(1)
@@ -170,6 +190,8 @@ def test_chunk_bound():
         _fail(f"an INSERT carried more rows than the chunk bound: {sorted(set(sizes))}")
     if len(commits) < 11:
         _fail(f"each chunk must be its own commit, saw {len(commits)} commits")
+    if sum(sizes) != 1050:
+        _fail(f"the INSERT statements must carry exactly the 1050 new rows, saw {sum(sizes)}")
     if _count(pid) != 1050 or _distinct_hashes(pid) != 1050:
         _fail("every unit must be stored exactly once")
     # a re-import mixing 250 changed targets with 800 unchanged rows packs into 11 chunks too
@@ -186,6 +208,23 @@ def test_chunk_bound():
         one = tm.import_tmx(s, pid2, _tmx(100), SRC, TGT)
     if one["write_chunks"] != 1:
         _fail(f"an import under the chunk bound must be a single transaction: {one}")
+    # the DEFAULT chunk (2500 rows x 13 columns) must never put more bound parameters in one
+    # statement than SQLite (32766 on current builds) or Postgres (65535) accepts
+    pid3 = _project("ic615-params")
+    sizes.clear()
+    binds.clear()
+    event.listen(engine, "before_cursor_execute", spy)
+    try:
+        with Session(engine) as s:
+            res3 = tm.import_tmx(s, pid3, _tmx(tm.TMX_WRITE_CHUNK_ROWS + 100), SRC, TGT)
+    finally:
+        event.remove(engine, "before_cursor_execute", spy)
+    if res3["imported"] != tm.TMX_WRITE_CHUNK_ROWS + 100 or sum(sizes) != res3["imported"]:
+        _fail(f"default-chunk import must store every row: {res3}, statement rows {sum(sizes)}")
+    if max(sizes) > tm.TMX_WRITE_CHUNK_ROWS or max(binds) > 32000:
+        _fail(
+            f"an INSERT exceeded the row or parameter bound: rows {max(sizes)}, params {max(binds)}"
+        )
     print("  chunk-bound: 1050 rows -> 11 chunks of <= 100; mixed re-import packs; small = 1 OK")
 
 

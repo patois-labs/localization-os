@@ -11,7 +11,7 @@ import os
 import re
 from base64 import b64encode
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import and_, or_, true
 from sqlmodel import Session, select
@@ -689,7 +689,7 @@ def _parse_iso_naive(raw):
     except (TypeError, ValueError):
         return None
     if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        dt = dt.astimezone(UTC).replace(tzinfo=None)
     return dt
 
 

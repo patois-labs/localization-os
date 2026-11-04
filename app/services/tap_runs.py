@@ -42,6 +42,7 @@ import json
 import logging
 import os
 import re
+from datetime import UTC
 
 from app.services import access
 
@@ -630,9 +631,9 @@ def _build_index(fp):
         summ = acc.summary()
         summ["file"] = acc.file or ""
         runs[key] = summ
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    built_at = datetime.now(timezone.utc).isoformat()
+    built_at = datetime.now(UTC).isoformat()
     return {"v": _INDEX_VERSION, "fp": fp, "runs": runs, "built_at": built_at}
 
 

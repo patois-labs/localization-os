@@ -29,16 +29,14 @@ from app.services.workflows_common import (
     _coerce_glossary_cap,
     _coerce_memory_mode,
     _coerce_pt_id,
-    _coerce_tm_fuzzy_lock_mode,
     _coerce_tm_pool_selection,
     _coerce_tm_protect,
-    _coerce_tm_scalar_int,
     _coerce_vendor_id,
     _new_graph_errors,
     _rc_ref_of,
     _step_attr,
 )
-from app.services.workflows_common_leaf import _require_whole_number
+from app.services.workflows_common_leaf import _require_whole_number, reject_removed_tm_params
 from app.services.workflows_part2 import (
     _coerce_tm_tristate_bool,
     _coerce_wait_hours,
@@ -47,7 +45,6 @@ from app.services.workflows_part2 import (
     _RacedDuplicatePair,
     _require_valid_lqa_threshold,
     _require_valid_tm_pool_selection,
-    _require_valid_tm_scalar,
     _same_pair,
     _step_label,
     _validate_step_vendor,
@@ -195,7 +192,7 @@ def add_step(
     qe_autofix_max_rounds: int = 3,
     qe_autofix_cross_check: bool = False,
     lqa_threshold=None,
-    tm_examples: bool = True,
+    tm_examples: bool = False,
     tm_examples_window: int = 3,
     use_image_context: bool = True,
     concept_glossary_render: bool = False,
@@ -204,11 +201,11 @@ def add_step(
     tm_protect=None,
     over_translation_guard=None,
     memory_mode=None,
-    tm_fill_threshold=None,
-    tm_fuzzy_lock_mode=None,
+    tm_fill_threshold=None,  # removed (ADR 0102): only None / 100 accepted
+    tm_fuzzy_lock_mode=None,  # removed (ADR 0102): any value is refused
     tm_lock_ice=None,
     tm_hundreds_enter_lqa=None,
-    tm_context_floor=None,
+    tm_context_floor=None,  # removed (ADR 0102): any value is refused
     tm_pool_selection=None,
     run_condition=None,
     key=None,
@@ -269,8 +266,13 @@ def add_step(
     # value ('85%', 'garbage') is REFUSED cleanly on every surface, never silently cleared
     # to inherit / collapsed to "read no pool". Inherit tokens (auto/inherit/blank) still
     # resolve to None; the '(none)' sentinel / an explicit [] to the empty selection.
-    tm_fill_threshold = _require_valid_tm_scalar(tm_fill_threshold, "TM fill threshold")
-    tm_context_floor = _require_valid_tm_scalar(tm_context_floor, "TM context floor")
+    # ADR 0102: the fill threshold, fuzzy lock mode and context floor were removed. A caller
+    # that still sends one gets a clear error (a threshold of 100 is an accepted no-op).
+    reject_removed_tm_params(
+        tm_fill_threshold=tm_fill_threshold,
+        tm_fuzzy_lock_mode=tm_fuzzy_lock_mode,
+        tm_context_floor=tm_context_floor,
+    )
     tm_pool_selection = _require_valid_tm_pool_selection(tm_pool_selection)
     # SPEC-lqa-step-honest-options: refuse a dead-for-this-type field the caller
     # actively set (a brand-new step has no prior state, so any meaningful value
@@ -317,14 +319,11 @@ def add_step(
             # External/vendor dispatch (Wave A): refused on any non-external step.
             "vendor_id": _coerce_vendor_id(vendor_id),
             "external_wait_hours": _coerce_wait_hours(external_wait_hours),
-            # Batch 15 T1 (SPEC-tm-match-step-config §8.A): the six tm_match config fields
-            # are refused on any NON-tm_match step (a forged tm_fill_threshold on an
+            # Batch 15 T1 (SPEC-tm-match-step-config §8.A): the tm_match config fields
+            # are refused on any NON-tm_match step (a forged tm_lock_ice on an
             # llm_agent step is a clean refusal, LAW-TM-10).
-            "tm_fill_threshold": _coerce_tm_scalar_int(tm_fill_threshold),
-            "tm_fuzzy_lock_mode": _coerce_tm_fuzzy_lock_mode(tm_fuzzy_lock_mode),
             "tm_lock_ice": _coerce_tm_tristate_bool(tm_lock_ice),
             "tm_hundreds_enter_lqa": _coerce_tm_tristate_bool(tm_hundreds_enter_lqa),
-            "tm_context_floor": _coerce_tm_scalar_int(tm_context_floor),
             "tm_pool_selection": _coerce_tm_pool_selection(tm_pool_selection),
         },
     )
@@ -458,29 +457,20 @@ def add_step(
     # A caller-supplied value wins. The pool selection is NEVER snapshotted (S2 -- pool
     # membership is dynamic); it defaults NULL = all readable. On a non-tm_match step the
     # six are dead (refused above if actively set) and stored NULL/inert.
-    _tm_fill = _coerce_tm_scalar_int(tm_fill_threshold)
-    _tm_mode = _coerce_tm_fuzzy_lock_mode(tm_fuzzy_lock_mode)
     _tm_ice = _coerce_tm_tristate_bool(tm_lock_ice)
     _tm_hundreds = _coerce_tm_tristate_bool(tm_hundreds_enter_lqa)
-    _tm_floor = _coerce_tm_scalar_int(tm_context_floor)
     _tm_pools = None
     if step_type == StepType.TM_MATCH:
         from app.services import tm_lock
 
         _seed = tm_lock.resolve_policy(session)  # the current GLOBAL policy (defaults)
-        if _tm_fill is None:
-            _tm_fill = _seed.fill_threshold
-        if _tm_mode is None:
-            _tm_mode = _seed.fuzzy_lock_mode
         if _tm_ice is None:
             _tm_ice = _seed.lock_ice
         if _tm_hundreds is None:
             _tm_hundreds = _seed.hundreds_enter_lqa
-        if _tm_floor is None:
-            _tm_floor = _seed.context_floor
         _tm_pools = _coerce_tm_pool_selection(tm_pool_selection)
     else:
-        _tm_fill = _tm_mode = _tm_ice = _tm_hundreds = _tm_floor = None
+        _tm_ice = _tm_hundreds = None
     step = WorkflowStep(
         workflow_id=workflow_id,
         order_index=count,
@@ -545,11 +535,8 @@ def add_step(
         # overrides. On a tm_match step the five scalars are seeded from the current
         # globals when NULL (a concrete snapshot); pool selection defaults NULL (all
         # readable, never snapshotted). Dead/None on every other type.
-        tm_fill_threshold=_tm_fill,
-        tm_fuzzy_lock_mode=_tm_mode,
         tm_lock_ice=_tm_ice,
         tm_hundreds_enter_lqa=_tm_hundreds,
-        tm_context_floor=_tm_floor,
         tm_pool_selection=_tm_pools,
         # SPEC §5 pre-step guard (Phase 2): the validated {ref, op, value} or None.
         run_condition=run_condition,
@@ -997,11 +984,8 @@ def copy_to_pairs(
                     # overrides clone onto every pair variant too (full fidelity). Pool refs
                     # copy verbatim; run-time validation fails stale/cross-project refs
                     # closed (§7.3), so no per-pair re-validation is needed.
-                    tm_fill_threshold=getattr(st, "tm_fill_threshold", None),
-                    tm_fuzzy_lock_mode=getattr(st, "tm_fuzzy_lock_mode", None),
                     tm_lock_ice=getattr(st, "tm_lock_ice", None),
                     tm_hundreds_enter_lqa=getattr(st, "tm_hundreds_enter_lqa", None),
-                    tm_context_floor=getattr(st, "tm_context_floor", None),
                     tm_pool_selection=getattr(st, "tm_pool_selection", None),
                     # SPEC §5 pre-step guard (Phase 2): the branch graph must clone
                     # faithfully onto EVERY pair variant (spec §7 multi-pair note) — carry

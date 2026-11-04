@@ -187,7 +187,9 @@ def main():
                                     'form[action="/settings/enterprise/preflight"] '
                                     "button:not([disabled])"
                                 ).count()
-                                == 7
+                                # the three core features (add-on adapters and the default
+                                # job queue are not listed)
+                                == 3
                             )
                             assert (
                                 page.locator(

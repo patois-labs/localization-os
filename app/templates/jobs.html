@@ -106,6 +106,7 @@
                 {% else %}{{ (j.result or {}).get('message', '') }}
                   {% if fails %}<span class="badge warn">{{ tl(request, 'page.jobs.n_failed', n=fails|length) }}</span>{% endif %}
                 {% endif %}
+                {% if j.type == 'job' and j.kind == 'translate_document' %}<a href="/jobs/{{ j.id }}/leverage">Leverage</a>{% endif %}
                 {% set cr = (j.result or {}).get('tokens_cache_read', 0) %}
                 {% set cw = (j.result or {}).get('tokens_cache_write', 0) %}
                 {% if cr or cw %}

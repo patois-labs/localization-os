@@ -106,18 +106,17 @@
           <td class="tgt">
             <span class="review-cell-label">Target ({{ selected }})</span>
             {% set meta = r.seg.meta or {} %}
-            {% if r.seg.lock_band %}
+            {% if r.seg.lock_band and r.seg.lock_band|string|lower != 'fuzzy' %}
               {# TM-matching lock (PROPOSAL-tm-matching-workflow-step D-1). A hard lock is
                  refused at the write seam; a soft lock enters LQA. Editing this segment
-                 clears the lock (your edit wins, audited). Batch 15 T1 (M2): a "fuzzy"
-                 lock_band is a below-100 fuzzy fill -- show its REAL match % (from
-                 tm_match_pct), NEVER "TM 100%" (that dishonesty is the class the LAWs
-                 exist to prevent). #}
-              {% set _is_fuzzy = (r.seg.lock_band|string|lower == 'fuzzy') %}
+                 clears the lock (your edit wins, audited). ADR 0102: TM fills exact matches
+                 only (100%, or 101% in context). A stored lock_band "fuzzy" (a below-100 fill
+                 from before fuzzy matching was removed) shows no TM lock badge: the segment
+                 reads as plain machine translation. #}
               {#- T4 (a11y): the explanation was a title tooltip (mouse only); it is now a
                   disclosure a keyboard and screen reader user can open. -#}
               <details class="lockinfo"><summary><span class="badge {% if r.seg.lock_hard %}warn{% else %}exact{% endif %}">
-                {% if r.seg.lock_hard %}<span aria-hidden="true">&#128274;</span> TM locked{% elif _is_fuzzy %}<span aria-hidden="true">&#128273;</span> TM {{ r.seg.tm_match_pct }}%{% else %}<span aria-hidden="true">&#128273;</span> TM 100%{% endif %}</span></summary><p class="muted small">{% if r.seg.lock_hard %}Hard TM lock: no automated step may change this.{% elif _is_fuzzy %}Soft TM lock: filled from a {{ r.seg.tm_match_pct }}% fuzzy TM match.{% else %}Soft TM lock: filled from a 100% TM match.{% endif %} Edit the text to clear it.</p></details>
+                {% if r.seg.lock_hard %}<span aria-hidden="true">&#128274;</span> TM locked{% else %}<span aria-hidden="true">&#128273;</span> TM {{ 101 if (r.seg.tm_match_pct or 0) > 100 else 100 }}%{% endif %}</span></summary><p class="muted small">{% if r.seg.lock_hard %}Hard TM lock: no automated step may change this.{% else %}Soft TM lock: filled from a {{ 101 if (r.seg.tm_match_pct or 0) > 100 else 100 }}% TM match.{% endif %} Edit the text to clear it.</p></details>
             {% endif %}
             {% if r.tm_changed %}<p class="muted small tm-drift" id="drift-{{ r.seg.id }}"><span class="badge warn">{{ tl(request, 'editor.tm_changed') }}</span> <span class="muted small">{{ tl(request, 'editor.tm_changed_hint') }}</span></p>{% endif %}
             {#- K8: the ENFORCED character limit is the KEY's `char_limit`, resolved into
@@ -138,10 +137,6 @@
             {% if '⟦' in r.seg.source_text %}
               <p class="tag-hint muted small" title="This segment carries formatting tags. Keep the ⟦ ⟧ tokens in place and in order so bold/links/inline elements survive export."><span aria-hidden="true">⚑</span> contains formatting tags - keep <code>⟦ ⟧</code> in place</p>
             {% endif %}
-            {#- #610: a below-100 TM suggestion gets an inline badge too (it was visible only in the TM column). -#}
-            {% if r.tm and r.tm.match_pct is not none and r.tm.match_pct < 100 and not r.seg.lock_band and r.seg.status in ('mt', 'new') %}
-              <p class="muted small fuzzy-hint" id="fz-{{ r.seg.id }}"><span class="badge fuzzy">Fuzzy {{ r.tm.match_pct }}%</span> TM suggestion, check before approving</p>
-            {% endif %}
             {% if waiting_run %}
             <div class="pending-mt" id="pend-{{ r.seg.id }}"{{ tgt_lang }} data-pending-mt data-number="{{ r.seg.order_index + 1 }}" style="white-space:pre-wrap">{{ r.pending }}</div>
             {% else %}
@@ -152,7 +147,7 @@
           <td class="tm">
             <span class="review-cell-label">TM</span>
             {% if r.tm %}
-              <span class="badge {% if r.tm.match_pct == 100 %}exact{% else %}fuzzy{% endif %}">{{ r.tm.match_pct }}%</span>
+              <span class="badge exact">{{ r.tm.match_pct }}%</span>
               {% if not waiting_run %}<button type="button" class="mini" data-busy-keep-label title="Accept TM" aria-label="Accept TM match for segment {{ r.seg.order_index + 1 }}"
                 data-action="accept-tm" data-id="{{ r.seg.id }}" data-tm="{{ r.tm.target_text|e }}"><span aria-hidden="true">✓</span></button>{% endif %}
             {% else %}<span class="muted small cell-empty">No match</span>
@@ -175,8 +170,8 @@
           </div></td>
           {#- #610: a 100% TM fill is stored with status "mt" (the re-lock whitelist keys on it),
               but a translator must not read "MT" on text that came from the memory. The stored
-              status is unchanged; only the chip says "TM". A fuzzy fill keeps "MT" (its own
-              badge shows the real match %). -#}
+              status is unchanged; only the chip says "TM". A stored legacy "fuzzy" fill keeps
+              "MT" (fuzzy matching was removed, ADR 0102). -#}
           {% set _tm_fill = r.seg.status == 'mt' and r.seg.lock_band and (r.seg.lock_band|string|lower != 'fuzzy') %}
           <td class="review-state"><span class="chip st-{{ r.seg.status }}" id="st-{{ r.seg.id }}"{% if _tm_fill %} data-tm-fill="1"{% endif %}>{{ 'TM' if _tm_fill else m.status_label(r.seg.status) }}</span></td>
           <td class="acts">

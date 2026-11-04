@@ -38,6 +38,8 @@ from tests._bootstrap import init_env
 
 init_env("loctms_engines_")
 
+from datetime import UTC
+
 import httpx
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
@@ -914,7 +916,7 @@ def test_apply_result_treats_empty_nmt_text_as_error_not_success():
 def test_sigv4_signing_key_matches_aws_vector():
     # The signing-key derivation must match the AWS SigV4 documented test vector, so a
     # regression in the HMAC chain (date/region/service/aws4_request) is caught offline.
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from app.services import providers as PP
 
@@ -926,7 +928,7 @@ def test_sigv4_signing_key_matches_aws_vector():
         target="X",
         host="iam.amazonaws.com",
         body=b"",
-        now=datetime(2015, 8, 30, 12, 36, 0, tzinfo=timezone.utc),
+        now=datetime(2015, 8, 30, 12, 36, 0, tzinfo=UTC),
     )
     assert h["X-Amz-Date"] == "20150830T123600Z"
     # Deterministic given a fixed `now` -> a stable Authorization (guards the whole chain).

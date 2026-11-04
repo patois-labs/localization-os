@@ -2,17 +2,18 @@
 
 Hermetic + offline (throwaway LOC_TMS_DATA_DIR, provider keys blanked -> no network).
 Proves the two Part-B deliverables AND the #1 constraint (golden byte-stability when
-NO fuzzy match clears the floor / no DNT violation):
+NO example is supplied / no DNT violation). ADR 0102: the fuzzy ranker was removed, so the core
+has no example retriever; an add-on may register one as the "tm_examples" extension (a stub one
+here), and without it a step gets none:
 
 TM few-shot
   1. context_pkg.render_tm_examples: N pairs -> N fenced `src:/tgt:` lines; empty -> "";
      hostile TM content (</tm_examples>, </translation_context>, quotes) neutralized;
      per-value cap + block budget cap trim (skip-not-pad, best-first); window clamp.
-  2. tm.example_matches_batch: top-N over the floor, best-first, self/100% excluded,
-     dedupe by target, below-floor skipped, window=0 short-circuit, ineligible -> [].
-  3. MT path: a seeded fuzzy neighborhood -> `<tm_examples>` block with the top-N pairs;
-     only-1-over-floor -> 1 pair (skip-not-pad); 0-over-floor -> NO block, byte-identical
-     to a briefless assembly (the killer golden).
+  2. tm.example_matches_hybrid: no add-on -> [] for every source; a registered add-on is
+     called with the window.
+  3. MT path: add-on examples -> `<tm_examples>` block with the top-N pairs; none -> NO
+     block, byte-identical to a briefless assembly (the killer golden); no add-on -> NO block.
   4. Workflow llm_agent path: step tm_examples ON -> block injected; toggle OFF and
      window=0 -> NO block, byte-identical to the ON-but-no-match prompt.
 
@@ -235,7 +236,8 @@ def test_clamp_window():
 
 
 # ===========================================================================
-# 2. example_matches_batch
+# 2. example_matches_hybrid (ADR 0102: the core ships no example retriever; an add-on may
+#    register one as the "tm_examples" extension)
 # ===========================================================================
 QUERY = "The quick brown fox jumps over the lazy dog."
 NEIGHBORS = [
@@ -246,87 +248,57 @@ NEIGHBORS = [
 FAR = ("Completely unrelated administrative notice.", "Aviso administrativo.")
 
 
-def test_example_matches_batch():
+class _StubRetriever:
+    """A stand-in example add-on: QUERY -> the NEIGHBORS pairs (best first), anything else ->
+    no examples. Records every call so the tests can see the core reached it."""
+
+    def __init__(self, pairs_by_source):
+        self.pairs_by_source = pairs_by_source
+        self.calls = []
+
+    def example_matches_hybrid(self, session, project_id, sources, src, tgt, *, window=3, **_kw):
+        self.calls.append((project_id, list(sources), src, tgt, window))
+        out = {}
+        for s in dict.fromkeys(sources):
+            pairs = self.pairs_by_source.get(s, [])
+            out[s] = [{"source_text": a, "target_text": b} for a, b in pairs][: max(window, 0)]
+        return out
+
+
+_STUB = _StubRetriever({QUERY: NEIGHBORS})
+
+
+def _gate(on: bool) -> None:
+    """Register the stub retriever (on) or none (off, the core's own state)."""
+    from app import extensions
+
+    if on:
+        extensions.register("tm_examples", _STUB)
+    else:
+        extensions.unregister("tm_examples")
+
+
+def _ex(session, project_id, sources, **kw):
+    return tm.example_matches_hybrid(session, project_id, sources, "en-US", "es-ES", **kw)
+
+
+def test_example_matches_hybrid():
+    _gate(False)
     with Session(engine) as s:
         p = _mk_project(s)
-        # neighbors (over floor) + a self (100%, must be EXCLUDED) + a far one (<floor)
-        _seed_tm(s, p.id, NEIGHBORS + [(QUERY, "SELF TARGET"), FAR])  # noqa: RUF005
-        got = tm.example_matches_batch(
-            s, p.id, [QUERY], "en-US", "es-ES", floor=cp.TM_EXAMPLES_FLOOR, window=3
-        )
-        ms = got[QUERY]
-        assert len(ms) == 3, ("top-3 over floor", [(m["match_pct"], m["source_text"]) for m in ms])
-        # best-first
-        pcts = [m["match_pct"] for m in ms]
-        assert pcts == sorted(pcts, reverse=True), pcts
-        # self / 100% excluded, far one excluded
-        assert all(m["source_text"] != QUERY for m in ms), "self match must be excluded"
-        assert all(m["target_text"] != "SELF TARGET" for m in ms), "self target leaked"
-        assert all(m["source_text"] != FAR[0] for m in ms), "below-floor leaked"
-        assert all(m["match_pct"] >= cp.TM_EXAMPLES_FLOOR for m in ms), pcts
-        print(
-            "  2a. example_matches_batch: top-3 over floor, best-first, self/100% + "
-            "below-floor excluded OK"
-        )
+        # Even with exact and near neighbours in the TM, the core retrieves no examples.
+        _seed_tm(s, p.id, [*NEIGHBORS, (QUERY, "SELF TARGET"), FAR])
+        r = _ex(s, p.id, [QUERY, "   ", QUERY], window=3)
+        assert r == {QUERY: [], "   ": []}, r
+        print("  2a. example_matches_hybrid: no add-on -> every source maps to [] (no fuzzy) OK")
 
-        # window shrink: only the top-1
-        one = tm.example_matches_batch(s, p.id, [QUERY], "en-US", "es-ES", window=1)[QUERY]
-        assert len(one) == 1 and one[0]["match_pct"] == pcts[0], one
-        # window=0 short-circuits to []
-        assert tm.example_matches_batch(s, p.id, [QUERY], "en-US", "es-ES", window=0)[QUERY] == []
-        print("  2b. example_matches_batch: window shrink to 1, window=0 -> [] OK")
-
-    # dedupe by target: two distinct sources with the SAME target -> one example
-    with Session(engine) as s:
-        p = _mk_project(s)
-        _seed_tm(
-            s,
-            p.id,
-            [
-                ("The quick brown fox jumps over the lazy cat.", "DUP TGT"),
-                ("The quick brown fox jumps over a lazy dog.", "DUP TGT"),
-                ("The quick brown fox leaps over the lazy dog.", "OTHER TGT"),
-            ],
-        )
-        ms = tm.example_matches_batch(s, p.id, [QUERY], "en-US", "es-ES", window=5)[QUERY]
-        tgts = [m["target_text"] for m in ms]
-        assert tgts.count("DUP TGT") == 1, ("dedupe by target", tgts)
-        assert "OTHER TGT" in tgts, tgts
-        print("  2c. example_matches_batch: dedupe by identical target payload OK")
-
-    # blank / no-neighbor sources
-    with Session(engine) as s:
-        p = _mk_project(s)
-        _seed_tm(s, p.id, NEIGHBORS)
-        r = tm.example_matches_batch(
-            s, p.id, ["   ", "Zzxqv nonsense unrelated."], "en-US", "es-ES", window=3
-        )
-        assert r["   "] == [] and r["Zzxqv nonsense unrelated."] == [], r
-        print("  2d. example_matches_batch: blank / no-neighbor sources -> [] OK")
-
-    # SCOPE ISOLATION (adversarial Finding 2): a TM row seeded under project A must NOT
-    # surface as a few-shot example when retrieving for a DIFFERENT project B —
-    # example_matches_batch shares lookup_batch's _tm_read_scope (project OR global
-    # only), so a foreign-project row is never visible.
-    with Session(engine) as s:
-        pa = _mk_project(s)
-        pb = _mk_project(s)
-        _seed_tm(s, pa.id, NEIGHBORS + [FAR])  # ONLY under project A  # noqa: RUF005
-        # positive control: project A DOES see its own rows
-        own = tm.example_matches_batch(s, pa.id, [QUERY], "en-US", "es-ES", window=3)[QUERY]
-        assert len(own) == 3, ("project A must see its own TM", own)
-        # isolation: project B (empty TM) sees NOTHING from A
-        foreign = tm.example_matches_batch(s, pb.id, [QUERY], "en-US", "es-ES", window=3)[QUERY]
-        assert foreign == [], ("a foreign-project TM row must NOT surface as an example", foreign)
-        # and the rendered block for B is empty (no leak into a prompt)
-        assert cp.render_tm_examples(foreign) == "", "foreign TM must render to no block"
-        # (multi-org helpers are not toggled in-test; the project layer is the primary
-        # scope key and _tm_read_scope applies the SAME org predicate as lookup_batch —
-        # cross-PROJECT isolation exercised here, org predicate verified by review.)
-    print(
-        "  2e. example_matches_batch: foreign-project TM never surfaces as an example "
-        "(scope isolation, Finding 2) OK"
-    )
+        _gate(True)
+        _STUB.calls.clear()
+        ms = _ex(s, p.id, [QUERY], window=2)[QUERY]
+        assert [m["source_text"] for m in ms] == [a for a, _ in NEIGHBORS[:2]], ms
+        assert _STUB.calls == [(p.id, [QUERY], "en-US", "es-ES", 2)], _STUB.calls
+        print("  2b. example_matches_hybrid: a registered add-on is called with the window OK")
+        _gate(False)
 
 
 # ===========================================================================
@@ -340,30 +312,21 @@ def _run_mt(doc_id, **kw):
 
 
 def test_mt_path():
-    # (a) fuzzy neighborhood -> examples block with top-N pairs.
+    # (a) an add-on supplies examples -> examples block with the default window (3).
+    _gate(True)
     with Session(engine) as s:
         p = _mk_project(s)
-        _seed_tm(s, p.id, NEIGHBORS + [FAR])  # noqa: RUF005
         doc = _mk_doc(s, p, sources=(QUERY,))
         doc_id = doc.id
     pr = _run_mt(doc_id)[0]
     assert "<tm_examples>" in pr and "</tm_examples>" in pr, pr
     assert pr.count("src: ") == 3, ("MT default window = 3 examples", pr)
-    print("  3a. MT path: fuzzy neighborhood -> <tm_examples> block with top-3 pairs OK")
+    print("  3a. MT path: add-on examples -> <tm_examples> block with top-3 pairs OK")
 
-    # (b) only 1 over the floor -> exactly 1 example (skip-not-pad).
+    # (b) GOLDEN: the add-on has nothing for this source -> NO block, byte-identical to a
+    # briefless assembly.
     with Session(engine) as s:
         p = _mk_project(s)
-        _seed_tm(s, p.id, [NEIGHBORS[0], FAR, ("Totally different content string.", "Otro.")])
-        doc = _mk_doc(s, p, sources=(QUERY,))
-        doc_id = doc.id
-    pr = _run_mt(doc_id)[0]
-    assert pr.count("src: ") == 1, ("skip-not-pad: 1 over floor -> 1 example", pr)
-    print("  3b. MT path: only-1-over-floor -> 1 example (skip-not-pad, no padding) OK")
-
-    # (c) GOLDEN: 0 over floor -> NO block, byte-identical to a briefless assembly.
-    with Session(engine) as s:
-        p = _mk_project(s)  # empty TM
         doc = _mk_doc(s, p, sources=("Zqx unrelated singular phrase.",))
         doc_id = doc.id
     pr = _run_mt(doc_id)[0]
@@ -372,7 +335,18 @@ def test_mt_path():
         "Zqx unrelated singular phrase.", "en-US", "es-ES", [], brief_block=None
     )
     assert pr == expect, (repr(pr), repr(expect))
-    print("  3c. MT GOLDEN: no fuzzy match -> no block, byte-identical to briefless assembly OK")
+    print("  3b. MT GOLDEN: no examples -> no block, byte-identical to briefless assembly OK")
+
+    # (c) ADR 0102: the core alone -> no block even with near neighbours in the TM.
+    _gate(False)
+    with Session(engine) as s:
+        p = _mk_project(s)
+        _seed_tm(s, p.id, [*NEIGHBORS, FAR])
+        doc = _mk_doc(s, p, sources=(QUERY,))
+        doc_id = doc.id
+    pr = _run_mt(doc_id)[0]
+    assert "tm_examples" not in pr, pr
+    print("  3c. MT path: no add-on -> no block (no fuzzy fallback) OK")
 
 
 # ===========================================================================
@@ -386,10 +360,10 @@ def _run_wf(wf_id, doc_id):
 
 
 def test_workflow_path():
-    # ON + fuzzy neighborhood -> examples block injected.
+    _gate(True)
+    # ON + add-on examples -> examples block injected, cut to the step's window.
     with Session(engine) as s:
         p = _mk_project(s)
-        _seed_tm(s, p.id, NEIGHBORS + [FAR])  # noqa: RUF005
         doc = _mk_doc(s, p, sources=(QUERY,))
         wf_on = _mk_wf(s, tm_examples=True, tm_examples_window=2)
         wf_on_id, doc_id = wf_on.id, doc.id
@@ -397,21 +371,19 @@ def test_workflow_path():
     assert "<tm_examples>" in p_on and p_on.count("src: ") == 2, ("window=2 -> 2 pairs", p_on)
     print("  4a. workflow: step tm_examples ON (window 2) -> block with 2 pairs OK")
 
-    # toggle OFF (same seeded TM) -> NO block.
+    # toggle OFF -> NO block.
     with Session(engine) as s:
         p = _mk_project(s)
-        _seed_tm(s, p.id, NEIGHBORS + [FAR])  # noqa: RUF005
         doc = _mk_doc(s, p, sources=(QUERY,))
         wf_off = _mk_wf(s, tm_examples=False)
         wf_off_id, doc_id = wf_off.id, doc.id
     p_off = _run_wf(wf_off_id, doc_id)[0]
     assert "tm_examples" not in p_off, p_off
-    print("  4b. workflow: tm_examples OFF -> no block even with matches present OK")
+    print("  4b. workflow: tm_examples OFF -> no block even with examples available OK")
 
     # window=0 -> NO block.
     with Session(engine) as s:
         p = _mk_project(s)
-        _seed_tm(s, p.id, NEIGHBORS + [FAR])  # noqa: RUF005
         doc = _mk_doc(s, p, sources=(QUERY,))
         wf_w0 = _mk_wf(s, tm_examples=True, tm_examples_window=0)
         wf_w0_id, doc_id = wf_w0.id, doc.id
@@ -419,7 +391,7 @@ def test_workflow_path():
     assert "tm_examples" not in p_w0, p_w0
     print("  4c. workflow: tm_examples_window=0 -> no block OK")
 
-    # GOLDEN: ON but EMPTY TM -> byte-identical to the OFF prompt (no examples either way).
+    # GOLDEN: ON but no examples -> byte-identical to the OFF prompt.
     with Session(engine) as s:
         p = _mk_project(s)
         doc = _mk_doc(s, p, sources=("Zqx unrelated singular phrase.",))
@@ -433,7 +405,18 @@ def test_workflow_path():
     p_off_empty = _run_wf(wf_off_id, doc2_id)[0]
     assert "tm_examples" not in p_on_empty, p_on_empty
     assert p_on_empty == p_off_empty, (repr(p_on_empty), repr(p_off_empty))
-    print("  4d. workflow GOLDEN: ON + no match byte-identical to OFF (empty {examples}) OK")
+    print("  4d. workflow GOLDEN: ON + no examples byte-identical to OFF OK")
+
+    # ADR 0102: the core alone -> an ON step still gets NO block.
+    _gate(False)
+    with Session(engine) as s:
+        p = _mk_project(s)
+        _seed_tm(s, p.id, [*NEIGHBORS, FAR])
+        doc = _mk_doc(s, p, sources=(QUERY,))
+        wf_on = _mk_wf(s, tm_examples=True)
+        wf_on_id, doc_id = wf_on.id, doc.id
+    assert "tm_examples" not in _run_wf(wf_on_id, doc_id)[0]
+    print("  4e. workflow: no add-on -> no block (no fuzzy fallback) OK")
 
 
 # ===========================================================================
@@ -644,7 +627,7 @@ def _seg_q(doc_id):
 def main():
     test_render()
     test_clamp_window()
-    test_example_matches_batch()
+    test_example_matches_hybrid()
     test_mt_path()
     test_workflow_path()
     test_dnt_unit()

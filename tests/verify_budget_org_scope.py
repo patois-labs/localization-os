@@ -319,7 +319,7 @@ def test_2b_translate_all_web_door_is_budgeted():
 
         q = jobqueue.get()
         real_q_enqueue = q.enqueue
-        q.enqueue = lambda jid: None
+        q.enqueue = lambda jid, pool="long": None
         try:
             r = c.post(
                 f"/documents/{busy_doc}/translate", data={"locale": "all"}, follow_redirects=False

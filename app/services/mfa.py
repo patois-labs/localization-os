@@ -36,7 +36,7 @@ import hmac
 import secrets
 import struct
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
 from sqlalchemy import case, or_, update
@@ -206,7 +206,7 @@ def _totp_shaped(norm: str) -> bool:
 
 def _utc_now() -> datetime:
     """Naive UTC 'now' from the ONE clock (_now), for the stored counter timestamps."""
-    return datetime.fromtimestamp(_now(), timezone.utc).replace(tzinfo=None)
+    return datetime.fromtimestamp(_now(), UTC).replace(tzinfo=None)
 
 
 def _match_step(secret_b32: str, code: str, now: float | None = None) -> int | None:

@@ -25,7 +25,7 @@ from app.filters.base import (
     check_segment_cap,
     check_unit_texts,
 )
-from app.models import DocStatus, Document, Segment, TargetLocale, TransMode
+from app.models import DocStatus, Document, Segment, SegStatus, TargetLocale, TransMode
 from app.services.segment import (
     LEGACY_ENGINE_V2,
     est_tokens,
@@ -432,27 +432,47 @@ def ingest_document(
         # to the event loop between chunks. A failure part-way is undone by the cleanup
         # below, exactly as before.
         doc_id = doc.id
-        pending = 0
+        # S7b round 2 (ADR 0103): rows go in as a core INSERT with every column spelled out
+        # (the model's constant defaults), not one Segment object each: building SQLModel
+        # objects was most of an upload's CPU. Same rows, same column types and JSON
+        # encoding; a new document segment carries no key_id, so the key change feed (a
+        # before_flush hook on ORM objects) has nothing to record either way.
+        from sqlalchemy import insert as _insert
+
+        seg_insert = _insert(Segment.__table__)
+        tags_by_unit = [extract_inline_tags(src) or None for src in sources]
+        rows = []
         for loc in locales:
             for k, src in enumerate(sources):
-                tags = extract_inline_tags(src)
-                session.add(
-                    Segment(
-                        document_id=doc_id,
-                        target_locale=loc,
-                        order_index=k,
-                        source_text=src,
-                        inline_tags=tags or None,
+                rows.append(
+                    {
+                        "document_id": doc_id,
+                        "target_locale": loc,
+                        "order_index": k,
+                        "source_text": src,
+                        "target_text": "",
+                        "status": SegStatus.NEW,
+                        "mt_confidence": None,
+                        "tm_match_pct": None,
+                        "inline_tags": tags_by_unit[k],
+                        "qa_flags": None,
+                        "tte_ms": None,
                         # Only accessibility units carry a note; every other segment
                         # keeps meta NULL exactly as before.
-                        meta=({"notes": notes[k]} if notes[k] else None),
-                    )
+                        "meta": ({"notes": notes[k]} if notes[k] else None),
+                        "key_id": None,
+                        "plural_category": None,
+                        "lock_band": None,
+                        "lock_hard": False,
+                    }
                 )
-                pending += 1
-                if pending >= _INSERT_CHUNK:
+                if len(rows) >= _INSERT_CHUNK:
+                    session.execute(seg_insert, rows)
                     session.commit()
                     time.sleep(0.002)
-                    pending = 0
+                    rows = []
+        if rows:
+            session.execute(seg_insert, rows)
         session.commit()
     except Exception:
         # Undo the committed doc + any seeded segments so the failure leaves no

@@ -32,14 +32,16 @@ import hashlib
 import hmac as _hmac
 import json
 import logging
+import os
 import threading
 import time
 from contextlib import ExitStack
-from contextvars import ContextVar
+from contextvars import ContextVar, copy_context
 from datetime import datetime, timedelta, timezone
-from functools import wraps
+from itertools import pairwise
 
-from sqlalchemy import func
+from sqlalchemy import bindparam, func, insert, update
+from sqlalchemy import select as sa_select
 from sqlmodel import Session, desc, select
 
 from app import config, db
@@ -113,22 +115,6 @@ def _witness_initialized():
     global _WITNESS_NOTE
     _WITNESS_NOTE = "Audit witness initialized while a DB anchor already exists."
     _logger.warning(_WITNESS_NOTE)
-
-
-def _trust_write(function):
-    @wraps(function)
-    def guarded(*args, **kwargs):
-        try:
-            with audit_state.process_lock(), audit_state.buffered_witness(_chain_lock):
-                return function(*args, **kwargs)
-        except audit_state.ProcessLockError:
-            _signing_drop(kwargs.get("action", ""), reason="audit process lock unavailable")
-        except audit_state.TrustStateError as exc:
-            # No signing material: do not invent a new signing key or an unsigned row.
-            _witness_failed(exc)
-            _signing_drop(kwargs.get("action", ""))
-
-    return guarded
 
 
 def _advance_witness(head_id, head_hash, **kwargs):
@@ -261,7 +247,12 @@ def _read_anchor():
     every audit write."""
     with Session(_engine()) as s:
         row = s.get(Setting, _ANCHOR_KEY)
-    raw = row.value if row else ""
+    return _parse_anchor(row.value if row else "")
+
+
+def _parse_anchor(raw):
+    """`_read_anchor`'s parse of a stored anchor value (shared with the group append, which
+    reads the Setting row inside its own transaction)."""
     if not raw:
         return None
     parts = raw.split(":")
@@ -277,14 +268,10 @@ def _write_anchor(
     head_id: int,
     head_hash: str,
     allow_regress: bool = False,
-    *,
-    external=audit_state._UNREAD,
-    prior=audit_state._UNREAD,
 ) -> bool:
-    """(Re)write the tamper-evident head anchor. Returns True on commit, False if the
-    update was SHED under sustained writer-lock contention. Callers hold `_chain_lock`, so
-    the shed WARN is emitted by the CALLER after the lock releases (pure I/O under an
-    app-wide lock is a serialization point).
+    """(Re)write the tamper-evident head anchor on its own (rotate-key, reset-anchor; a normal
+    append stages it in its group's transaction instead, see `_append_group_locked`). Returns
+    True on commit, False if the update was SHED under sustained writer-lock contention.
 
     MONOTONIC (F2): a normal write NEVER moves the stored head BACKWARDS. A lower head_id
     means tail rows were deleted (truncation) — e.g. the sweep's own forced chain_broken row
@@ -292,22 +279,13 @@ def _write_anchor(
     the truncation evidence and verify_chain's tail check (last_id < anchor head) keeps
     firing. Only `reset_anchor` (audit reset-anchor) deliberately re-baselines to a lower
     head after a LEGITIMATE `db restore` to an older backup, via allow_regress=True."""
-    # `prior` lets log() hand over the anchor it already read under the same chain and
-    # process locks (nothing can change it in between), saving one session and SELECT per row.
-    if prior is audit_state._UNREAD:
-        prior = _read_anchor()
-    if not allow_regress and isinstance(prior, tuple) and prior[0] > head_id:
-        _advance_witness(prior[0], prior[1], prior=external)
+    prior = _read_anchor()
+    value = _anchor_value(head_id, head_hash, prior, allow_regress)
+    if value is None:
+        _advance_witness(prior[0], prior[1])
         # Refuse the regression: keep the evidence-bearing higher anchor (truncation stays
         # detected). A no-op "success" — nothing to shed, nothing to warn about.
         return True
-    keyed_from = prior[2] if isinstance(prior, tuple) else head_id
-    if keyed_from > head_id:
-        # Only reachable on a deliberate regress (restore to an older head): clamp so
-        # keyed_from never points past the head. Post-restore rows are keyed and set
-        # seen_keyed on the first row, so the permissive legacy window is inert in practice.
-        keyed_from = head_id
-    value = f"{head_id}:{head_hash}:{keyed_from}:{_anchor_mac(head_id, head_hash, keyed_from)}"
     with Session(_engine()) as s:
 
         def _stage():
@@ -322,18 +300,27 @@ def _write_anchor(
         # is the tail-truncation guard; a shed update leaves it pointing at the PREVIOUS
         # head, which verify_chain still ACCEPTS (the newest real row id is now GREATER than
         # the stored head, and the tail check only fails when last_id < stored head — i.e.
-        # on genuine deletion), and which self-heals on the next successful audit write. So a
-        # persistent lock here must never raise a 500 up through the middleware. attempts=1
-        # (fold-in): because the anchor is stale-TOLERANT and self-healing, it is the LEAST
-        # valuable retry while costing the SECOND-most lock time — so it gets a single try,
-        # no jittered retry, dropping the worst-case _chain_lock hold from ~4×busy_timeout
-        # (2 row + 2 anchor) to ~2×+1 (2 row + 1 anchor). The caller warns (outside the lock).
+        # on genuine deletion), and which self-heals on the next successful audit write.
+        # attempts=1: the anchor is stale-tolerant and self-healing, so it gets a single try.
+        # The maintenance caller decides what a shed anchor means (both raise).
         committed = db.commit_or_shed(s, stage=_stage, attempts=1)
     if committed:
-        if external is None and prior is not None:
-            _witness_initialized()
-        _advance_witness(head_id, head_hash, allow_regress=allow_regress, prior=external)
+        _advance_witness(head_id, head_hash, allow_regress=allow_regress)
     return committed
+
+
+def _anchor_value(head_id, head_hash, prior, allow_regress=False):
+    """The anchor value to store for a new head, or None when a normal write would move a
+    higher stored head BACKWARDS (the monotonic refusal that keeps truncation evidence)."""
+    if not allow_regress and isinstance(prior, tuple) and prior[0] > head_id:
+        return None
+    keyed_from = prior[2] if isinstance(prior, tuple) else head_id
+    if keyed_from > head_id:
+        # Only reachable on a deliberate regress (restore to an older head): clamp so
+        # keyed_from never points past the head. Post-restore rows are keyed and set
+        # seen_keyed on the first row, so the permissive legacy window is inert in practice.
+        keyed_from = head_id
+    return f"{head_id}:{head_hash}:{keyed_from}:{_anchor_mac(head_id, head_hash, keyed_from)}"
 
 
 _refusal_lock = threading.Lock()
@@ -362,7 +349,6 @@ def allow_refusal_record() -> bool:
     return True
 
 
-@_trust_write
 def log(
     actor: str = "system",
     action: str = "",
@@ -398,7 +384,13 @@ def log(
     `org_id` (#487) is the org the row belongs to. Left None it is stamped from the ACTOR'S
     account at WRITE time (`_actor_org_id`), so a user later moved to another org leaves
     the old rows behind in the old org. NULL = system / unauthenticated / no account, never
-    shown to any org. Like customer_id it sits outside the hashed payload."""
+    shown to any org. Like customer_id it sits outside the hashed payload.
+
+    GROUP COMMIT (ADR 0100): the row is linked and written in one chained group
+    with the rows other threads of this process are appending at the same moment (see
+    `_submit`). The call is still synchronous: it returns only after its row is committed
+    together with the head anchor and the head witness is fsynced and published, exactly the
+    acknowledgement point of a single-row write, or with this caller's own shed / refusal."""
     if not force and not enabled():
         return
     if org_id is None:
@@ -419,12 +411,344 @@ def log(
         fail_open_posture = True  # the ratified default posture
         _warn_posture_read_failed(exc)  # once-per-process: a NON-transient failure stays visible
 
-    # Fold-in: the two degrade WARNs (pure I/O) are emitted AFTER `_chain_lock` releases —
+    event = _Event(actor, action, target, detail, ip, customer_id, org_id)
+    if audit_state.held_by_this_thread() or _chain_lock._is_owned() or _db_relief.in_relief_scope():
+        # Inline, as a group of one, on this thread and in this caller's own context:
+        # - a maintenance caller (rotate-key, reset-anchor, a ledger ceremony) already holds the
+        #   audit locks, and waiting for another thread's group would deadlock on them;
+        # - a relief scope (gate A HIGH-4) must reach the database through its own pool-less
+        #   routing, which a leader in another context would not apply.
+        _write_group([event])
+    else:
+        # A bookkeeping caller (the middleware's audit tail) groups only with other
+        # bookkeeping callers, so its leader routes exactly as each of them would.
+        _submit(event, bool(_db_relief._bookkeeping_scope.get()))
+
+    if event.error is not None:
+        raise event.error
+    if event.outcome == "lock":
+        _signing_drop(action, reason="audit process lock unavailable")
+        return
+    if event.outcome == "trust":
+        # No signing material: do not invent a new signing key or an unsigned row.
+        _signing_drop(action)
+        return
+    if event.outcome != "shed":
+        return
+    # The degrade WARNs (pure I/O) run here, after every audit lock has been released —
     # logging under an app-wide lock is a serialization point every mutating request would
-    # queue behind. Inside the lock we only decide; outside it we warn (and, fail-closed,
-    # raise). `row_shed`/`anchor_shed` carry the two decisions across the boundary.
-    row_shed = False
-    anchor_shed = False
+    # queue behind. Each caller of a shed group decides with its OWN posture snapshot.
+    if not fail_open_posture and REQUEST_RECORDED.get():
+        fail_open_posture = True  # L1: the request's own row is already written
+    # SHED after the bounded retry. ONE loud WARN naming the dropped action either way;
+    # the posture (snapshotted above as `fail_open_posture`, from the audit_fail_open
+    # Setting) decides whether the request then proceeds unaudited or raises.
+    _logger.warning(
+        "audit: DROPPED row for action %r (actor=%r) - write shed under sustained "
+        "SQLite writer contention (bounded retry exhausted). The audit trail is "
+        "fail-%s: the request %s.",
+        action,
+        actor,
+        "OPEN" if fail_open_posture else "CLOSED",
+        "proceeds unaudited (availability over audit completeness)"
+        if fail_open_posture
+        else "surfaces an honest retryable 503 (audit completeness over availability)",
+    )
+    _logger.error(
+        "audit: audit write %s under database contention (%d since this process "
+        "started). Action %r by %r.%s",
+        "DROPPED" if fail_open_posture else "REFUSED",
+        _count_dropped(),
+        action,
+        actor,
+        " The request ran unrecorded; set audit_fail_open to 0 on the host to refuse "
+        "such requests instead."
+        if fail_open_posture
+        else "",
+    )
+    if not fail_open_posture:
+        # Fail-CLOSED posture: surface an honest retryable error instead of proceeding
+        # unaudited (the middleware renders it as a 503).
+        raise db.WriteContentionError(f"audit.log {action}")
+
+
+# --- group commit (ADR 0100) ----------------------------------------------------- #
+# Every row used to cost its own trip through the cross-process audit lock: a witness check,
+# a predecessor read, a row commit, an anchor commit and a witness fsync, so one chain topped
+# out near 100 appends per second (S3c, ADR 0097). Now the threads of one process that append
+# at the same moment form a GROUP: the first becomes the leader, takes the audit locks once,
+# links every queued event in arrival order onto the chain, commits all rows AND the head
+# anchor in ONE transaction, publishes the witness once, then releases every caller of the
+# group. There is no timer and no background thread: a group is whatever queued while the
+# previous group held the locks, so an idle process writes groups of one with the old latency
+# and a busy one batches in proportion to its load. Processes still take turns on the
+# `.audit_lock` file lock (fair mode in the split roles), one group per turn; on Postgres the
+# group's transaction also takes a transaction-scoped advisory lock before it reads the
+# predecessor, a database-level second guard for this path (the file lock remains the
+# authority: the ledger ceremonies' own audit row and the witness check do not take it).
+#: Most events in one group. It bounds how long a group holds the cross-process lock and how
+#: many rows the witness can trail the database by after a crash between commit and publish.
+GROUP_MAX = 64
+#: Postgres advisory lock key of the chain append ("LOCAUD" in ASCII).
+_PG_CHAIN_LOCK = 0x4C4F43415544
+
+
+class _Event:
+    """One log() call: its frozen fields, then the outcome its own caller acts on: "ok",
+    "shed" (the group's commit lost the writer lock), "lock" (the audit process lock was
+    unavailable), "trust" (signing material unavailable), or an exception in `error`."""
+
+    __slots__ = (
+        "action",
+        "actor",
+        "ctx",
+        "customer_id",
+        "detail",
+        "done",
+        "error",
+        "ip",
+        "org_id",
+        "outcome",
+        "row",
+        "target",
+    )
+
+    def __init__(self, actor, action, target, detail, ip, customer_id, org_id):
+        self.actor = actor or "system"
+        self.action = action
+        self.target = target
+        self.detail = detail
+        self.ip = ip
+        self.customer_id = customer_id
+        self.org_id = org_id
+        # Everything of the row that does not depend on its predecessor, built here on the
+        # caller's own thread BEFORE any audit lock (S9, WP-AUDIT): the locked section only adds
+        # `ts`, `prev_hash` and `row_hash`. Frozen like the fields above.
+        self.row = {
+            "actor": self.actor,
+            "action": action,
+            "target": target,
+            "detail": detail,
+            "ip": ip,
+            "customer_id": customer_id,
+            "org_id": org_id,
+        }
+        # The caller's context (pool-wait budget, scopes): a group runs in its leader's context,
+        # but an event rewritten alone after a failed group runs in its own (security review M2).
+        self.ctx = copy_context()
+        self.outcome = None
+        self.error = None
+        self.done = False
+
+
+class _GroupOrderError(RuntimeError):
+    """The database assigned a group's ids out of chain order (never expected): the group is
+    rolled back and every event is rewritten alone, so the chain never links against id order."""
+
+
+class _Lane:
+    """One group queue: its condition, waiting events, and whether a leader is writing."""
+
+    __slots__ = ("busy", "cond", "queue")
+
+    def __init__(self):
+        self.cond = threading.Condition(threading.Lock())
+        self.queue: list = []
+        self.busy = False
+
+
+# One lane per database routing class (S7d): a group runs in its leader's context,
+# so a leader may only carry events that route exactly like its own. The bookkeeping lane is
+# the middleware's audit tail (`bookkeeping.scope()`: the pooled engine with headroom, else
+# the emergency engine); every other caller uses the plain lane. A relief-scope caller never
+# groups (see log()). Before this split every bookkeeping caller wrote inline, so no save's
+# audit row ever joined a group.
+_LANES = {False: _Lane(), True: _Lane()}
+
+
+def _reset_group_after_fork():
+    for key in _LANES:
+        _LANES[key] = _Lane()
+
+
+if hasattr(os, "register_at_fork"):
+    # A child forked while a leader was active must not inherit a leader that does not exist.
+    os.register_at_fork(after_in_child=_reset_group_after_fork)
+
+
+def _submit(event, bookkeeping=False):
+    """Queue `event` on its routing lane and return once its group has been written (or refused).
+
+    The first caller that finds no active leader on the lane leads: it writes groups of up to
+    GROUP_MAX queued events, oldest first, until its own event is done, then hands the role on.
+    Callers that arrive meanwhile wait on the condition; their events ride the next group."""
+    lane = _LANES[bookkeeping]
+    with lane.cond:
+        lane.queue.append(event)
+        while lane.busy and not event.done:
+            lane.cond.wait()
+        if event.done:
+            return
+        lane.busy = True
+    try:
+        while not event.done:
+            with lane.cond:
+                group = lane.queue[:GROUP_MAX]
+                del lane.queue[:GROUP_MAX]
+            try:
+                _write_group(group)
+            finally:
+                with lane.cond:
+                    for queued in group:
+                        if queued.outcome is None and queued.error is None:
+                            queued.outcome = "shed"  # the leader died mid-group (BaseException)
+                        queued.done = True
+                    lane.cond.notify_all()
+    finally:
+        with lane.cond:
+            if not event.done:
+                # The leader is unwinding (BaseException) before its own event was written:
+                # never write it later, after its caller has already raised.
+                if event in lane.queue:
+                    lane.queue.remove(event)
+                event.done = True
+            lane.busy = False
+            lane.cond.notify_all()
+
+
+def _utcnow() -> datetime:
+    """The row timestamp: the same naive-UTC clock as the AuditLog model's default factory."""
+    return datetime.utcnow()
+
+
+def _build_group_read():
+    """The group's single read (prebuilt once, `db.prebuilt`): newest row id and hash, the hash
+    of the row the witness names (`:witness_id`, 0 = none) and the stored anchor value."""
+    t = AuditLog.__table__
+    newest = sa_select(t.c.id, t.c.row_hash).order_by(t.c.id.desc()).limit(1)
+    return sa_select(
+        newest.with_only_columns(t.c.id).scalar_subquery(),
+        newest.with_only_columns(t.c.row_hash).scalar_subquery(),
+        sa_select(t.c.row_hash).where(t.c.id == bindparam("witness_id")).scalar_subquery(),
+        sa_select(Setting.__table__.c.value)
+        .where(Setting.__table__.c.key == _ANCHOR_KEY)
+        .scalar_subquery(),
+    )
+
+
+def _build_anchor_update():
+    t = Setting.__table__
+    return (
+        update(t).where(t.c.key == bindparam("anchor_key")).values(value=bindparam("anchor_value"))
+    )
+
+
+def _build_rows_insert():
+    t = AuditLog.__table__
+    return insert(t).returning(t.c.id, t.c.row_hash)
+
+
+#: The column order of an audit row INSERT (the Postgres path binds one array per column).
+_ROW_COLUMNS = (
+    "ts",
+    "actor",
+    "action",
+    "target",
+    "detail",
+    "ip",
+    "customer_id",
+    "org_id",
+    "prev_hash",
+    "row_hash",
+)
+#: Postgres: the whole group as ONE statement over ten array parameters. A multi-row VALUES
+#: statement is re-parsed by the driver on every call (it is past the driver's statement cache
+#: limits from five rows on, and cannot be prepared); this text never changes, so the driver
+#: caches it and the server prepares it. Cast to the column types the model declares.
+_PG_ROWS_INSERT = (
+    "INSERT INTO auditlog (ts, actor, action, target, detail, ip, customer_id, org_id, "
+    "prev_hash, row_hash) SELECT * FROM unnest(%s::timestamp[], %s::varchar[], %s::varchar[], "
+    "%s::varchar[], %s::varchar[], %s::varchar[], %s::integer[], %s::integer[], %s::varchar[], "
+    "%s::varchar[]) RETURNING id, row_hash"
+)
+
+
+def _insert_rows(conn, rows) -> list:
+    """INSERT `rows` (column dicts, in link order) and return their ids in link order.
+
+    One statement with RETURNING (the ORM unit of work and the SQLModel objects it needed cost
+    more than the statement). Each returned id is matched to its row by `row_hash` (unique
+    along the chain: every hash covers its predecessor's), so the pairing never depends on the
+    order the database returns the rows in; the caller then checks the ids ascend."""
+    if conn.dialect.name == "postgresql":
+        returned = conn.exec_driver_sql(
+            _PG_ROWS_INSERT, tuple([values[column] for values in rows] for column in _ROW_COLUMNS)
+        ).all()
+    elif conn.dialect.insert_returning:
+        returned = conn.execute(db.prebuilt("audit.group_insert", _build_rows_insert), rows).all()
+    else:
+        # A SQLite older than 3.35 has no RETURNING: one INSERT per row, the key from the cursor.
+        table = AuditLog.__table__
+        return [conn.execute(insert(table), values).inserted_primary_key[0] for values in rows]
+    by_hash = {row_hash: row_id for row_id, row_hash in returned}
+    if len(returned) != len(rows) or len(by_hash) != len(rows):
+        raise _GroupOrderError(f"audit group insert returned {len(returned)} of {len(rows)} rows")
+    try:
+        return [by_hash[values["row_hash"]] for values in rows]
+    except KeyError:
+        raise _GroupOrderError("audit group insert returned an unknown row") from None
+
+
+def _write_group(group):
+    """Link, commit and publish `group` as one chained append, then set every event's outcome.
+
+    Outcomes are set only after `buffered_witness` has fsynced and published the witness, so
+    no caller is released before its row is committed and the witness names it: the same
+    acknowledgement point as the former one-row write. A non-lock error before the commit (a
+    bad value in one event, or the leader's own pool budget running out) rewrites each event
+    alone in its OWN caller's context, so only the caller it belongs to sees it. An error from
+    the commit itself is ambiguous (the rows may be durable), so it is never rewritten: every
+    caller of the group gets it, as the one caller of a single-row write did."""
+    progress = {"committed": False, "staged": False}
+    try:
+        with audit_state.process_lock(), audit_state.buffered_witness(_chain_lock):
+            outcome = "ok" if _append_group_locked(group, progress) else "shed"
+    except audit_state.ProcessLockError:
+        outcome = "lock"
+    except audit_state.TrustStateError as exc:
+        _witness_failed(exc)
+        outcome = "trust"
+    except Exception as exc:
+        if progress["committed"]:
+            # The rows are durable; only the witness bookkeeping after the commit failed.
+            _logger.error("audit: post-commit witness step failed: %s", exc, exc_info=True)
+            outcome = "ok"
+        elif progress["staged"] or len(group) == 1:
+            for event in group:
+                event.error = exc
+            return
+        else:
+            for event in group:
+                event.ctx.run(_write_group, [event])
+            return
+    except BaseException:
+        if progress["committed"]:
+            for event in group:
+                event.outcome = "ok"  # durable rows are never reported as dropped
+        raise
+    for event in group:
+        event.outcome = outcome
+
+
+def _append_group_locked(group, progress) -> bool:
+    """Under the process lock: write `group` onto the chain. True on commit, False if shed.
+
+    S7d: this runs while the cross-process audit lock is held, so every statement
+    here is paid by every appender of every process. One transaction, five statements: (the
+    Postgres advisory lock,) ONE read of the predecessor, the witness row and the anchor, the
+    rows' INSERT, the anchor UPDATE and the commit. The witness check used to be a separate
+    session before the transaction; it now reads the same rows inside it, still before any
+    row is inserted, so a deleted witness id is seen before an insert could reuse it."""
     with _chain_lock, audit_state.cached_trust(), audit_state.snapshot():
         # Preserve a detected rollback BEFORE a new row can reuse a deleted id.
         try:
@@ -434,104 +758,100 @@ def log(
         except (OSError, ValueError, KeyError, TypeError) as exc:
             _witness_failed(exc)
             external = audit_state._UNREAD
-        anchor_prior = audit_state._UNREAD
-        if isinstance(external, dict):
-            with Session(_engine()) as check_session:
-                witness = check_session.get(AuditLog, external["id"])
-            anchor_prior = _read_anchor()
-            if witness is None or witness.row_hash != external["hash"] or anchor_prior is None:
-                external = {**external, "broken": True}
-                try:
-                    audit_state.write(external)
-                except (OSError, ValueError, KeyError, TypeError) as exc:
-                    _witness_failed(exc)
+        witness_id = external["id"] if isinstance(external, dict) else None
+        plan = {"external": external}
         with Session(_engine()) as s:
-            last = s.exec(select(AuditLog).order_by(desc(AuditLog.id)).limit(1)).first()
-            try:
-                audit_state.legacy_through(last.id if last else 0)
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                raise audit_state.TrustStateError("Audit format boundary unavailable") from exc
-            prev_hash = last.row_hash if last else ""
-            row = AuditLog(
-                actor=actor or "system",
-                action=action,
-                target=target,
-                detail=detail,
-                ip=ip,
-                prev_hash=prev_hash,
-                customer_id=customer_id,
-                org_id=org_id,
-            )
-            row.row_hash = _compute_hash(
-                prev_hash,
-                row.ts.isoformat(),
-                row.actor,
-                row.action,
-                row.target,
-                row.detail,
-                row.ip,
-                customer_id=row.customer_id,
-            )
-            # Flood R3-F1: ride out transient writer-lock contention, then DEGRADE. Under a
-            # sustained write flood this INSERT can lose the single SQLite writer lock; left
-            # to surface it raised OperationalError('database is locked') straight up through
-            # the middleware's `_audit_mutating_request` -> a 500 on an otherwise-successful
-            # mutating request (two such 500s in the R3 flood). `_chain_lock` is held here, so
-            # `last`/prev_hash cannot shift under us across the retry (no other audit writer
-            # interleaves — only NON-audit writers contend for the lock), which makes
-            # re-staging the same row on each attempt correct. `keep_loaded` reads the new
-            # row's PK for the anchor WITHOUT a lock-prone post-commit refresh SELECT (created_at
-            # etc. are Python-side default_factory values, already populated).
-            if db.commit_or_shed(
-                s, stage=lambda: s.add(row), attempts=AUDIT_WRITE_ATTEMPTS, keep_loaded=True
-            ):
-                head_id, head_hash = row.id, row.row_hash
-            else:
-                row_shed = True
-        if not row_shed:
-            # Still inside `_chain_lock` (the anchor must reflect the head just written, with
-            # no other audit writer interleaving), but its shed WARN is deferred below.
-            anchor_shed = not _write_anchor(
-                head_id, head_hash, external=external, prior=anchor_prior
-            )
-    if row_shed and not fail_open_posture and REQUEST_RECORDED.get():
-        fail_open_posture = True  # L1: the request's own row is already written
-    if row_shed:
-        # SHED after the bounded retry. ONE loud WARN naming the dropped action either way;
-        # the posture (snapshotted above as `fail_open_posture`, from the audit_fail_open
-        # Setting) decides whether the request then proceeds unaudited or raises.
-        _logger.warning(
-            "audit: DROPPED row for action %r (actor=%r) — write shed under sustained "
-            "SQLite writer contention (bounded retry exhausted). The audit trail is "
-            "fail-%s: the request %s.",
-            action,
-            actor,
-            "OPEN" if fail_open_posture else "CLOSED",
-            "proceeds unaudited (availability over audit completeness)"
-            if fail_open_posture
-            else "surfaces an honest retryable 503 (audit completeness over availability)",
-        )
-        _logger.error(
-            "audit: audit write %s under database contention (%d since this process "
-            "started). Action %r by %r.%s",
-            "DROPPED" if fail_open_posture else "REFUSED",
-            _count_dropped(),
-            action,
-            actor,
-            " The request ran unrecorded; set audit_fail_open to 0 on the host to refuse "
-            "such requests instead."
-            if fail_open_posture
-            else "",
-        )
-        if not fail_open_posture:
-            # Fail-CLOSED posture: surface an honest retryable error instead of proceeding
-            # unaudited (the middleware renders it as a 503).
-            raise db.WriteContentionError(f"audit.log {action}")
-    elif anchor_shed:
-        _logger.warning(
-            "audit: anchor update shed under sustained write contention "
-            "(tail-truncation guard trails by one write; self-heals on next audit)"
-        )
+            postgres = s.get_bind().dialect.name == "postgresql"
+
+            def _stage():
+                # Re-run whole on a retried commit: rows are rebuilt (fresh timestamps and
+                # hashes) on the predecessor read in this very transaction.
+                progress["staged"] = False
+                conn = s.connection()
+                if postgres:
+                    conn.exec_driver_sql(f"SELECT pg_advisory_xact_lock({_PG_CHAIN_LOCK})")
+                last_id, last_hash, witness_hash, anchor_raw = conn.execute(
+                    db.prebuilt("audit.group_read", _build_group_read),
+                    {"witness_id": witness_id or 0},
+                ).one()
+                prior = _parse_anchor(anchor_raw or "")
+                if witness_id is not None and (
+                    witness_hash is None or witness_hash != external["hash"] or prior is None
+                ):
+                    broken = {**external, "broken": True}
+                    try:
+                        audit_state.write(broken)  # idempotent if a retried stage writes it again
+                    except (OSError, ValueError, KeyError, TypeError) as exc:
+                        _witness_failed(exc)
+                    plan["external"] = broken
+                last_id = last_id or 0
+                try:
+                    audit_state.legacy_through(last_id)
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    raise audit_state.TrustStateError("Audit format boundary unavailable") from exc
+                prev_hash = last_hash if last_id else ""
+                rows = []
+                for event in group:
+                    # The row as plain column values (no SQLModel object: S9, WP-AUDIT). `ts` is
+                    # taken here, per row in link order, exactly where the model's default
+                    # factory used to run, and is hashed and stored as the same datetime.
+                    values = dict(event.row)
+                    ts = _utcnow()
+                    values["ts"] = ts
+                    values["prev_hash"] = prev_hash
+                    prev_hash = values["row_hash"] = _compute_hash(
+                        values["prev_hash"],
+                        ts.isoformat(),
+                        values["actor"],
+                        values["action"],
+                        values["target"],
+                        values["detail"],
+                        values["ip"],
+                        customer_id=values["customer_id"],
+                    )
+                    rows.append(values)
+                # The test seam of the former `session.new`: a commit_or_shed stand-in looks for
+                # the audit rows this transaction carries here (the Core INSERT below leaves no
+                # mapped object behind for it to find).
+                s.info["audit_group_rows"] = rows
+                ids = _insert_rows(conn, rows)
+                # verify_chain walks by id: the ids must ascend in link order, above the
+                # predecessor. The hash never covers the id, so this is the only coupling.
+                if ids[0] <= last_id or any(b <= a for a, b in pairwise(ids)):
+                    raise _GroupOrderError(f"audit group ids out of chain order: {ids}")
+                # The anchor rides the same transaction: rows and anchor commit together.
+                head = (ids[-1], rows[-1]["row_hash"])
+                value = _anchor_value(head[0], head[1], prior)
+                if value is not None:
+                    updated = 0
+                    if anchor_raw is not None:
+                        updated = conn.execute(
+                            db.prebuilt("audit.group_anchor", _build_anchor_update),
+                            {"anchor_key": _ANCHOR_KEY, "anchor_value": value},
+                        ).rowcount
+                    if updated != 1:
+                        # Missing, or deleted since the read above (only a writer outside the
+                        # audit locks can do that): the group never commits without its anchor.
+                        s.add(Setting(key=_ANCHOR_KEY, value=value))
+                plan.update(prior=prior, head=head, regress=value is None)
+                progress["staged"] = True  # from here on only the commit itself can fail
+
+            # Flood R3-F1: ride out transient writer-lock contention, then DEGRADE. `_chain_lock`
+            # and the process lock are held, so the predecessor cannot shift across a retry
+            # (only NON-audit writers contend for the SQLite writer lock).
+            if not db.commit_or_shed(s, stage=_stage, attempts=AUDIT_WRITE_ATTEMPTS):
+                return False
+            progress["committed"] = True
+        external = plan["external"]
+        prior, (head_id, head_hash) = plan["prior"], plan["head"]
+        if plan["regress"]:
+            # A normal write never moves a higher stored head backwards (truncation evidence).
+            _advance_witness(prior[0], prior[1], prior=external)
+        else:
+            if external is None and prior is not None:
+                _witness_initialized()
+            _advance_witness(head_id, head_hash, prior=external)
+        return True
 
 
 # --- customer derivation helpers (R2-3, item 3) ------------------------------ #
@@ -1346,6 +1666,11 @@ def _reset_anchor_locked(actor):
     return (old_head, new_head)
 
 
+def _build_actor_org():
+    t = User.__table__
+    return sa_select(t.c.org_id).where(func.lower(t.c.email) == bindparam("who"))
+
+
 def _actor_org_id(actor) -> int | None:
     """The org the actor's account belongs to RIGHT NOW (called at write time, so it is the
     org the row is written in), or None for a system / unauthenticated / unknown actor or
@@ -1354,8 +1679,16 @@ def _actor_org_id(actor) -> int | None:
     if not who or who == "system":
         return None
     try:
-        with Session(_engine()) as s:
-            return s.exec(select(User.org_id).where(func.lower(User.email) == who)).first()
+        # One prebuilt Core statement on a plain connection (S9, WP-AUDIT): this runs on the
+        # caller's thread for EVERY audit row, and the Session + ORM execution it replaced cost
+        # about as much CPU as the statement. Same SQL, same first-row-or-None answer. The
+        # isolation level is set INSIDE the `with`, so a failure setting it still returns the
+        # connection to the pool (S9 gate LOW).
+        with _engine().connect() as conn:
+            conn.execution_options(isolation_level="AUTOCOMMIT")
+            return conn.execute(
+                db.prebuilt("audit.actor_org", _build_actor_org), {"who": who}
+            ).scalar()
     except Exception:
         _logger.debug("audit: actor org lookup failed", exc_info=True)
         return None

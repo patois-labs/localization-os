@@ -175,6 +175,7 @@ memory = _Facade(
         "record_segment_edit": _none,
         "record_resume_edit": _none,
         "record_lqa_finding": _none,
+        "scope_from_rows": _none,
     },
 )
 

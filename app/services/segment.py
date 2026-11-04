@@ -15,6 +15,8 @@ Documented in: docs/architecture/segmentation.md
 import math
 import re
 
+from app.services import native
+
 # Sentence-ending punctuation: Latin + common CJK.
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[\"'(\[A-Z0-9])")
 _CJK_SPLIT = re.compile(r"(?<=[。！？])")
@@ -361,6 +363,15 @@ def split_sentences(text: str, locale: str = "", engine: str | None = None) -> l
             return srx_out
     else:
         version = 2
+    return _legacy_split(text, locale, version=version)
+
+
+def _legacy_split_py(text: str, locale: str = "", *, version: int = 2) -> list[str]:
+    """The built-in regex splitter, version 1 or 2 (see split_sentences). Pure: no settings,
+    no SRX. The reference for `locos_native.split_sentences` (ADR 0091)."""
+    text = text.strip()
+    if not text:
+        return []
     spans = _protected_spans(text)
     # Collect candidate cut points from both splitters, then keep only those that
     # do not fall inside a protected paired-token span.
@@ -382,6 +393,10 @@ def split_sentences(text: str, locale: str = "", engine: str | None = None) -> l
         if piece:
             out.append(piece)
     return out or [text]
+
+
+# Native fast path (ADR 0091): `_legacy_split_py` stays the reference and the fallback.
+_legacy_split = native.bind("split_sentences", _legacy_split_py)
 
 
 # ---------------------------------------------------------------------------------------

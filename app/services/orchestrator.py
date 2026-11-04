@@ -804,6 +804,8 @@ def _run_workflow_stream_finalized(
 
     The impl body is byte-identical to the pre-envelope function — the only reason for
     the split is to give finalization a single robust exit hook."""
+    from app.services import run_resume  # lazy: keeps the kernel pipeline surface narrow
+
     _wf_run_id = None
     _exc = False
     _abandoned = False
@@ -847,6 +849,9 @@ def _run_workflow_stream_finalized(
         # whatever the step reached, so forgetting here loses no signal.
         if _wf_run_id is not None:
             _progress_forget(_wf_run_id)
+            # S1 (ADR 0090): a finished run needs no resume checkpoints (a no-op unless the
+            # run is terminal; a paused or taken-over run keeps them).
+            run_resume.clear_checkpoints(_wf_run_id)
         _settle_tag_repair_spend(_wf_run_id, session, _exc or _abandoned)
         _finalize_run_envelope(_wf_run_id, doc_id, locale, exception=_exc, abandoned=_abandoned)
         # H4: close any still-open vendor dispatch leg of a run that FINISHED (completed/
@@ -897,6 +902,8 @@ def _run_workflow_stream_impl(
     `resume_run`. Putting it on `start_run` alone left three launchers running a
     key project's TRASH document, and a run over parked rows spends provider budget
     on strings the customer just deleted while emitting ZERO delta entries."""
+    from app.services import run_resume  # lazy: keeps the kernel pipeline surface narrow
+
     doc = session.get(Document, doc_id)
     _refuse_key_trash_document(doc)
     # AI opt-out (DPAI-08): the seam every launcher funnels through, INCLUDING resume, so
@@ -1112,14 +1119,53 @@ def _run_workflow_stream_impl(
         start = 0
         current_text = source_text
 
+    # S1 restart resume (ADR 0090): recovery re-queued this run with `_resume_kind=restart`;
+    # continue from the body its newest checkpoint recorded (never the source, never an old
+    # pause blob). A checkpoint that does not fit fails the run as a restart did before.
+    _rr_restart = False
+    _rr_seq0 = None
+    if (
+        run_id is not None
+        and seed_text is None
+        and (run.context or {}).get("_resume_kind") == run_resume.RESUME_KIND
+    ):
+        _rr_restart = True
+        _rr_ck = run_resume.latest_checkpoint(session, run_id)
+        if (
+            _rr_ck is not None
+            and int(_rr_ck.get("cursor", -1)) == start
+            and isinstance(_rr_ck.get("text"), str)
+        ):
+            current_text = _rr_ck["text"]
+            _rr_seq0 = int(_rr_ck.get("seq") or 0)
+        elif _rr_ck is not None or start != 0:
+            yield run_resume.fail_unresumable(session, run)
+            return
+
     run.status = RunStatus.RUNNING
     run.formality = _fm_record  # #617 item 7: the register that applied (None = none resolved)
     # Review F2: execution begins (or RE-begins, after a human pause) NOW, so the
     # staleness clock starts here. The chokepoint every FULL_TEXT execution passes
     # through, fresh or resumed.
     _mark_execution_start(run)
+    _exec_token = run_resume.new_token()
+    run_resume.stamp(run, _exec_token)
     session.add(run)
     session.commit()
+    # S1 restart resume (ADR 0090): this execution owns the run and keys/checkpoints each visit.
+    run_resume.register(run.id, _exec_token)
+    _visits = run_resume.VisitWriter(
+        run,
+        _exec_token,
+        _rr_seq0 if _rr_seq0 is not None else run_resume.initial_seq(session, run.id),
+        lambda: {"text": current_text, "ctx": _ft_pause_ctx()},
+    )
+
+    def _ft_resumable():
+        # A FULL_TEXT restart resume restores the body and the pause context only, so it is
+        # offered for a clean linear run: no failed or refused step, no regression record, no
+        # branch routing (the loop cursor is then always current_step_index).
+        return not (any_step_failed or refused or ft_regressions or _has_graph(steps))
 
     # Make the glossary trace visible to the user (a non-covering pin skip / a
     # content-type skip): stamp each pin-skip note onto the run's notes, de-duplicated
@@ -1317,7 +1363,7 @@ def _run_workflow_stream_impl(
     # one). The flood's silent-loss class is an operator replacing a MACHINE (mt) value during
     # review; landing it EDITED protects it from the next run exactly as for a protected body.
     # Skipped on a vendor/external RETURN completing-resume (the vendor owns the body, not a human).
-    if run_id is not None and not _ft_is_vendor_return:
+    if run_id is not None and not _ft_is_vendor_return and not _rr_restart:
         _ft_parked = _paused_blob(session, run_id)
         if _ft_parked is not None and current_text != _ft_parked:
             # resume + the operator changed the body during the pause -> land it (human_edit)
@@ -1525,7 +1571,12 @@ def _run_workflow_stream_impl(
             )
             run.current_step_index = cursor + 1
             session.add(run)
-            session.commit()
+            _visits.stamp(
+                run_resume.pending_step_run(session), cursor, cursor + 1, resumable=_ft_resumable()
+            )
+            if not _visits.commit(session, session.commit):
+                yield run_resume.superseded_event(run.id)
+                return
             yield {
                 "type": "step_skipped",
                 "run_id": run.id,
@@ -1573,7 +1624,7 @@ def _run_workflow_stream_impl(
             offers = [
                 {"source": sentence, "target": hit["target_text"], "tm_id": hit["id"]}
                 for sentence in dict.fromkeys(sentences)
-                if (hit := hits.get(sentence)) and hit["match_pct"] == 100
+                if (hit := hits.get(sentence)) and hit["match_pct"] >= 100
             ]
             # `srx.segment_text` returns the body UNSPLIT past its 100 KB paragraph ceiling,
             # so a large document yields one "sentence" that matches nothing and reports a
@@ -1645,7 +1696,10 @@ def _run_workflow_stream_impl(
             run.used_tm_match = True
             run.current_step_index = cursor + 1
             session.add(run)
-            session.commit()
+            _visits.stamp(sr, cursor, cursor + 1, resumable=_ft_resumable())
+            if not _visits.commit(session, session.commit):
+                yield run_resume.superseded_event(run.id)
+                return
             yield {
                 "type": "step",
                 "run_id": run.id,
@@ -1685,6 +1739,8 @@ def _run_workflow_stream_impl(
             locale=locale,
             step_started_at=step_started_at,
             pause_context_fn=_ft_pause_ctx,
+            visit_writer=_visits,
+            visit_resumable=_ft_resumable,
             dispatch_payload_fn=_ft_dispatch_payload,
         )
         if _directive.stop:
@@ -1720,7 +1776,12 @@ def _run_workflow_stream_impl(
             )
             run.current_step_index = cursor + 1
             session.add(run)
-            session.commit()
+            _visits.stamp(
+                run_resume.pending_step_run(session), cursor, cursor + 1, resumable=_ft_resumable()
+            )
+            if not _visits.commit(session, session.commit):
+                yield run_resume.superseded_event(run.id)
+                return
             yield {
                 "type": "step",
                 "run_id": run.id,
@@ -2293,7 +2354,16 @@ def _run_workflow_stream_impl(
         )
         run.current_step_index = cursor + 1
         session.add(run)
-        session.commit()
+        _visits.stamp(
+            run_resume.pending_step_run(session),
+            cursor,
+            cursor + 1,
+            text=output,
+            resumable=_ft_resumable(),
+        )
+        if not _visits.commit(session, session.commit):
+            yield run_resume.superseded_event(run.id)
+            return
         current_text = output
         yield {
             "type": "step",
@@ -2763,6 +2833,8 @@ def run_workflow_stream_segmented(
     (remember the run id, resolve the observed outcome, finalize in a finally). The
     DELEGATION path (run_workflow_stream -> its impl) calls the segmented IMPL below
     instead, so the envelope is finalized exactly once."""
+    from app.services import run_resume  # lazy: keeps the kernel pipeline surface narrow
+
     _wf_run_id = None
     _exc = False
     _abandoned = False
@@ -2803,6 +2875,9 @@ def run_workflow_stream_segmented(
         # whatever the step reached, so forgetting here loses no signal.
         if _wf_run_id is not None:
             _progress_forget(_wf_run_id)
+            # S1 (ADR 0090): a finished run needs no resume checkpoints (a no-op unless the
+            # run is terminal; a paused or taken-over run keeps them).
+            run_resume.clear_checkpoints(_wf_run_id)
         _settle_tag_repair_spend(_wf_run_id, session, _exc or _abandoned)
         _finalize_run_envelope(_wf_run_id, doc_id, locale, exception=_exc, abandoned=_abandoned)
         # H4: close any still-open vendor dispatch leg of a run that FINISHED (completed/
@@ -2857,6 +2932,8 @@ def _run_workflow_stream_segmented_impl(
     LAST-step resume persists the operator's edits (working[] holds the re-split
     edited seed; the empty tail loop runs no steps but the post-loop write-back
     still commits the edits)."""
+    from app.services import run_resume  # lazy: keeps the kernel pipeline surface narrow
+
     doc = session.get(Document, doc_id)
     # AI opt-out (DPAI-08): also refused here for the direct segmented callers.
     from app.services import ai_optout as _ai_optout
@@ -2884,6 +2961,12 @@ def _run_workflow_stream_segmented_impl(
         )
         return
     seg_sources = [s.source_text for s in segments]
+    # ADR 0102: each segment's in-context TM key (its neighbours' sources, or its string key),
+    # positional with `segments`. Every TM read below passes it so a unit last approved in the
+    # same context fills as a 101 % match.
+    from app.services import tm_context as _tm_context
+
+    seg_ctx = _tm_context.segment_context_keys(session, segments)
     # #705 (2026-10-11: "Workflow runs that come across tag only segments should copy
     # the tag to the target and deliver. This should be an across the board thing."): a
     # segment with no translatable text (only inline tags / placeholders and whitespace) is
@@ -3031,8 +3114,9 @@ def _run_workflow_stream_segmented_impl(
     _sys_head_body = _sys_ovr.body if _sys_ovr is not None else None
     _sys_stamp = _system_prompt_stamp(_sys_ovr, src, locale)
 
-    # TM few-shot (2B): the top-N fuzzy example pairs per segment, resolved ONCE per
-    # run in ONE batched query (reused across every step — the source text + TM don't
+    # TM few-shot (2B): the top-N example pairs per segment (ADR 0102: the fuzzy ranker is
+    # gone; without an example add-on this is empty), resolved ONCE per
+    # run in ONE batched pass (reused across every step — the source text + TM don't
     # change during a run). Retrieved at the MAX window; each step renders only the
     # first `tm_examples_window` pairs when its `tm_examples` toggle is ON. Skipped
     # entirely (no query) when NO llm_agent step wants examples. Empty per segment ->
@@ -3048,13 +3132,12 @@ def _run_workflow_stream_segmented_impl(
         for st in steps
     )
     if _tm_ex_wanted:
-        _ex_map = tm.example_matches_batch(
+        _ex_map = tm.example_matches_hybrid(
             session,
             doc.project_id,
             seg_sources,
             src,
             locale,
-            floor=context_pkg.TM_EXAMPLES_FLOOR,
             window=context_pkg.TM_EXAMPLES_MAX_WINDOW,
         )
         seg_examples = [_ex_map.get(s, []) for s in seg_sources]
@@ -3117,6 +3200,8 @@ def _run_workflow_stream_segmented_impl(
                 log.warning("llmemory: doc-note recall failed", exc_info=True)
         return _mem_note_state[1], _mem_note_state[2]
 
+    _rr_restart = False  # S1: set below when this entry is a restart resume
+    _rr_seq0 = None
     if run_id is not None:
         run = session.get(WorkflowRun, run_id)
         start = run.current_step_index
@@ -3169,6 +3254,24 @@ def _run_workflow_stream_segmented_impl(
             )
         else:
             working = list(seg_sources)
+            # S1 restart resume (ADR 0090): recovery re-queued this run with
+            # `_resume_kind=restart`; continue from the working texts its newest checkpoint
+            # recorded. A checkpoint that does not fit fails the run as a restart did before.
+            if (run.context or {}).get("_resume_kind") == run_resume.RESUME_KIND:
+                _rr_restart = True
+                _rr_ck = run_resume.latest_checkpoint(session, run_id)
+                _rr_w = (_rr_ck or {}).get("working")
+                if (
+                    _rr_ck is not None
+                    and int(_rr_ck.get("cursor", -1)) == start
+                    and isinstance(_rr_w, list)
+                    and len(_rr_w) == len(segments)
+                ):
+                    working = [str(w) for w in _rr_w]
+                    _rr_seq0 = int(_rr_ck.get("seq") or 0)
+                elif _rr_ck is not None or start != 0:
+                    yield run_resume.fail_unresumable(session, run)
+                    return
     else:
         run = WorkflowRun(
             workflow_id=workflow_id,
@@ -3199,13 +3302,24 @@ def _run_workflow_stream_segmented_impl(
     # terminal commit (those stay plain: the architectural single-writer ceiling, P-C5), so
     # give it the bounded jittered retry. On exhaustion it re-raises the OperationalError,
     # which _run_in_background's crash handler turns into the honest WRITE_CONTENTION_NOTE.
+    _exec_token = run_resume.new_token()
+
     def _stage_run_start():
         run.status = RunStatus.RUNNING
         run.formality = _fm_record  # #617 item 7: the register that applied (None = none)
         _mark_execution_start(run)
+        run_resume.stamp(run, _exec_token)
         session.add(run)
 
     _db.commit_with_retry(session, stage=_stage_run_start)
+    # S1 restart resume (ADR 0090): this execution owns the run and keys/checkpoints each visit.
+    run_resume.register(run.id, _exec_token)
+    _visits = run_resume.VisitWriter(
+        run,
+        _exec_token,
+        _rr_seq0 if _rr_seq0 is not None else run_resume.initial_seq(session, run.id),
+        lambda: {"working": list(working), "ctx": _seg_pause_ctx()},
+    )
 
     # Make the glossary trace visible to the user (a non-covering pin skip / a
     # content-type skip): stamp each pin-skip note onto the run's notes, de-duplicated,
@@ -3568,6 +3682,7 @@ def _run_workflow_stream_segmented_impl(
     for _sj, _sseg in enumerate(segments):
         _fresh_edit = (
             not _is_vendor_return
+            and not _rr_restart  # S1: a restart resume carries no operator edit
             and _parked_parts is not None
             and working[_sj] != _parked_parts[_sj]
         )
@@ -4221,7 +4336,10 @@ def _run_workflow_stream_segmented_impl(
             )
             run.current_step_index = cursor + 1
             session.add(run)
-            session.commit()
+            _visits.stamp(run_resume.pending_step_run(session), cursor, cursor + 1)
+            if not _visits.commit(session, session.commit):
+                yield run_resume.superseded_event(run.id)
+                return
             yield {
                 "type": "step_skipped",
                 "run_id": run.id,
@@ -4360,60 +4478,22 @@ def _run_workflow_stream_segmented_impl(
                         "(is this tm_match after a translate step?)"
                     )
                 else:
-                    # Batch 15 T1 (§6.2, LAW-TM-20): TWO score floors. Widen the lookup to
-                    # the effective FILL threshold (so an empty candidate can take a
-                    # below-100 fuzzy hit), but keep the RE-LOCK / HEAL scope EXACT-100.
-                    #
-                    # M7 (cost): use TWO lookups, not one lowered floor over the whole scope.
-                    # The low fill floor drops the fuzzy winnow bound to ~0.74*qlen (0.33 at
-                    # 50), so a single lowered lookup would scan a huge fuzzy candidate pool
-                    # for EVERY non-empty (_relock) segment and then discard every fuzzy hit
-                    # at min_fill=100 -- a real cost regression on large docs/TMs. Instead:
-                    #   * the EMPTY candidate scope (_cands) queried at min_score = threshold
-                    #     (it is the only scope that may take a below-100 fill), and
-                    #   * the NON-empty re-lock/heal scope (_relock) kept at min_score = 100
-                    #     (a fuzzy hit can never byte-equal a stored target nor heal a drifted
-                    #     MT one -- LAW-TM-20).
-                    # A source shared between the two scopes: the _cands (low-floor) result
-                    # wins the merge, and the PER-INDEX min_fill in the loop below still keeps
-                    # a _relock-scope index from ever accepting a fuzzy hit (belt-and-braces,
-                    # H2). An exact-100 hit is returned by the hash short-circuit at ANY floor,
-                    # so the two lookups agree for every source with an exact entry. A
-                    # threshold of 100 collapses both to today's single min_score=100
-                    # (byte-identical, LAW-TM-3). The per-step pool selection narrows the
-                    # readable set (restrict_pids).
-                    _cand_hits = tm.lookup_batch(
+                    # ADR 0102: ONE exact lookup over the whole scope (empty candidates and the
+                    # re-lock / heal scope alike), positional because the same source can sit
+                    # twice in a document with different neighbours (101 % depends on them).
+                    # The per-step pool selection narrows the readable set (restrict_pids).
+                    _scope_hits = tm.lookup_segments(
                         session,
                         doc.project_id,
-                        [seg_sources[j] for j in _cands],
+                        [(seg_sources[j], seg_ctx[j]) for j in _scope],
                         src,
                         locale,
-                        min_score=_pol.fill_threshold,
                         restrict_project_ids=_restrict_pids,
                     )
-                    _relock_hits = tm.lookup_batch(
-                        session,
-                        doc.project_id,
-                        [seg_sources[j] for j in _relock],
-                        src,
-                        locale,
-                        min_score=100,
-                        restrict_project_ids=_restrict_pids,
-                    )
-                    # cand wins on a shared source (a _relock-only source keeps its 100-floor
-                    # result -- possibly None -- so a fuzzy-only match never reaches a
-                    # re-lock/heal index).
-                    _tm_hits = {**_relock_hits, **_cand_hits}
+                    _tm_hits = dict(zip(_scope, _scope_hits, strict=True))
                     for j in _scope:
-                        # EMPTY candidate -> the effective fill threshold; a non-empty
-                        # re-lock-scope slot -> EXACT 100 only (LAW-TM-20).
-                        _min_fill = _pol.fill_threshold if j in _cset else 100
                         _dec = tm_lock.fill_or_relock(
-                            getattr(segments[j], "target_text", ""),
-                            _tm_hits.get(seg_sources[j]),
-                            _pol,
-                            min_fill=_min_fill,
-                            seg_source=seg_sources[j],
+                            getattr(segments[j], "target_text", ""), _tm_hits.get(j), _pol
                         )
                         if _dec is None:
                             # B4: no 100% hit, or a DIFFERENT existing translation --
@@ -4449,19 +4529,16 @@ def _run_workflow_stream_segmented_impl(
                             # NOT in produced (working == source), so an in-run [review, tm_match] would  # noqa: E501
                             # otherwise HEAL a 100% hit right over their deliberate edit. The explicit  # noqa: E501
                             # exclusion keeps a post-pause tm_match from clobbering operator work.
-                            _hit_j = _tm_hits.get(seg_sources[j])
+                            _hit_j = _tm_hits.get(j)
                             if (
                                 _hit_j is not None
                                 and j not in operator_edited
                                 and getattr(segments[j], "status", None)
                                 in (SegStatus.MT, SegStatus.NEW)
                             ):
-                                # LAW-TM-20: the HEAL branch is EXACT-100 ONLY (min_fill=100)
-                                # -- a fuzzy hit can NEVER overwrite an existing differing
-                                # MT/NEW target through this direct-plan_hit path.
-                                _hplan = tm_lock.plan_hit(
-                                    _hit_j, _pol, min_fill=100, seg_source=seg_sources[j]
-                                )
+                                # ADR 0102: every hit is exact (100) or in context (101), so
+                                # the heal needs no threshold of its own.
+                                _hplan = tm_lock.plan_hit(_hit_j, _pol)
                                 if _hplan is not None:
                                     _hband, _hhard = _hplan
                                     _htgt = _hit_j.get("target_text") or ""
@@ -4527,7 +4604,7 @@ def _run_workflow_stream_segmented_impl(
                             # re-labelled nor locked. A row whose target DIFFERS from the hit
                             # never reaches here (fill_or_relock returned None) -- it is genuinely
                             # editable and stays translatable.
-                            if getattr(_seg_j, "tm_match_pct", None) == 100 and getattr(
+                            if (getattr(_seg_j, "tm_match_pct", None) or 0) >= 100 and getattr(
                                 _seg_j, "status", None
                             ) in (SegStatus.NEEDS_REVIEW, SegStatus.EDITED, SegStatus.APPROVED):
                                 working[j] = getattr(_seg_j, "target_text", "") or ""
@@ -4535,14 +4612,13 @@ def _run_workflow_stream_segmented_impl(
                                 content_protected.add(j)
                                 _protected_ct += 1
                                 continue
-                            if (
-                                getattr(_seg_j, "tm_match_pct", None) != 100
-                                or getattr(_seg_j, "status", None) != SegStatus.MT
-                            ):
+                            if (getattr(_seg_j, "tm_match_pct", None) or 0) < 100 or getattr(
+                                _seg_j, "status", None
+                            ) != SegStatus.MT:
                                 continue
-                        # Batch 15 T1: _dec is a 4-tuple (action, band, hard, lock_mode).
-                        _band, _hard, _mode = _dec[1], _dec[2], _dec[3]
-                        _hit = _tm_hits[seg_sources[j]]
+                        # _dec is a 4-tuple (action, band, hard, lock_mode); the lock bit is `hard`.
+                        _band, _hard = _dec[1], _dec[2]
+                        _hit = _tm_hits[j]
                         _tgt = _hit["target_text"]
                         _pct = _hit.get("match_pct") or 100
                         # A re-lock re-writes IDENTICAL text (the stored target already IS
@@ -4552,25 +4628,15 @@ def _run_workflow_stream_segmented_impl(
                         tm_origin[j] = True
                         produced.add(j)
                         # LAW-TM-19: record the REAL match_pct for the write-back stamp
-                        # (exact = 100 byte-identical; a fuzzy fill = its true score).
+                        # (100 exact, 101 in context).
                         tm_fill_pct[j] = _pct
-                        if _mode == "none":
-                            # §6.3 / LAW-TM-7: a fuzzy "none" fill is committed but NOT
-                            # locked -- NO tm_hard_idx/tm_soft_idx, NO lock plan, NO
-                            # tm_plan_tgt. It STAYS in pending_idx (subject only to the
-                            # tm_protect guard), so a downstream UNPROTECTED translate step
-                            # overwrites it (flipping tm_origin False), while a TM-only
-                            # workflow keeps it to delivery. Never a lock, so the write seam
-                            # never refuses a later edit.
-                            pass
-                        else:
-                            (tm_hard_idx if _hard else tm_soft_idx).add(j)
-                            tm_lock_plan[j] = (_band, _hard, _hit.get("id"), _pct)
-                            # F5: remember the TM target this plan intends, so the write-back
-                            # can DROP the plan (no stamp, no origin) if an operator edit
-                            # during a human_review pause left working[j] no longer
-                            # byte-equal to it.
-                            tm_plan_tgt[j] = _tgt
+                        (tm_hard_idx if _hard else tm_soft_idx).add(j)
+                        tm_lock_plan[j] = (_band, _hard, _hit.get("id"), _pct)
+                        # F5: remember the TM target this plan intends, so the write-back
+                        # can DROP the plan (no stamp, no origin) if an operator edit
+                        # during a human_review pause left working[j] no longer
+                        # byte-equal to it.
+                        tm_plan_tgt[j] = _tgt
                         if _dec[0] == "fill":
                             _filled_ct += 1
                             _hid = _hit.get("id")
@@ -4604,12 +4670,7 @@ def _run_workflow_stream_segmented_impl(
                         and not _healed_ct
                         and not _noop_reason
                     ):
-                        # Batch 15 T1 (finding 20): name the EFFECTIVE threshold -- the old
-                        # "no 100% TM matches" copy is a lie under a below-100 fill threshold.
-                        _noop_reason = (
-                            f"no TM matches at or above {_pol.fill_threshold}% "
-                            "to fill or re-lock in scope"
-                        )
+                        _noop_reason = "no exact TM matches to fill or re-lock in scope"
             if _filled_ids:
                 # F4: bump usage for GENUINE FILLS ONLY -- a re-lock is an accounting repair,
                 # not a USE of the TM, so it never touches use_count/last_used_at.
@@ -4651,7 +4712,12 @@ def _run_workflow_stream_segmented_impl(
                 run.current_step_index = _cur + 1
                 session.add(run)
 
-            _db.commit_with_retry(session, stage=_stage_tm_write)
+            _visits.stamp(_tm_sr, cursor, cursor + 1)
+            if not _visits.commit(
+                session, lambda: _db.commit_with_retry(session, stage=_stage_tm_write)
+            ):
+                yield run_resume.superseded_event(run.id)
+                return
             # F6: `filled` counts GENUINE fills only (a re-lock is not a fill); `relocked`
             # is the DISTINCT re-lock tally. locked_hard/locked_soft keep their semantics --
             # the cumulative plan (fills AND re-locks) this run intends to lock.
@@ -4747,6 +4813,7 @@ def _run_workflow_stream_segmented_impl(
             locale=locale,
             step_started_at=step_started_at,
             pause_context_fn=_seg_pause_ctx,
+            visit_writer=_visits,
             dispatch_payload_fn=_seg_dispatch_payload,
             post_dispatch_persist_fn=_seg_persist_inrun_hard_locks,
         )
@@ -4907,8 +4974,14 @@ def _run_workflow_stream_segmented_impl(
         # #705: the tags-only slots this step-0 visit delivered by copy (no provider call).
         tags_only_step0_idx: set[int] = set()
         if step.order_index == 0:
-            needs = [seg_sources[j] for j in range(len(segments))]
-            tm_matches = tm.lookup_batch(session, doc.project_id, needs, src, locale)
+            # ADR 0102: exact-only, positional, in context (100 or 101).
+            _s0_hits = tm.lookup_segments(
+                session,
+                doc.project_id,
+                [(seg_sources[j], seg_ctx[j]) for j in range(len(segments))],
+                src,
+                locale,
+            )
             applied_tm_ids: list[int] = []  # SegmentTM entries whose target we APPLIED
             for j in range(len(segments)):
                 if j in status_protected:
@@ -4921,9 +4994,10 @@ def _run_workflow_stream_segmented_impl(
                     # the source. Delivered THIS visit like a step-0 TM fill (output_chars).
                     tags_only_step0_idx.add(j)
                     continue
-                exact = tm_matches.get(seg_sources[j])
-                if exact and exact["match_pct"] == 100:
+                exact = _s0_hits[j]
+                if exact:
                     working[j] = exact["target_text"]
+                    tm_fill_pct[j] = exact["match_pct"]  # 100 exact, 101 in context
                     tm_filled_idx.add(j)  # LOW-1 (round 5): delivered THIS visit via TM
                     tm_origin[j] = True  # F5: keep TM provenance at write-back
                     # F1 (Q9 final round): this step-0 short-circuit fills TM content with
@@ -6339,7 +6413,12 @@ def _run_workflow_stream_segmented_impl(
             run.current_step_index = _next
             session.add(run)
 
-        _db.commit_with_retry(session, stage=_stage_step_write)
+        _visits.stamp(_sr, cursor, next_cur)
+        if not _visits.commit(
+            session, lambda: _db.commit_with_retry(session, stage=_stage_step_write)
+        ):
+            yield run_resume.superseded_event(run.id)
+            return
         step_ev = {
             "type": "step",
             "run_id": run.id,
@@ -6810,10 +6889,9 @@ def _run_workflow_stream_segmented_impl(
             if tm_origin[j]:
                 # F5: keep TM provenance — mirror translate.py's segment-TM branch
                 # (SegStatus.MT + tm_match_pct, mt_confidence left unset). Batch 15 T1
-                # (LAW-TM-19): stamp the fill's REAL pct -- an exact/step-0 fill stamps 100
-                # (byte-identical), a below-100 fuzzy fill (incl. a "none" fill with no lock
-                # plan) stamps its true score, which keeps it OUT of the `pct==100 AND
-                # status==MT` re-lock whitelist and gives vendor scoping the true band.
+                # (LAW-TM-19): stamp the fill's REAL pct: 100 for an exact fill, 101 for an
+                # in-context one (ADR 0102; a paused run from before the change may still
+                # carry an old 75-99 value, which is stamped as it was).
                 seg.status = SegStatus.MT
                 seg.tm_match_pct = tm_fill_pct.get(j, 100)
                 # Q6/F6: lock-eligibility is decided ONCE at the END of this iteration
@@ -7393,6 +7471,35 @@ def _claim_paused_run(session: Session, run_id: int) -> bool:
     return result.rowcount == 1
 
 
+#: run.context key carrying a resume the web role queued for a worker (S3, ADR 0095):
+#: {"seed": <edited text>, "locale": <run locale>}. Popped when a worker admits the run.
+QUEUED_RESUME_KEY = "_queued_resume"
+
+
+def _queue_paused_run(session: Session, run, edited_text: str, locale: str) -> bool:
+    """The web-role twin of `_claim_paused_run` (S3, ADR 0095): ONE conditional UPDATE ...
+    WHERE status = 'paused' advances the cursor past the human step and restarts the
+    staleness clock exactly as the claim does, but leaves the run QUEUED with the edited text
+    in `run.context[QUEUED_RESUME_KEY]`, so a worker process resumes it (`_AdmissionScheduler.
+    _admit`). Every other context key (a vendor return's `_resume_kind`) is kept."""
+    from sqlalchemy import update
+
+    ctx = dict(run.context) if isinstance(run.context, dict) else {}
+    ctx[QUEUED_RESUME_KEY] = {"seed": edited_text, "locale": locale}
+    result = session.execute(
+        update(WorkflowRun)
+        .where(WorkflowRun.id == run.id, WorkflowRun.status == RunStatus.PAUSED)
+        .values(
+            current_step_index=WorkflowRun.current_step_index + 1,
+            status=RunStatus.QUEUED,
+            started_at=datetime.utcnow(),
+            context=ctx,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount == 1
+
+
 def resume_workflow(session: Session, run_id: int, locale: str, edited_text: str) -> dict:
     with _execution_slot(refuse=False) as slot:
         return _resume_workflow_admitted(session, run_id, locale, edited_text, slot)
@@ -7723,6 +7830,9 @@ QUEUE_POLL_S = 5.0
 #: in SQL, so this limit never excludes later fan-outs from the rotation.
 QUEUE_SCAN_LIMIT = 500
 
+#: S2 fair dispatch: at most this many fan-outs are considered in one pick (oldest first by key).
+QUEUE_GROUP_SCAN_LIMIT = 2000
+
 #: How long a `wait=True` CLI fan-out waits for its QUEUED rows to be admitted before it
 #: stops waiting and REPORTS them as still queued (gate A round 3, LOW-2). Round 2 joined an
 #: in-memory drainer with no timeout at all while each pending launch could wait an hour, so
@@ -7796,6 +7906,13 @@ class _RunSlots:
     def in_flight(self) -> int:
         with self._lock:
             return self._n
+
+    @staticmethod
+    def queue_capacity() -> int | None:
+        """How many slots the admission queue may hold at once (the cap minus the interactive
+        reserve, see `acquire_for_queue`); None when the gate is off."""
+        cap = int(getattr(config, "MAX_CONCURRENT_RUNS", 0) or 0)
+        return max(1, cap - 1) if cap else None
 
     def acquire(
         self, timeout: float = 0.0, *, count_refusal: bool = True
@@ -8165,9 +8282,13 @@ class _AdmissionScheduler:
 
     IT IS FAIR, on two axes (HIGH-3):
 
-      * ROUND-ROBIN BETWEEN FAN-OUTS. It admits the oldest row of the fan-out AFTER the one
-        it served last, so a 72-run "translate all" cannot starve a second operator's
-        6-run one. Within a fan-out it is FIFO by row id.
+      * ROUND-ROBIN BETWEEN FAN-OUTS. It admits a row of the fan-out AFTER the one it
+        served last, so a 72-run "translate all" cannot starve a second operator's
+        6-run one. S2 (ADR 0092, `_fair_pick`): customers take turns above that, a batch
+        keeps its turn for up to its width (one document's languages start together),
+        and within a fan-out the languages follow an order rotated per fan-out, so no
+        language is always first (target T3). It also continues runs parked between
+        step visits (`run_segments`), in the same order.
       * IT YIELDS TO INTERACTIVE LAUNCHES. It takes slots through
         `RUN_SLOTS.acquire_for_queue`, which leaves the first slot free for a
         `QUEUE_YIELD_S` window after any single launch has been refused. Measured before
@@ -8193,6 +8314,26 @@ class _AdmissionScheduler:
         #: The fan-out served last, for round-robin (in-memory: a restart simply starts the
         #: rotation at the oldest group again, which is not unfair, only different).
         self._last_group: str | None = None
+        #: S2 fair dispatch (ADR 0092): the customer served last (round-robin across customers),
+        #: the fan-out whose turn is running and how many it took in this turn (a batch keeps
+        #: the turn for up to its width, so one document's languages start together), and each
+        #: fan-out's language order (rotated per fan-out, so no language is always first).
+        self._last_customer: str | None = None
+        #: The fan-out served last PER CUSTOMER: the fan-out rotation inside a customer must
+        #: not read another customer's cursor, or a customer's second fan-out waits for its
+        #: first to drain whenever any other customer has work (gate S2 H1).
+        self._last_group_by_customer: dict[str, str | None] = {}
+        self._turn_group: str | None = None
+        self._turn_count = 0
+        self._locale_orders: dict[str, list[str]] = {}
+        self._rotation = 0
+        #: least-recently-served turns: a serve counter and, per fan-out and per
+        #: customer, the counter value of its last turn (`_lru_pick`).
+        self._tick = 0
+        self._group_ticks: dict[str, float] = {}
+        self._customer_ticks: dict[str, float] = {}
+        #: True when the last pick was a wait-cap preemption (they alternate with turns).
+        self._cap_turn_last = False
         #: Set by the tests' inline drain so a pass can be driven deterministically.
         self.admitted_total = 0
         self._batches_dirty = threading.Event()
@@ -8208,6 +8349,8 @@ class _AdmissionScheduler:
         whose inline half had already succeeded. A queue nobody drains is still visible,
         still cancellable and still adopted at the next boot, so a failure here degrades to
         'later' rather than to 'lost' — logged loudly."""
+        if not config.runs_background_work():
+            return False  # S3 (ADR 0095): the web role admits nothing; `notify` wakes workers
         t = self._thread
         if t is not None and t.is_alive():
             return False
@@ -8231,6 +8374,11 @@ class _AdmissionScheduler:
         """Wake the scheduler now (new rows were queued, or a slot freed)."""
         self._wake.set()
         self._batches_dirty.set()
+        if not config.runs_background_work():
+            # S3 (ADR 0095): no scheduler runs here; tell the worker processes.
+            from app.services import wake
+
+            wake.poke("runs")
 
     def alive(self) -> bool:
         t = self._thread
@@ -8302,23 +8450,650 @@ class _AdmissionScheduler:
                 # so starting one now is how it freezes at step 0 (GitHub #100). The rows
                 # keep waiting and the next tick re-reads.
                 return admitted
-            if not self._has_queued(batch_id=batch_id, queue_group=queue_group):
+            continuations = self._serves_parked(batch_id, queue_group)
+            if not (
+                continuations and self._parked_waiting(batch_id=batch_id, queue_group=queue_group)
+            ) and not self._has_queued(batch_id=batch_id, queue_group=queue_group):
                 return admitted
             token = RUN_SLOTS.acquire_for_queue(timeout=wait)
             if token is None:
                 return admitted  # at capacity, or yielding to an interactive launch
             with fanout_slot(token):
-                picked = self._next_queued(skipped, batch_id=batch_id, queue_group=queue_group)
+                picked = self._fair_pick(
+                    skipped,
+                    batch_id=batch_id,
+                    queue_group=queue_group,
+                    continuations=continuations,
+                )
                 if picked is None:
                     token.release()
                     return admitted
-                run_id, group = picked
-                self._last_group = group
-                if self._admit(run_id, token):
+                kind, target, group, customer = picked
+                gang = self._gang_for(kind, target, group, customer, batch_id=batch_id)
+                if len(gang) > 1:
+                    started = self._start_gang(kind, gang, token, group, customer, wait)
+                    if started:
+                        admitted += started
+                        self.admitted_total += started
+                    else:
+                        skipped.add(group)
+                    continue
+                self._note_served(group, customer)
+                if kind == "parked":
+                    ok = self._continue_parked(target, token)
+                else:
+                    ok = self._admit(target, token)
+                if ok:
                     admitted += 1
                     self.admitted_total += 1
                 else:
                     skipped.add(group)
+
+    # -- S2 fair dispatch (ADR 0092) -------------------------------------------------
+    def _serves_parked(self, batch_id, queue_group) -> bool:
+        """Only THE process scheduler continues parked runs (a synchronous CLI batch drives its
+        own scheduler and never parks)."""
+        return self is ADMISSION
+
+    def _siblings_still_stepping(self, seg, cache: dict) -> bool:
+        """True while another language of parked `seg`'s batch, executing in this process, may
+        still park at `seg`'s step (`run_segments.heading_to_park`): the parked ones wait for it
+        so they all continue together (ADR 0099). Bounded: past `config.BATCH_GANG_WAIT_S` a
+        parked run is eligible whatever its siblings do. The scheduler neither blocks nor holds
+        a slot while it waits; the sibling's park (or its decision not to) wakes it."""
+        from app.services import run_segments
+
+        group = seg.group or ""
+        if not group.startswith(("batch:", "batch-retry:")):
+            return False
+        # Never past the 0098 hard cap either, or a deferred run would miss its overdue turn.
+        limit = min(
+            float(getattr(config, "BATCH_GANG_WAIT_S", 30.0) or 0.0),
+            float(getattr(config, "STEP_PARK_MAX_WAIT_S", 60.0) or 60.0),
+        )
+        if time.monotonic() - seg.parked_at >= limit:
+            return False
+        key = (group, seg.cursor)
+        if key not in cache:
+            running = set(self._running_members(group))
+            cache[key] = any(
+                other.run_id in running and run_segments.heading_to_park(other, seg.cursor)
+                for other in run_segments.live()
+                if other.run_id != seg.run_id
+            )
+        return cache[key]
+
+    @staticmethod
+    def _parked_matches(seg, batch_id, queue_group) -> bool:
+        if batch_id is not None and seg.batch_id != batch_id:
+            return False
+        return not (queue_group is not None and seg.group != queue_group)
+
+    def _parked_waiting(self, *, batch_id=None, queue_group=None, exclude_run=None) -> bool:
+        from app.services import run_segments
+
+        return any(
+            seg.run_id != exclude_run and self._parked_matches(seg, batch_id, queue_group)
+            for seg in run_segments.parked()
+        )
+
+    def has_waiting(
+        self, *, exclude_run: int | None = None, other_customer_than: str | None = None
+    ) -> bool:
+        """True when work other than `exclude_run` waits for a slot: a QUEUED row or a parked
+        run. A segment asks this at a step boundary before it parks. With
+        `other_customer_than`, only ANOTHER customer's waiting work counts (within one
+        customer, started work finishes first, so its own queue is no reason to park)."""
+        if other_customer_than is None:
+            return self._parked_waiting(exclude_run=exclude_run) or self._has_queued()
+        from app.services import run_segments
+
+        if any(
+            seg.run_id != exclude_run and (seg.customer or "") != other_customer_than
+            for seg in run_segments.parked()
+        ):
+            return True
+        return self._has_queued_for_other_customer(other_customer_than)
+
+    def _has_queued_for_other_customer(self, customer: str) -> bool:
+        from sqlalchemy import String, cast, func
+
+        from app.db import engine
+
+        cust = func.coalesce(cast(Project.customer_id, String), "")
+        try:
+            with Session(engine) as s:
+                statement = (
+                    select(WorkflowRun.id)
+                    .select_from(WorkflowRun)
+                    .outerjoin(Document, Document.id == WorkflowRun.document_id)
+                    .outerjoin(Project, Project.id == Document.project_id)
+                    .where(WorkflowRun.status == RunStatus.QUEUED, cust != (customer or ""))
+                    .limit(1)
+                )
+                return s.exec(statement).first() is not None
+        except Exception:
+            log.debug("admission scheduler could not read the queue", exc_info=True)
+            return False
+
+    def _group_quantum(self, group: str | None) -> int:
+        """How many runs a fan-out may take in one turn. A batch keeps the turn for up to its
+        width (one document's languages start together); everything else rotates every run."""
+        if not group:
+            return 1
+        prefix, _, tail = group.partition(":")
+        if prefix not in ("batch", "batch-retry") or not tail.isdigit():
+            return 1
+        from app.db import engine
+
+        try:
+            from app.models import WorkflowBatch
+
+            with Session(engine) as s:
+                batch = s.get(WorkflowBatch, int(tail))
+                return max(1, int(batch.max_parallel or 1)) if batch is not None else 1
+        except Exception:
+            log.debug("admission could not read batch %s width", tail, exc_info=True)
+            return 1
+
+    def _note_served(self, group: str | None, customer: str | None) -> None:
+        if group is not None and group == self._turn_group:
+            self._turn_count += 1
+        else:
+            self._turn_group, self._turn_count = group, 1
+        self._last_group = group
+        self._last_customer = customer
+        if customer is not None:
+            if len(self._last_group_by_customer) > 4096:
+                self._last_group_by_customer.clear()
+            self._last_group_by_customer[customer] = group
+        # least-recently-served turns (see _lru_pick).
+        self._tick += 1
+        if len(self._group_ticks) > 4096:
+            self._group_ticks.clear()
+        if group is not None:
+            self._group_ticks[group] = self._tick
+        if customer is not None:
+            if len(self._customer_ticks) > 4096:
+                self._customer_ticks.clear()
+            self._customer_ticks[customer] = self._tick
+
+    def _lru_pick(self, items, ticks: dict, last, oldest: dict):
+        """The item served least recently: an item seen for the first time joins BEHIND
+        everything served so far (fair queuing), the one served last (`last`, which a caller
+        may also set directly) goes behind all others, and ties go to the oldest work (numeric
+        run id) then the key. The old "next key greater than the last served" cursor
+        never wrapped while new fan-outs kept arriving with greater keys, and compared the keys
+        as text ("batch:9" after "batch:89"), so a fan-out could wait until arrivals stopped."""
+        for it in items:
+            ticks.setdefault(it, self._tick + 0.5)
+        return min(
+            items,
+            key=lambda it: (
+                1 if (it == last and len(items) > 1) else 0,
+                ticks[it],
+                oldest.get(it) if oldest.get(it) is not None else float("inf"),
+                str(it),
+            ),
+        )
+
+    def _queued_groups(self, skipped, *, batch_id=None, queue_group=None) -> dict:
+        """{(customer, group): oldest queued run id} for every fan-out with QUEUED rows,
+        grouped in SQL (a wide fan-out must not hide later ones behind a row limit)."""
+        from sqlalchemy import String, cast, func
+
+        from app.db import engine
+
+        group = func.coalesce(WorkflowRun.queue_group, cast(WorkflowRun.id, String))
+        customer = func.coalesce(cast(Project.customer_id, String), "")
+        statement = (
+            select(func.min(WorkflowRun.id), group, customer)
+            .select_from(WorkflowRun)
+            .outerjoin(Document, Document.id == WorkflowRun.document_id)
+            .outerjoin(Project, Project.id == Document.project_id)
+            .where(WorkflowRun.status == RunStatus.QUEUED)
+            .group_by(group, customer)
+            .order_by(group)
+            .limit(QUEUE_GROUP_SCAN_LIMIT)
+        )
+        if skipped:
+            statement = statement.where(group.notin_(list(skipped)))
+        if batch_id is not None:
+            statement = statement.where(WorkflowRun.batch_id == batch_id)
+        if queue_group is not None:
+            statement = statement.where(WorkflowRun.queue_group == queue_group)
+        with Session(engine) as s:
+            return {(str(c or ""), str(g)): int(m) for m, g, c in s.exec(statement).all()}
+
+    def _queued_members(self, group: str, *, batch_id=None) -> list[tuple[int, str]]:
+        """(run id, locale) of a fan-out's QUEUED rows, oldest first (bounded)."""
+        from sqlalchemy import String, cast, func
+
+        from app.db import engine
+
+        key = func.coalesce(WorkflowRun.queue_group, cast(WorkflowRun.id, String))
+        statement = (
+            select(WorkflowRun.id, WorkflowRun.target_locale)
+            .where(WorkflowRun.status == RunStatus.QUEUED, key == group)
+            .order_by(WorkflowRun.id)
+            .limit(QUEUE_SCAN_LIMIT)
+        )
+        if batch_id is not None:
+            statement = statement.where(WorkflowRun.batch_id == batch_id)
+        with Session(engine) as s:
+            return [(int(i), loc or "") for i, loc in s.exec(statement).all()]
+
+    def _locale_order(self, group: str, locales) -> list[str]:
+        """This fan-out's language order: sorted, then rotated by one more place for every
+        new fan-out, so across documents each language goes first equally often."""
+        order = self._locale_orders.get(group)
+        if order is None:
+            base = sorted(set(locales))
+            if len(self._locale_orders) > 4096:
+                self._locale_orders.clear()
+            k = self._rotation % len(base) if base else 0
+            self._rotation += 1
+            order = base[k:] + base[:k]
+            self._locale_orders[group] = order
+        return order
+
+    def _fair_pick(self, skipped=(), *, batch_id=None, queue_group=None, continuations=False):
+        """The next piece of waiting work, as ("run", run_id, group, customer) for a QUEUED row
+        or ("parked", run_id, group, customer) for a parked run.
+
+        THE ORDER (S2, ADR 0092; target T3). Before S2 the scheduler rotated across fan-outs one
+        run at a time, and because every document's batch lists its languages in the same order,
+        that admitted every document's first language, then every second, then every third:
+        Spanish first and German last for the whole flood. Now:
+          1. CUSTOMERS take turns (round-robin over customers with waiting work).
+          2. Within a customer, FAN-OUTS take turns as before, except that a batch keeps its
+             turn for up to its width, so one document's languages start together.
+          3. Within a fan-out, a parked run (already started) goes before a new one, and new
+             runs follow the fan-out's rotated language order.
+        The rotation cursors are in memory: a restart starts the rotation again, which is not
+        unfair, only different.
+
+        (real-LLM flood, 2026-10-23) reworked the turns:
+          0. A parked run that has waited `config.STEP_PARK_MAX_WAIT_S` goes first, whatever
+             the rotation says (a hard cap on a parked run's wait).
+          1. Customers take turns least-recently-served first (`_lru_pick`).
+          2. Within the chosen customer, started work finishes first: its parked runs continue
+             (the fan-out whose member parked earliest, then that fan-out's other parked
+             members, so a document's languages continue together) before any new run starts.
+          3. Then a batch's admission turn (up to its width), then fan-outs least-recently-
+             served first, new fan-outs joining at the back, ties to the oldest run id.
+        A batch's turn is then started as ONE admission by `drain_once` (`_gang_for`,
+        `_gather_slots`, `_admit_gang`; ADR 0099), so its languages start at the same moment."""
+        from app.services import run_segments
+
+        cands: dict[tuple[str, str], list] = {}
+        #: Customers with parked work deferred for a sibling (gate R2 M1).
+        deferred: set[str] = set()
+        try:
+            for key, oldest in self._queued_groups(
+                skipped, batch_id=batch_id, queue_group=queue_group
+            ).items():
+                cands.setdefault(key, [[], oldest])
+        except Exception:
+            log.debug("admission scheduler could not read the queue", exc_info=True)
+        if continuations:
+            settling: dict = {}
+            for seg in run_segments.parked():
+                if seg.group in skipped or not self._parked_matches(seg, batch_id, queue_group):
+                    continue
+                if self._siblings_still_stepping(seg, settling):
+                    # ADR 0099: its languages continue together, once all have parked.
+                    deferred.add(seg.customer or "")
+                    continue
+                entry = cands.setdefault((seg.customer or "", seg.group or ""), [[], None])
+                entry[0].append(seg)
+        if not cands:
+            return None
+        parked_all = [seg for entry in cands.values() for seg in entry[0]]
+        cap_ok, self._cap_turn_last = not self._cap_turn_last, False
+        if parked_all and cap_ok:
+            cap = float(getattr(config, "STEP_PARK_MAX_WAIT_S", 60.0) or 60.0)
+            now = time.monotonic()
+            overdue = [seg for seg in parked_all if now - seg.parked_at >= cap]
+            if overdue:
+                # At most every OTHER pick (gate M1): under sustained overload most
+                # parked runs are overdue, and an every-pick preemption would never reach the
+                # customer rotation. A customer with only new work can still wait until the
+                # started backlog drains (finish started work first); that wait is bounded.
+                self._cap_turn_last = True
+                seg = min(overdue, key=lambda x: (x.parked_at, x.run_id))
+                return ("parked", seg.run_id, seg.group or "", seg.customer or "")
+        # A batch keeps its turn for up to its width, ACROSS customers, so one document's
+        # languages start (and continue) together (gate: the turn must be checked
+        # before the customer rotation, or two customers interleave every language).
+        if self._turn_group is not None and self._turn_count < self._group_quantum(
+            self._turn_group
+        ):
+            held = [k for k in cands if k[1] == self._turn_group]
+            if held:
+                return self._pick_in_group(held[0], cands[held[0]], batch_id)
+        # Finish started work first (0098) holds while a customer's parked languages wait for a
+        # sibling: none of that customer's NEW work starts meanwhile (it would take the slots
+        # the document needs to continue). Another customer may be served.
+        for key in [k for k in cands if k[0] in deferred and not cands[k][0]]:
+            del cands[key]
+        if not cands:
+            return None
+        oldest_c: dict[str, int] = {}
+        for (c, _g), entry in cands.items():
+            ids = [x.run_id for x in entry[0]] + ([entry[1]] if entry[1] is not None else [])
+            if ids:
+                oldest_c[c] = min(min(ids), oldest_c.get(c, min(ids)))
+        customers = sorted({c for c, _ in cands})
+        cust = self._lru_pick(customers, self._customer_ticks, self._last_customer, oldest_c)
+        keys = [k for k in cands if k[0] == cust]
+        parked_keys = [k for k in keys if cands[k][0]]
+        if parked_keys:
+            key = min(parked_keys, key=lambda k: min((x.parked_at, x.run_id) for x in cands[k][0]))
+            seg = min(cands[key][0], key=lambda x: (x.parked_at, x.run_id))
+            return ("parked", seg.run_id, key[1], cust)
+        groups = [k[1] for k in keys]
+        oldest_g = {k[1]: cands[k][1] for k in keys}
+        grp = self._lru_pick(groups, self._group_ticks, self._last_group, oldest_g)
+        return self._pick_in_group((cust, grp), cands[(cust, grp)], batch_id)
+
+    def _pick_in_group(self, key, entry, batch_id):
+        cust, grp = key
+        parked_segs, oldest = entry
+        if parked_segs:
+            seg = min(parked_segs, key=lambda x: (x.parked_at, x.run_id))
+            return ("parked", seg.run_id, grp, cust)
+        members = self._ordered_members(grp, batch_id)
+        if not members:
+            return ("run", oldest, grp, cust) if oldest is not None else None
+        return ("run", members[0], grp, cust)
+
+    def _ordered_members(self, grp: str, batch_id=None) -> list[int]:
+        """A fan-out's QUEUED run ids in its rotated language order (then oldest first)."""
+        try:
+            members = self._queued_members(grp, batch_id=batch_id)
+        except Exception:
+            log.debug("admission scheduler could not read fan-out %s", grp, exc_info=True)
+            return []
+        if not members:
+            return []
+        order = self._locale_order(grp, [loc for _, loc in members])
+        rank = {loc: i for i, loc in enumerate(order)}
+        ranked = sorted(members, key=lambda m: (rank.get(m[1], len(rank)), m[0]))
+        return [rid for rid, _loc in ranked]
+
+    # -- batch admission: a document's languages start together (ADR 0099) ----------
+    def _batch_room(self, group: str) -> int:
+        """How many more members of a batch fan-out may run now (its width minus its active
+        members); 0 when it cannot be read."""
+        prefix, _, tail = (group or "").partition(":")
+        if prefix not in ("batch", "batch-retry") or not tail.isdigit():
+            return 0
+        from app.db import engine
+        from app.models import WorkflowBatch
+
+        try:
+            with Session(engine) as s:
+                batch = s.get(WorkflowBatch, int(tail))
+                if batch is None:
+                    return 0
+                active = s.exec(
+                    select(WorkflowRun.id).where(
+                        WorkflowRun.batch_id == batch.id,
+                        WorkflowRun.status.in_((RunStatus.RUNNING, RunStatus.PENDING)),
+                    )
+                ).all()
+                return max(0, int(batch.max_parallel or 1) - len(active))
+        except Exception:
+            log.debug("admission could not read batch %s room", tail, exc_info=True)
+            return 0
+
+    def _running_members(self, group: str) -> list[int]:
+        """The RUNNING run ids of a batch fan-out (parked members included)."""
+        prefix, _, tail = (group or "").partition(":")
+        if prefix not in ("batch", "batch-retry") or not tail.isdigit():
+            return []
+        from app.db import engine
+
+        try:
+            with Session(engine) as s:
+                return list(
+                    s.exec(
+                        select(WorkflowRun.id).where(
+                            WorkflowRun.batch_id == int(tail),
+                            WorkflowRun.status == RunStatus.RUNNING,
+                        )
+                    ).all()
+                )
+        except Exception:
+            log.debug("admission could not read batch %s members", tail, exc_info=True)
+            return []
+
+    def _gang_for(self, kind, target, group, customer, *, batch_id=None) -> list[int]:
+        """The members of `target`'s batch that start WITH it, `target` first.
+
+        A real-LLM flood (2026-10-24) showed why: the queue frees slots one at a time
+        as runs end, so a document's second and third languages each waited for a different run
+        to finish and started 10-30 s apart (54% of documents reached review within 15 s). Now
+        the turn of a batch is taken as one admission of up to its width: what its turn has
+        left, what the batch's width allows now, and never more than the queue can hold at once
+        (a batch wider than that starts in chunks). Anything that is not a batch fan-out (keys,
+        single runs, plain fan-outs) is a gang of one, so nothing else changes."""
+        width = self._group_quantum(group)
+        if width <= 1:
+            return [target]
+        held = group == self._turn_group and self._turn_count < width
+        size = width - self._turn_count if held else width
+        cap = RUN_SLOTS.queue_capacity()
+        if cap is not None:
+            size = min(size, cap)
+        if kind == "parked":
+            from app.services import run_segments
+
+            # The pick only offers a batch's parked run once none of its languages is still
+            # finishing the step (`_siblings_still_stepping`), so its parked siblings are the gang.
+            siblings = sorted(
+                (
+                    seg
+                    for seg in run_segments.parked()
+                    if seg.run_id != target
+                    and (seg.group or "") == group
+                    and (seg.customer or "") == customer
+                    and self._parked_matches(seg, batch_id, None)
+                ),
+                key=lambda x: (x.parked_at, x.run_id),
+            )
+            members = [target] + [seg.run_id for seg in siblings]
+        else:
+            size = min(size, self._batch_room(group))
+            members = [target] + [r for r in self._ordered_members(group, batch_id) if r != target]
+        return members[: max(1, size)]
+
+    @staticmethod
+    def _gang_deadline(wait: float) -> float:
+        """When a gang stops waiting: `config.BATCH_GANG_WAIT_S` from now, and never later than
+        this pass's own slot wait."""
+        limit = float(getattr(config, "BATCH_GANG_WAIT_S", 30.0) or 0.0)
+        return time.monotonic() + max(0.0, min(limit, float(wait)))
+
+    def _gather_slots(self, n: int, deadline: float) -> list["_SlotToken"]:
+        """Up to `n` more queue slots, waiting until `deadline` at most. The slots gathered are
+        HELD while it waits, so a run ending meanwhile cannot hand its slot to other queued work
+        and split the batch again; the interactive reserve is outside the queue's share, so a
+        person's launch still gets through. Past the deadline the caller starts what it has, so
+        a batch can never wait on slots that will not free (a long run, a smaller cap), and
+        nothing deadlocks: the daemon is the only taker that WAITS while holding slots (the keys
+        fan-out's inline pass and a synchronous CLI batch take free slots without waiting)."""
+        got: list[_SlotToken] = []
+        try:
+            while len(got) < n:
+                tok = RUN_SLOTS.acquire_for_queue(timeout=max(0.0, deadline - time.monotonic()))
+                if tok is None:
+                    break
+                got.append(tok)
+        except BaseException:
+            _release_all(got)
+            raise
+        return got
+
+    def _start_gang(self, kind, gang, token, group, customer, wait) -> int:
+        """Start `gang` (the first member under `token`, which the caller owns) as ONE admission.
+        Returns how many started. Slots gathered but not used are given back."""
+        from contextlib import ExitStack
+
+        from app.services import run_segments
+
+        deadline = self._gang_deadline(wait)
+        extra = self._gather_slots(len(gang) - 1, deadline)
+        tokens = [token, *extra]
+        with ExitStack() as stack:
+            for tok in extra:
+                stack.enter_context(fanout_slot(tok))
+            if kind == "parked":
+                started = 0
+                free = iter(tokens)
+                for rid in gang:
+                    if not run_segments.is_parked(rid):
+                        continue  # cancelled or ended meanwhile
+                    tok = next(free, None)
+                    if tok is None:
+                        break
+                    if self._continue_parked(rid, tok):
+                        self._note_served(group, customer)
+                        started += 1
+                return started
+            members = gang[: len(tokens)]
+            launched = self._admit_gang(members, tokens)
+            if not launched:
+                # Nothing claimable together (a resume row, another process took them): the
+                # first member goes through the ordinary one-run path.
+                self._note_served(group, customer)
+                return 1 if self._admit(gang[0], token) else 0
+            for _rid in launched:
+                self._note_served(group, customer)
+            return len(launched)
+
+    def _admit_gang(self, run_ids: list[int], tokens: list["_SlotToken"]) -> list[int]:
+        """QUEUED -> RUNNING for a batch's members in ONE transaction, then start each under its
+        own token. Returns the run ids started.
+
+        ACROSS worker processes (S3b/S3c, ADR 0095/0097) the claim first writes the batch row,
+        which serializes it with any other worker's gang claim of the same batch (a row lock on
+        Postgres, the write lock on SQLite) and with a retry of this one, then counts the active
+        members and claims only up to the width (gate M2: counted outside, two workers
+        could each claim a width). A second worker's gang claim therefore waits milliseconds and
+        finds the rows taken. A single-row admission (`_admit`) that claimed a member first is
+        skipped, and the rest start together. A row that is a queued resume (already in flight)
+        is left to the one-run path."""
+        from sqlalchemy import update
+
+        from app.db import engine
+        from app.models import WorkflowBatch
+        from app.services import batch_runs
+        from app.services import run_resume as _rr
+
+        claimed: list[int] = []
+        info: dict[int, tuple] = {}
+        batch_id = None
+        try:
+            with Session(engine) as s, _RUN_CREATE_LOCK:
+                rows = []
+                for rid in run_ids:
+                    run = s.get(WorkflowRun, rid)
+                    if run is None or run.status != RunStatus.QUEUED or run.batch_id is None:
+                        continue
+                    ctx = run.context if isinstance(run.context, dict) else {}
+                    if QUEUED_RESUME_KEY in ctx or "_resume_kind" in ctx:
+                        continue
+                    if batch_id is None:
+                        batch_id = run.batch_id
+                    if run.batch_id == batch_id:
+                        rows.append(run)
+                if not rows or not batch_runs.queue_member_allowed(s, rows[0]):
+                    return []
+                width = int(s.get(WorkflowBatch, batch_id).max_parallel or 1)
+                info = {
+                    r.id: (r.workflow_id, r.document_id, r.target_locale, r.created_by or "")
+                    for r in rows
+                }
+                candidates = [r.id for r in rows]
+
+                def _stage_admit_gang():
+                    claimed.clear()
+                    s.exec(
+                        update(WorkflowBatch)
+                        .where(WorkflowBatch.id == batch_id)
+                        .values(max_parallel=WorkflowBatch.max_parallel)
+                        .execution_options(synchronize_session=False)
+                    )
+                    active = s.exec(
+                        select(WorkflowRun.id).where(
+                            WorkflowRun.batch_id == batch_id,
+                            WorkflowRun.status.in_((RunStatus.RUNNING, RunStatus.PENDING)),
+                        )
+                    ).all()
+                    order = candidates[: max(0, width - len(active))]
+                    now = datetime.utcnow()
+                    for rid in order:
+                        result = s.exec(
+                            update(WorkflowRun)
+                            .where(WorkflowRun.id == rid, WorkflowRun.status == RunStatus.QUEUED)
+                            .values(
+                                status=RunStatus.RUNNING,
+                                started_at=now,
+                                owner=_rr.new_token(),
+                                heartbeat_at=now,
+                            )
+                            .execution_options(synchronize_session=False)
+                        )
+                        if result.rowcount == 1:
+                            claimed.append(rid)
+
+                if candidates:
+                    _db.commit_launch(
+                        s, stage=_stage_admit_gang, what=f"admit batch {batch_id} together"
+                    )
+        except BaseException as exc:
+            log.exception("Admitting batch %s members together failed; they stay queued", batch_id)
+            if isinstance(exc, KeyboardInterrupt | SystemExit):
+                raise
+            return []
+        by_id = dict(zip(run_ids, tokens, strict=False))
+        launched = []
+        for rid in claimed:
+            wf_id, doc_id, locale, actor = info[rid]
+            tok = by_id[rid]
+            try:
+                with fanout_slot(tok):
+                    self._launch_claimed(rid, wf_id, doc_id, locale, actor, batch_id, None, tok)
+                launched.append(rid)
+            except BaseException as exc:
+                log.exception("Starting admitted batch member %s failed", rid)
+                _mark_queue_launch_failed(rid, exc)
+                if isinstance(exc, KeyboardInterrupt | SystemExit):
+                    raise
+        return launched
+
+    def _continue_parked(self, run_id: int, token: "_SlotToken") -> bool:
+        """Continue a parked run under `token` on a new thread (S2 step hand-off)."""
+        from app.services import run_segments
+
+        seg = run_segments.take_parked(run_id)
+        if seg is None:
+            return False  # continued or ended meanwhile
+        try:
+            with fanout_slot(token):
+                seg.continue_on(token)
+            if seg.batch_id is not None:
+                from app.services import batch_runs_hub
+
+                batch_runs_hub.track_member(run_id, seg)
+            return True
+        except BaseException as exc:
+            log.exception("Continuing parked run %s failed; it stays parked", run_id)
+            if isinstance(exc, KeyboardInterrupt | SystemExit):
+                raise
+            return False
 
     def _has_queued(self, *, batch_id: int | None = None, queue_group: str | None = None) -> bool:
         from app.db import engine
@@ -8338,36 +9113,11 @@ class _AdmissionScheduler:
     def _next_queued(
         self, skipped=(), *, batch_id: int | None = None, queue_group: str | None = None
     ) -> tuple[int, str | None] | None:
-        """Rotate across groups with a keyset query; choose their oldest waiting row.
-
-        Limiting raw rows hid later fan-outs behind the first 500 members of a wide
-        group. Grouping in SQL and wrapping after the previous key bounds the returned
-        data without excluding any group from the rotation.
-        """
-        from sqlalchemy import String, cast, func
-
-        from app.db import engine
-
-        group = func.coalesce(WorkflowRun.queue_group, cast(WorkflowRun.id, String))
-        statement = (
-            select(func.min(WorkflowRun.id), group)
-            .where(WorkflowRun.status == RunStatus.QUEUED)
-            .where(group.notin_(skipped))
-            .group_by(group)
-            .order_by(group)
-            .limit(1)
-        )
-        if batch_id is not None:
-            statement = statement.where(WorkflowRun.batch_id == batch_id)
-        if queue_group is not None:
-            statement = statement.where(WorkflowRun.queue_group == queue_group)
-        with Session(engine) as s:
-            row = None
-            if self._last_group is not None:
-                row = s.exec(statement.where(group > self._last_group)).first()
-            if row is None:
-                row = s.exec(statement).first()
-            return tuple(row) if row else None
+        """The next QUEUED row in the fair order (parked runs aside), as (run id, group)."""
+        picked = self._fair_pick(skipped, batch_id=batch_id, queue_group=queue_group)
+        if picked is None or picked[0] != "run":
+            return None
+        return picked[1], picked[2]
 
     def _admit(self, run_id: int, token: "_SlotToken") -> bool:
         """QUEUED -> RUNNING for one row, under the slot `token`, then start its execution.
@@ -8388,11 +9138,20 @@ class _AdmissionScheduler:
                     locale = run.target_locale
                     actor = run.created_by or ""
                     batch_id = run.batch_id
+                    # S3 (ADR 0095): a human-review resume the web role queued. It already
+                    # ran (it holds its batch width and is past every launch gate), so it is
+                    # never re-gated; the worker resumes it with the stored seed below.
+                    run_ctx = dict(run.context) if isinstance(run.context, dict) else {}
+                    queued_resume = run_ctx.pop(QUEUED_RESUME_KEY, None)
+                    in_flight_already = queued_resume is not None or "_resume_kind" in run_ctx
                     if batch_id is not None:
                         from app.services import batch_runs
-
-                        if not batch_runs.queue_member_allowed(s, run):
-                            return False
+                    if (
+                        batch_id is not None
+                        and not in_flight_already
+                        and not batch_runs.queue_member_allowed(s, run)
+                    ):
+                        return False
 
                     from sqlalchemy import update
 
@@ -8400,12 +9159,45 @@ class _AdmissionScheduler:
 
                     def _stage_admit():
                         nonlocal claimed
+                        # S2 (ADR 0092): on Postgres, lock the candidate row first and SKIP
+                        # it when another process is claiming it (FOR UPDATE SKIP LOCKED), so
+                        # worker processes never queue on each other's claims. SQLite
+                        # serializes writers; the conditional UPDATE below is its claim.
+                        if s.get_bind().dialect.name == "postgresql":
+                            locked = s.exec(
+                                select(WorkflowRun.id)
+                                .where(
+                                    WorkflowRun.id == run_id,
+                                    WorkflowRun.status == RunStatus.QUEUED,
+                                )
+                                .with_for_update(skip_locked=True)
+                            ).first()
+                            if locked is None:
+                                claimed = False
+                                return
                         # Cancel (or another process) may have changed this row after
                         # our read. Claim only a row that is STILL queued in the DB.
+                        from app.services import run_resume as _rr
+
+                        # S3 (ADR 0095): stamp a provisional owner + heartbeat IN the claim,
+                        # so a peer worker booting in the instant before the run loop stamps
+                        # its own token sees a live owner, not an ownerless (pre-S1) row it
+                        # would fail.
+                        values = {
+                            "status": RunStatus.RUNNING,
+                            "started_at": datetime.utcnow(),
+                            "owner": _rr.new_token(),
+                            "heartbeat_at": datetime.utcnow(),
+                        }
+                        if queued_resume is not None:
+                            # The resume already restarted the clock; drop the seed from the
+                            # row as the run takes it.
+                            values.pop("started_at")
+                            values["context"] = run_ctx
                         result = s.exec(
                             update(WorkflowRun)
                             .where(WorkflowRun.id == run_id, WorkflowRun.status == RunStatus.QUEUED)
-                            .values(status=RunStatus.RUNNING, started_at=datetime.utcnow())
+                            .values(**values)
                             .execution_options(synchronize_session=False)
                         )
                         claimed = result.rowcount == 1
@@ -8413,16 +9205,9 @@ class _AdmissionScheduler:
                     _db.commit_launch(s, stage=_stage_admit, what=f"admit queued run {run_id}")
                     if not claimed:
                         return False
-                # The actor scope is entered on THIS thread so the raw run thread inherits
-                # it, exactly as an in-loop launch does — rebuilt from the row's own
-                # `created_by`, which is why the queue needed no in-memory closure to carry it.
-                with _queue_actor_scope(wf_id, locale, actor):
-                    if batch_id is not None:
-                        batch_runs.run_queued_member(run_id, wf_id, doc_id, locale, token)
-                    else:
-                        _run_in_background(
-                            wf_id, doc_id, locale, run_id=run_id, is_resume=False, slot=token
-                        )
+                self._launch_claimed(
+                    run_id, wf_id, doc_id, locale, actor, batch_id, queued_resume, token
+                )
             return True
         except BaseException as exc:
             log.exception("Admitting queued run %s failed", run_id)
@@ -8430,6 +9215,41 @@ class _AdmissionScheduler:
             if isinstance(exc, KeyboardInterrupt | SystemExit):
                 raise
             return False
+
+    def _launch_claimed(
+        self, run_id, wf_id, doc_id, locale, actor, batch_id, queued_resume, token
+    ) -> None:
+        """Start the execution of a row this scheduler has just claimed RUNNING."""
+        # The actor scope is entered on THIS thread so the raw run thread inherits
+        # it, exactly as an in-loop launch does — rebuilt from the row's own
+        # `created_by`, which is why the queue needed no in-memory closure to carry it.
+        with _queue_actor_scope(wf_id, locale, actor):
+            if queued_resume is not None:
+                # Exactly what resume_run_async runs in the single-process role.
+                _run_in_background(
+                    wf_id,
+                    doc_id,
+                    queued_resume.get("locale") or locale,
+                    run_id=run_id,
+                    seed_text=queued_resume.get("seed"),
+                    is_resume=True,
+                    slot=token,
+                )
+            elif batch_id is not None:
+                from app.services import batch_runs
+
+                # S2: only the process scheduler's batch members may hand off between
+                # step visits (it is what continues a parked run); a synchronous CLI
+                # batch drives its own scheduler and joins its members.
+                batch_runs.run_queued_member(
+                    run_id, wf_id, doc_id, locale, token, handoff=self is ADMISSION
+                )
+            else:
+                # A plain run hands off whenever the process daemon is alive to
+                # continue it (`_run_in_background`'s default); nothing joins it.
+                _run_in_background(
+                    wf_id, doc_id, locale, run_id=run_id, is_resume=False, slot=token
+                )
 
 
 ADMISSION = _AdmissionScheduler()
@@ -8445,6 +9265,8 @@ def adopt_queued_runs() -> int:
     failed, nothing is re-created, the same rows are simply picked up again. Called from the
     startup reconcile beside `recover_interrupted_runs` (which deliberately does NOT touch
     QUEUED rows — a queued row has no thread to have lost)."""
+    from app.services import run_resume  # lazy: keeps the kernel pipeline surface narrow
+
     try:
         with _bookkeeping_session() as s:
             n = len(
@@ -8460,6 +9282,9 @@ def adopt_queued_runs() -> int:
     # Poll even an initially empty queue: a separate CLI process may enqueue later.
     ADMISSION.ensure_started()
     ADMISSION.notify()
+    # S1 (ADR 0090): from now on, runs whose owner's heartbeat goes stale are re-queued to
+    # resume while this server is up (a dead second process, an old container).
+    run_resume.start_sweeper()
     return n
 
 
@@ -8471,8 +9296,13 @@ def _run_in_background(
     seed_text: str | None = None,
     is_resume: bool | None = None,
     slot: "_SlotToken | None" = None,
+    handoff: bool | None = None,
 ) -> None:
     """Drain run_workflow_stream on a background thread with its own Session.
+
+    S2 (ADR 0092): the run executes as a `run_segments.RunSegment`; with `handoff` (default:
+    the admission daemon is alive to continue it) it may hand its slot back between step
+    visits and continue on a new thread when the fair scheduler picks it again.
     The DB rows it writes are the source of truth the observer replays; the
     yielded events are discarded here.
 
@@ -8490,113 +9320,113 @@ def _run_in_background(
     `Thread.start()` raised. The caller's own `finally` then sees `handed_off` and keeps
     its hands off. The first round released in BOTH places on the thread-start failure and
     stole a live run's slot."""
-    from app.db import engine
+    # lazy: keeps the kernel pipeline surface narrow
+    from app.services import run_resume, run_segments
 
     token = slot if slot is not None else RUN_SLOTS.take()[0]
     token.handed_off = True
 
-    def _work():
+    def _stream(s, capacity_slot):
+        return run_workflow_stream(
+            s,
+            workflow_id,
+            doc_id,
+            locale,
+            run_id=run_id,
+            seed_text=seed_text,
+            is_resume=is_resume,
+            capacity_slot=capacity_slot,
+        )
+
+    def _on_end():
+        # #101 hygiene: the ticker drops its own state at every step boundary, but a
+        # step that died OUTSIDE that path (the crash above) would leave one entry per
+        # run in a long-lived server. The persisted columns keep whatever the step
+        # reached, so forgetting here loses no signal. The slot was released FIRST (by the
+        # segment, before this hook), so a raise here cannot cost the install capacity.
+        if run_id is not None:
+            _progress_forget(run_id)
+
+    def _on_crash(exc):
+        log.exception("Workflow run (wf=%s doc=%s) crashed", workflow_id, doc_id)
         try:
-            with Session(engine) as s:
-                for _ev in run_workflow_stream(
-                    s,
-                    workflow_id,
-                    doc_id,
-                    locale,
-                    run_id=run_id,
-                    seed_text=seed_text,
-                    is_resume=is_resume,
-                    capacity_slot=token,
-                ):
-                    pass
-        except Exception as exc:
-            log.exception("Workflow run (wf=%s doc=%s) crashed", workflow_id, doc_id)
-            try:
-                with _bookkeeping_session() as s:
-                    rid = run_id
-                    if rid is None:
-                        # find the run this thread just created for this doc/wf. #505
-                        # item 7: the LOCALE is part of the identity: a sibling locale's run
-                        # of the same (workflow, document) is a different run, and the
-                        # newest row by id is not necessarily this thread's.
-                        _where = [
-                            WorkflowRun.workflow_id == workflow_id,
-                            WorkflowRun.document_id == doc_id,
-                        ]
-                        if locale:
-                            _where.append(WorkflowRun.target_locale == locale)
-                        r = s.exec(
-                            select(WorkflowRun).where(*_where).order_by(WorkflowRun.id.desc())
-                        ).first()
-                        rid = r.id if r else None
-                    if rid is not None:
-                        run = s.get(WorkflowRun, rid)
-                        # CANCELLED joins COMPLETED/PAUSED as a status the crash handler
-                        # must NOT overwrite: an operator cancel that raced a crashing
-                        # thread stays cancelled, never flipped to FAILED (run-cancel train).
-                        if run and run.status not in (
-                            RunStatus.COMPLETED,
-                            RunStatus.PAUSED,
-                            RunStatus.CANCELLED,
-                        ):
-                            # P-C5 honest error: record WHY this run failed so the
-                            # observer's `_failure_reason` notes-fallback surfaces it
-                            # instead of the pre-fix `error: null`. A transient writer-
-                            # lock (the many-concurrent-runs ceiling) gets the distinct,
-                            # retryable WRITE_CONTENTION_NOTE; any other uncaught crash
-                            # records its bounded exception text.
-                            # GitHub #100: a CONNECTION-POOL timeout is its own class and
-                            # gets its own sentence. It is not a writer-lock (nothing was
-                            # contended on disk) and it is not a bug in the workflow — it
-                            # is this install running more work than its pool can carry,
-                            # which is the one failure an operator can fix by CONFIGURING
-                            # something. `error: null` (the pre-fix shape) told them none
-                            # of that; twelve of these were left RUNNING at step 0.
-                            note = _crash_terminal_note(exc)
+            with _bookkeeping_session() as s:
+                rid = run_id
+                if rid is None:
+                    # find the run this thread just created for this doc/wf. #505
+                    # item 7: the LOCALE is part of the identity: a sibling locale's run
+                    # of the same (workflow, document) is a different run, and the
+                    # newest row by id is not necessarily this thread's.
+                    _where = [
+                        WorkflowRun.workflow_id == workflow_id,
+                        WorkflowRun.document_id == doc_id,
+                    ]
+                    if locale:
+                        _where.append(WorkflowRun.target_locale == locale)
+                    r = s.exec(
+                        select(WorkflowRun).where(*_where).order_by(WorkflowRun.id.desc())
+                    ).first()
+                    rid = r.id if r else None
+                if rid is not None and run_resume.taken_over(rid):
+                    # S1 (ADR 0090): a restart resume took the run over; its successor
+                    # owns it now, so this thread's crash must not fail it.
+                    log.warning("Run %s crashed after being taken over; left alone", rid)
+                    rid = None
+                if rid is not None:
+                    run = s.get(WorkflowRun, rid)
+                    # CANCELLED joins COMPLETED/PAUSED as a status the crash handler
+                    # must NOT overwrite: an operator cancel that raced a crashing
+                    # thread stays cancelled, never flipped to FAILED (run-cancel train).
+                    if run and run.status not in (
+                        RunStatus.COMPLETED,
+                        RunStatus.PAUSED,
+                        RunStatus.CANCELLED,
+                    ):
+                        # P-C5 honest error: record WHY this run failed so the
+                        # observer's `_failure_reason` notes-fallback surfaces it
+                        # instead of the pre-fix `error: null`. A transient writer-
+                        # lock (the many-concurrent-runs ceiling) gets the distinct,
+                        # retryable WRITE_CONTENTION_NOTE; any other uncaught crash
+                        # records its bounded exception text.
+                        # GitHub #100: a CONNECTION-POOL timeout is its own class and
+                        # gets its own sentence. It is not a writer-lock (nothing was
+                        # contended on disk) and it is not a bug in the workflow — it
+                        # is this install running more work than its pool can carry,
+                        # which is the one failure an operator can fix by CONFIGURING
+                        # something. `error: null` (the pre-fix shape) told them none
+                        # of that; twelve of these were left RUNNING at step 0.
+                        note = _crash_terminal_note(exc)
 
-                            # Retry the FAILED-marking write itself: under the very
-                            # contention that caused the crash, this honest-error commit
-                            # would otherwise be the next lock victim. Re-stage on each
-                            # attempt (a rollback reverts the status/notes writes); the
-                            # note guard keeps a re-stage from appending the sentence twice.
-                            #
-                            # RE-CHECK the terminal status INSIDE the stage, not just once
-                            # above: the retry's rollback + jittered backoff widens the
-                            # check-then-act window to seconds under exactly this
-                            # contention, and an operator cancel can commit inside it. A
-                            # rollback expires `_run`, so re-reading its status sees that
-                            # committed CANCELLED/COMPLETED/PAUSED and this handler no-ops
-                            # rather than resurrecting it to FAILED (the run-cancel-train
-                            # invariant `_commit_run_terminal` guards for the happy path).
-                            def _stage(_run=run, _note=note):
-                                if _run.status in (
-                                    RunStatus.COMPLETED,
-                                    RunStatus.PAUSED,
-                                    RunStatus.CANCELLED,
-                                ):
-                                    return  # someone finished it first — commit nothing
-                                if _note not in (_run.notes or ""):
-                                    _stamp_note(_run, _note)
-                                _run.status = RunStatus.FAILED
-                                _run.finished_at = datetime.utcnow()
-                                s.add(_run)
+                        # Retry the FAILED-marking write itself: under the very
+                        # contention that caused the crash, this honest-error commit
+                        # would otherwise be the next lock victim. Re-stage on each
+                        # attempt (a rollback reverts the status/notes writes); the
+                        # note guard keeps a re-stage from appending the sentence twice.
+                        #
+                        # RE-CHECK the terminal status INSIDE the stage, not just once
+                        # above: the retry's rollback + jittered backoff widens the
+                        # check-then-act window to seconds under exactly this
+                        # contention, and an operator cancel can commit inside it. A
+                        # rollback expires `_run`, so re-reading its status sees that
+                        # committed CANCELLED/COMPLETED/PAUSED and this handler no-ops
+                        # rather than resurrecting it to FAILED (the run-cancel-train
+                        # invariant `_commit_run_terminal` guards for the happy path).
+                        def _stage(_run=run, _note=note):
+                            if _run.status in (
+                                RunStatus.COMPLETED,
+                                RunStatus.PAUSED,
+                                RunStatus.CANCELLED,
+                            ):
+                                return  # someone finished it first — commit nothing
+                            if _note not in (_run.notes or ""):
+                                _stamp_note(_run, _note)
+                            _run.status = RunStatus.FAILED
+                            _run.finished_at = datetime.utcnow()
+                            s.add(_run)
 
-                            _db.commit_with_retry(s, stage=_stage)
-            except Exception:
-                log.exception("Failed to mark run failed after crash")
-        finally:
-            # ALWAYS give the slot back — including on the crash path, and including when
-            # the crash handler itself failed. A leaked slot is a permanent, invisible
-            # reduction of this install's launch capacity: every later launch is refused
-            # with a 503 for a run that finished hours ago. FIRST, so that a raise out of
-            # the #101 hygiene below cannot cost the install a unit of capacity.
-            token.release()
-            # #101 hygiene: the ticker drops its own state at every step boundary, but a
-            # step that died OUTSIDE that path (the crash above) would leave one entry per
-            # run in a long-lived server. The persisted columns keep whatever the step
-            # reached, so forgetting here loses no signal.
-            if run_id is not None:
-                _progress_forget(run_id)
+                        _db.commit_with_retry(s, stage=_stage)
+        except Exception:
+            log.exception("Failed to mark run failed after crash")
 
     # THE RUN ID IS IN THE THREAD NAME ON PURPOSE (review F1). It is the only
     # in-process record of "run N is being executed right now" — the DB row cannot
@@ -8605,13 +9435,26 @@ def _run_in_background(
     # sweepers consult `_run_thread_alive` before failing anything, so neither can
     # terminate a run this process is still executing. Name-encoded rather than a
     # registry dict because a thread that dies takes its name with it — there is no
-    # cleanup path to forget.
+    # cleanup path to forget. S2 (ADR 0092): a run parked between step visits has no thread;
+    # `_run_thread_alive` also asks `run_segments.is_parked`, and its continuation thread
+    # carries the same name.
+    seg = run_segments.RunSegment(
+        run_id=run_id,
+        thread_name=_run_thread_name(run_id, workflow_id, doc_id),
+        make_stream=_stream,
+        on_crash=_on_crash,
+        on_end=_on_end,
+        slot=token,
+        handoff=(ADMISSION.alive() or run_segments.handoff_mode() == "always")
+        if handoff is None
+        else handoff,
+    )
     try:
-        threading.Thread(
-            target=_work, name=_run_thread_name(run_id, workflow_id, doc_id), daemon=True
-        ).start()
+        th = threading.Thread(target=seg.drive, name=seg.thread_name, daemon=True)
+        seg.thread = th
+        th.start()
     except BaseException:
-        # The thread never started, so `_work`'s finally will never run: hand the slot
+        # The thread never started, so the segment's finish will never run: hand the slot
         # back here or this launch permanently costs the install one unit of capacity.
         # Exactly ONE release happens (the token is idempotent) and the caller will not
         # add a second one, because `handed_off` is already True — HIGH-2.
@@ -8657,7 +9500,14 @@ def start_run(
 
     OWNERSHIP: the token is released here only while `handed_off` is False, i.e. while
     nothing else has taken responsibility for it. Once `_run_in_background` has it, the
-    execution owns it (HIGH-2)."""
+    execution owns it (HIGH-2).
+
+    S3 (ADR 0095): in the web role nothing executes here. The launch is a durable QUEUED row
+    (`_queue_interactive_launch`) that a worker process admits; capacity never refuses it."""
+    if not config.runs_background_work():
+        return _queue_interactive_launch(
+            session, workflow_id, doc_id, locale, created_by=created_by, detail=detail
+        )
     if slot is not None:
         token, observed = slot, RUN_SLOTS.in_flight
     else:
@@ -8687,6 +9537,46 @@ def start_run(
         # instant, including the `WriteContentionError` path out of `db.commit_launch`.
         if token is not None and not token.handed_off and slot is None:
             token.release()
+
+
+def _queue_interactive_launch(
+    session: Session,
+    workflow_id: int,
+    doc_id: int,
+    locale: str,
+    created_by: str = "",
+    detail: dict | None = None,
+) -> int:
+    """A web-role launch (S3, ADR 0095): the same eager refusals as `_start_run_admitted`
+    (key trash document, archived workflow/project, FULL_TEXT x tm_match, project budget),
+    then ONE durable QUEUED row through `queue_runs`, whose double-submit guard re-attaches
+    to an in-flight run of the same (workflow, document, locale) and whose overlap guard
+    reports a different workflow's run. Returns the run id; `detail` gets the same keys a
+    single launch fills (`run_id`, `reattached`, `paused`, `queued`, `superseded`)."""
+    doc = session.get(Document, doc_id)
+    _refuse_key_trash_document(doc)
+    _refuse_launch_guards(session, workflow_id, doc)
+    label = getattr(doc, "filename", "") or "" if doc is not None else ""
+    out = queue_runs(session, [(workflow_id, doc_id, locale, label)], created_by=created_by)
+    if out["conflicts"]:
+        c = out["conflicts"][0]
+        raise RunConflictError(c["run_id"], c["workflow_name"], doc_id, locale)
+    if out["failed"]:
+        raise _db.WriteContentionError(out["failed"][0]["reason"])
+    if out["attached"]:
+        row = out["attached"][0]
+        if detail is not None:
+            detail["run_id"], detail["reattached"] = row["run_id"], True
+            detail["paused"] = row["status"] == RunStatus.PAUSED
+            detail["queued"] = row["status"] == RunStatus.QUEUED
+        return row["run_id"]
+    row = out["queued"][0]
+    if detail is not None:
+        detail["run_id"], detail["reattached"] = row["run_id"], False
+        detail["paused"], detail["queued"] = False, True
+        if row.get("superseded") is not None:
+            detail["superseded"] = row["superseded"]
+    return row["run_id"]
 
 
 def _start_run_admitted(
@@ -8996,9 +9886,13 @@ def resume_run_async(
         # restarts the staleness clock, review F2), so a resume in another process (the CLI
         # beside the web server) cannot also win it; the loser no-ops like a double submit.
         claimed = {"ok": False}
+        queue_it = not config.runs_background_work()
 
         def _stage_resume_flip():
-            claimed["ok"] = _claim_paused_run(session, run_id)
+            if queue_it:
+                claimed["ok"] = _queue_paused_run(session, run, edited_text, locale)
+            else:
+                claimed["ok"] = _claim_paused_run(session, run_id)
 
         _db.commit_launch(
             session,
@@ -9007,6 +9901,11 @@ def resume_run_async(
         )
         if not claimed["ok"]:
             return False
+    if queue_it:
+        # S3 (ADR 0095): the web role executes nothing; a worker admits the QUEUED row and
+        # resumes it with the stored seed exactly as the call below would have.
+        ADMISSION.notify()
+        return True
     # EXECUTION spawns AFTER the lock releases (mirrors start_run): the lock only serializes
     # the launch DECISION, never the minutes-long run.
     _run_in_background(

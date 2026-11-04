@@ -646,12 +646,7 @@
     <label class="checkbox">
       <input type="checkbox" name="tm_lock_ice" value="1"
              {% if tm_matching.lock_ice %}checked{% endif %} style="width:auto" />
-      Hard-lock in-context (ICE / 101) matches
-      <span class="muted">(inert until the context/ICE wave ships)</span>
-    </label>
-    <label>Context-attach floor
-      <input type="text" name="tm_context_floor" value="{{ tm_matching.context_floor }}" />
-      <span class="muted">(50&ndash;99; the context/context-band wave is deferred)</span>
+      Hard-lock in-context (101%) matches
     </label>
     <label class="checkbox">
       <input type="checkbox" name="tm_empty_delivery_gate" value="1"

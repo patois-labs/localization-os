@@ -191,7 +191,9 @@ def main() -> None:
     tm_doc_id = int(r.headers["location"].rsplit("/", 1)[-1])
     with Session(engine) as s:
         events = list(translate.pretranslate_stream(s, tm_doc_id, "fr-FR"))
-    tm_ev = next((e for e in events if e.get("source") == "tm" and e.get("pct") == 100), None)
+    tm_ev = next(
+        (e for e in events if e.get("source") == "tm" and e.get("pct") in (100, 101)), None
+    )  # ADR 0102: 101 when the approved context matches
     assert tm_ev is not None, f"expected a 100% TM-hit segment event, got {events}"
     assert "qa" in tm_ev, "TM-hit event must carry QA flags (QA not bypassed)"
     print("  QA runs on 100% TM-hit path (short-circuit does not bypass QA)")

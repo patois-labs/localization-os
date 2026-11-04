@@ -28,7 +28,7 @@ and it never breaks when an id repeats within one run.
 Documented in: docs/architecture/tm-and-glossary.md
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, update
 from sqlmodel import Session, select
@@ -39,7 +39,7 @@ from app.services.tm import _like_escape
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 # --- customer-first browse (2026-07-14: "there is NO global TM") --------
@@ -455,6 +455,8 @@ def edit_entry(
                 f"the edited target was rejected ({skip[0]}): {skip[1]}{hint}.", code=skip[0]
             )
     e.target_text = text
+    # context_key is deliberately KEPT (ADR 0102): a human edit is a correction of the target
+    # in the same context, so the in-context (101) match keeps pointing at the corrected text.
     e.activity_at = _utcnow()
     session.add(e)
     session.commit()
@@ -542,6 +544,14 @@ def _invalidate_embeddings(session: Session, entry_ids) -> None:
             session.delete(emb)
 
 
+def _forget_counts(project_id=None) -> None:
+    """Drop the cached TM row counts (S1 item 6). Imported here, not at module top: the
+    kernel pipeline surface is bounded to fewer than 85 module families."""
+    from app.services import tm_counts
+
+    tm_counts.invalidate(project_id)
+
+
 def delete_entry(session: Session, entry_id: int, visible_pids=None) -> bool:
     """Delete ONE TM entry (scoped) + its semantic embedding. Returns True on delete,
     False if the entry is missing or out of scope (the route/command 404s)."""
@@ -551,6 +561,7 @@ def delete_entry(session: Session, entry_id: int, visible_pids=None) -> bool:
     _invalidate_embeddings(session, [e.id])
     session.delete(e)
     session.commit()
+    _forget_counts(e.project_id)
     return True
 
 
@@ -623,7 +634,7 @@ def strict_bulk_filters(raw: dict) -> dict:
             d = datetime.strptime(v.strip(), "%Y-%m-%d")
         except ValueError as exc:
             raise BulkDeleteRefused(f"{name} must be a YYYY-MM-DD date.") from exc
-        return d.replace(tzinfo=timezone.utc).replace(tzinfo=None)
+        return d.replace(tzinfo=UTC).replace(tzinfo=None)
 
     def _ctype():
         v = raw.get("content_type_id")
@@ -729,6 +740,7 @@ def bulk_delete(session: Session, *, dry_run: bool = False, **filters) -> int:
         for e in session.exec(select(SegmentTM).where(SegmentTM.id.in_(group))).all():
             session.delete(e)
     session.commit()
+    _forget_counts()
     return len(ids)
 
 
@@ -831,6 +843,7 @@ def scrub_hedges(
                 session.delete(e)
                 deleted += 1
         session.commit()
+        _forget_counts()
         scope_note = scope_label or (
             f"project {project_id}"
             if project_id is not None
@@ -996,6 +1009,7 @@ def scrub_scaffold(
                 session.delete(e)
                 deleted += 1
         session.commit()
+        _forget_counts()
         # Audit ONLY a run that actually CHANGED something. Unlike scrub_hedges (where any
         # match is deleted, so matched>0 == changed>0), a scaffold match can be a segment
         # ALREADY quarantined -- its text is unchanged so it re-matches forever. A second

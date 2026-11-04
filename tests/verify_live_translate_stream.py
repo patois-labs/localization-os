@@ -343,8 +343,21 @@ def check_cutoff_charge():
     mid_charge = mid_row.result["tokens_in"] + mid_row.result["tokens_out"]
     assert late_row.status == "failed", late_row.status
     assert late_row.cost_usd is None and mid_row.cost_usd is None, "#364: a cut-off stays NULL"
-    # At least what the nine segments it saw cost the completed twin (per-segment equal).
-    assert late_charge * 10 >= spent * 9, f"late cut-off charged {late_charge}, twin {spent}"
+    # At least what the nine segments it saw cost the completed twin. S9 (WP-FW): the http
+    # middleware layers no longer buffer one chunk between the stream and the server, so the
+    # generator is not read ahead of the client any more and a cut after nine segments is
+    # charged exactly those nine (2840 of the twin's 3156; the ten segments are not equal in
+    # size, the first source line is the shortest). Before, the tenth was already computed and
+    # the charge equalled the twin's. 85 % still fails a charge that ignores the measured spend.
+    assert late_charge * 100 >= spent * 85, f"late cut-off charged {late_charge}, twin {spent}"
+    # S9 gate round 1: the property itself, independent of how far a layer reads ahead. The
+    # charge IS the measured spend up to the cut (the reservation was shrunk to 1 token), it
+    # never exceeds what the complete twin cost, and the row counts the segments the
+    # generator really produced: the nine the client saw, or ten under a layer that reads
+    # one chunk ahead (Starlette's BaseHTTPMiddleware, the fallback when lite_http is off).
+    assert late_row.result.get("partial") is True, late_row.result
+    assert late_charge <= spent, f"late cut-off charged {late_charge} > complete twin {spent}"
+    assert late_row.progress_done in (seen, seen + 1), (late_row.progress_done, seen)
     assert mid_row.status == "failed" and mid_charge > 1, (mid_row.status, mid_row.result)
     print(
         f"  M1-R: cut-off charged max(estimate, measured): late {late_charge} (twin"

@@ -238,10 +238,16 @@
         </div>
         {# QE auto-fix (Train B): shown only while this step's QE judge is a Jev judge. #}
         {{ m.autofix_block('s' ~ i ~ '_', step, providers, request) }}
+        {% if tm_examples_available() %}
         <label class="checkbox" data-types="llm_agent"><input type="checkbox" name="s{{ i }}_tm_examples" value="1"{% if step.tm_examples %} checked{% endif %} />
-          TM few-shot examples <span class="muted">(inject top-N similar TM matches as examples - the biggest quality lever)</span></label>
+          TM few-shot examples <span class="muted">(inject top-N similar TM matches as examples)</span></label>
         <label data-types="llm_agent">TM examples window
           <input type="number" name="s{{ i }}_tm_examples_window" value="{{ step.tm_examples_window if step.tm_examples_window is not none else 3 }}" min="0" max="5" style="width:5em" /></label>
+        {% else %}
+        {# No examples add-on: keep the draft's stored values so confirming does not change them. #}
+        {% if step.tm_examples %}<input type="hidden" name="s{{ i }}_tm_examples" value="1" />{% endif %}
+        <input type="hidden" name="s{{ i }}_tm_examples_window" value="{{ step.tm_examples_window if step.tm_examples_window is not none else 3 }}" />
+        {% endif %}
         {# Conditional-workflow PRE-STEP GUARD (SPEC §5, Phase 2): editable, human-
            confirmed. Blank source = always run. A guard proposed by the LLM but dropped
            at draft time (unresolvable) comes back with source "always run" here. #}

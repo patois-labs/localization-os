@@ -709,6 +709,18 @@ def job_status(args, emit) -> int:
     return 0
 
 
+def job_leverage(args, emit) -> int:
+    """GET /api/jobs/{id}/leverage: the same report and CSV as the local `job leverage`."""
+    from app.cli import _leverage_out
+
+    c = _client(args)
+    path = f"/api/jobs/{args.job_id}/leverage"
+    if _leverage_out.wants_csv(args):
+        return _leverage_out.deliver_csv(args, emit, c.download(path, {"format": "csv"}).text)
+    info = c.get(path)
+    return _leverage_out.deliver_report(emit, {k: v for k, v in info.items() if k != "ok"})
+
+
 def job_list(args, emit) -> int:
     c = _client(args)
     params = {"limit": args.limit, "offset": getattr(args, "offset", 0)}

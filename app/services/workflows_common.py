@@ -3,7 +3,7 @@
 Transitional compatibility shim for one release (added 2026-09-14, remove the re-export block after
 the next tagged release): `__all__` re-exports log, WorkflowError, _clamp_window, _clamp_threshold,
 _coerce_glossary_cap, _clamp_lqa_threshold, _TM_PROTECT_TRUE, _TM_PROTECT_FALSE, _coerce_tm_protect,
-_MEMORY_MODE_OFF, _coerce_memory_mode, _coerce_tm_scalar_int, _coerce_tm_fuzzy_lock_mode,
+_MEMORY_MODE_OFF, _coerce_memory_mode,
 _coerce_tm_pool_selection, _RC_REFS, _RC_OPS, _RC_SCORE_OPS, _RC_STEP_PREFIX, _is_step_ref,
 _step_attr, _BRANCH_SLOTS, _BRANCH_SENTINELS, slugify_key, _step_produces_gate, _new_graph_errors,
 _RULE_GROUP_SPLIT, _RULE_GROUP_MEMBER_TYPE, _RULE_GROUP_MULTI_BRANCH, _RULE_GROUP_REENTRY,
@@ -73,10 +73,8 @@ from app.services.workflows_common_leaf import (
     _coerce_glossary_cap,
     _coerce_memory_mode,
     _coerce_pt_id,
-    _coerce_tm_fuzzy_lock_mode,
     _coerce_tm_pool_selection,
     _coerce_tm_protect,
-    _coerce_tm_scalar_int,
     _coerce_vendor_id,
     _FieldLabels,
     _is_step_ref,
@@ -122,10 +120,8 @@ __all__ = [
     "_coerce_glossary_cap",
     "_coerce_memory_mode",
     "_coerce_pt_id",
-    "_coerce_tm_fuzzy_lock_mode",
     "_coerce_tm_pool_selection",
     "_coerce_tm_protect",
-    "_coerce_tm_scalar_int",
     "_coerce_vendor_id",
     "_is_step_ref",
     "_new_graph_errors",
@@ -173,11 +169,8 @@ _EDIT_FIELDS = (
     "tm_protect",
     "over_translation_guard",
     "memory_mode",
-    "tm_fill_threshold",
-    "tm_fuzzy_lock_mode",
     "tm_lock_ice",
     "tm_hundreds_enter_lqa",
-    "tm_context_floor",
     "tm_pool_selection",
     "run_condition",
     "key",
@@ -332,16 +325,13 @@ def clone_workflow(session: Session, workflow_id: int, bound_customer_id=None) -
                 # tristate is step config like tm_protect and must survive a deep copy too
                 # -- without this a cloned "off" step would silently flip back to "auto".
                 memory_mode=getattr(st, "memory_mode", None),
-                # Batch 15 T1 (SPEC-tm-match-step-config §7.3): the six tm_match config
+                # Batch 15 T1 (SPEC-tm-match-step-config §7.3): the tm_match config
                 # overrides are step config like tm_protect and must survive a deep copy
-                # (a cloned tm_match step keeps its threshold/lock modes/pool selection).
+                # (a cloned tm_match step keeps its lock overrides/pool selection).
                 # The pool selection copies VERBATIM; a cross-project clone's stale refs
                 # fail closed at run time (§7.3), so no clone-time re-validation is needed.
-                tm_fill_threshold=getattr(st, "tm_fill_threshold", None),
-                tm_fuzzy_lock_mode=getattr(st, "tm_fuzzy_lock_mode", None),
                 tm_lock_ice=getattr(st, "tm_lock_ice", None),
                 tm_hundreds_enter_lqa=getattr(st, "tm_hundreds_enter_lqa", None),
-                tm_context_floor=getattr(st, "tm_context_floor", None),
                 tm_pool_selection=getattr(st, "tm_pool_selection", None),
                 # SPEC §5 pre-step guard (Phase 2): carry the guard onto the clone or it
                 # silently drops (the known copy-site footgun). Already-validated data.

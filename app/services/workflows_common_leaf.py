@@ -140,36 +140,43 @@ def _coerce_memory_mode(v):
 
 # --- tm_match step per-step config coercers (Batch 15 T1, SPEC-tm-match-step-config
 # §5.1 / §8.A) -----------------------------------------------------------------------
-# The SIX nullable-inherit overrides funnel through these normalisers so every surface
+# The nullable-inherit overrides funnel through these normalisers so every surface
 # (web tri-state select, /api, CLI flag) agrees: None/""/"auto"/"inherit" -> None
 # (inherit the live global), a concrete value -> the per-step override. NULL is the
 # stored "inherit" state; a garbage value coerces to None (inherit) rather than guessing.
-def _coerce_tm_scalar_int(v):
-    """A nullable int override (tm_fill_threshold / tm_context_floor). None/blank/junk ->
-    None (inherit); a parseable int passes through UNCLAMPED here (the engine's
-    resolve_policy_for_step clamps at read -- [50,100] for the threshold, [50,99] for the
-    floor -- so a stored value is always interpreted safely)."""
-    if v is None:
-        return None
-    if isinstance(v, str) and not v.strip():
-        return None
-    try:
-        return int(v)
-    except (TypeError, ValueError):
-        return None
+#
+# ADR 0102: TM fills exact matches only. The fill threshold, fuzzy lock mode and context
+# floor were removed. A caller that still sends one gets the clear error below, not a
+# silent ignore.
+_REMOVED_TM_PARAMS = ("tm_fill_threshold", "tm_fuzzy_lock_mode", "tm_context_floor")
 
 
-def _coerce_tm_fuzzy_lock_mode(v):
-    """A nullable fuzzy-lock-mode override. None/""/"auto"/"inherit"/junk -> None
-    (inherit the global); a recognised mode ("none"|"soft"|"policy") passes through."""
-    if v is None:
-        return None
-    s = str(v).strip().lower()
-    if s in ("", "auto", "inherit"):
-        return None
-    from app.services import tm_lock
+def removed_tm_param_message(name: str) -> str:
+    """The one error text for a removed tm_match parameter (ADR 0102), shared by every
+    surface (web, API, CLI, MCP) so a script sees the same words everywhere."""
+    return f"{name} was removed: TM fills exact matches only (ADR 0102)."
 
-    return s if s in tm_lock.FUZZY_LOCK_MODES else None
+
+def reject_removed_tm_params(**given) -> None:
+    """Refuse a removed tm_match parameter (ADR 0102) with a clear WorkflowError.
+
+    None / blank is "not supplied" and passes. tm_fill_threshold == 100 is accepted as a
+    no-op (it is what exact-only means); any other threshold, and ANY value for
+    tm_fuzzy_lock_mode or tm_context_floor, is refused. Only the three removed names are
+    inspected; other keyword arguments are ignored."""
+    for name in _REMOVED_TM_PARAMS:
+        if name not in given:
+            continue
+        v = given[name]
+        if v is None or (isinstance(v, str) and not v.strip()):
+            continue
+        if name == "tm_fill_threshold":
+            try:
+                if int(str(v).strip()) == 100:
+                    continue
+            except (TypeError, ValueError):
+                pass
+        raise WorkflowError(removed_tm_param_message(name))
 
 
 def _coerce_tm_pool_selection(v):
@@ -425,11 +432,8 @@ _VENDOR_DEAD_FIELDS = ("vendor_id", "external_wait_hours")
 
 
 _TM_MATCH_CONFIG_FIELDS = (
-    "tm_fill_threshold",
-    "tm_fuzzy_lock_mode",
     "tm_lock_ice",
     "tm_hundreds_enter_lqa",
-    "tm_context_floor",
     "tm_pool_selection",
 )
 
@@ -562,13 +566,13 @@ DEAD_FIELDS_BY_TYPE = {
 # type). The INVERSE of how use_image_context was ADDED to dead sets: here the fields must
 # be REMOVED from tm_match's dead set (which used to alias human_review's) and ADDED to
 # the other four types' dead sets. So capture the human_review-shaped dead set BEFORE the
-# tm-config fields are appended, alias tm_match to THAT (its own tuple, WITHOUT the six),
-# and append the six to LQA / HUMAN_REVIEW / LLM_AGENT / EXTERNAL.
+# tm-config fields are appended, alias tm_match to THAT (its own tuple, WITHOUT them),
+# and append them to LQA / HUMAN_REVIEW / LLM_AGENT / EXTERNAL.
 # tm_match aliases the human_review dead set + vendor (engine/prompt/QE all dead, like
-# human_review), but NOT the six tm-config fields (its OWN live config). Captured here,
-# BEFORE the six are appended to _HUMAN_REVIEW_DEAD_FIELDS below.
-# EXTERNAL keeps the vendor-FREE human_review set (vendor is its LIVE config) + the six
-# tm-config fields as dead (a forged tm_fill_threshold on an external step is refused).
+# human_review), but NOT the tm-config fields (its OWN live config). Captured here,
+# BEFORE they are appended to _HUMAN_REVIEW_DEAD_FIELDS below.
+# EXTERNAL keeps the vendor-FREE human_review set (vendor is its LIVE config) + the
+# tm-config fields as dead (a forged tm_pool_selection on an external step is refused).
 class _FieldLabels(dict):
     """A dead-field -> display-label map whose ``.get()`` rebrands registry DEFAULT coined
     names to the install's LIVE names (L8), so a workflow-diff label like the memory

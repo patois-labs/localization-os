@@ -13,7 +13,7 @@ What it does, in order:
    touched).
 4. Prints the commands to start the app and run the tests.
 
-It needs only the Python standard library, Python 3.10 or newer, and network access to a
+It needs only the Python standard library, Python 3.11 or newer, and network access to a
 package index. It never touches the database or any data directory.
 """
 
@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-MIN_PYTHON = (3, 10)
+MIN_PYTHON = (3, 11)
 
 
 def venv_python(root=ROOT):

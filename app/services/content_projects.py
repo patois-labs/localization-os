@@ -716,6 +716,11 @@ def delete_project(
     job_ids = _project_job_ids(session, project_id, doc_ids)
     if job_ids:
         session.exec(sa_delete(Job).where(Job.id.in_(job_ids)))
+        # ADR 0105: the queue rows of those jobs go with them. A pending row whose Job is gone is
+        # never claimed, and (SQLite reuses project ids) would hold its serial key for ever.
+        from app.models import JobQueue
+
+        session.exec(sa_delete(JobQueue).where(JobQueue.job_id.in_(job_ids)))
         session.flush()
     # 8b. KEY-BASED PROJECTS (SPEC-key-based-projects 2.2/2.3). Both tables carry
     #     FOREIGN KEY(project_id) -> project.id, and SQLite FK enforcement is ON, so

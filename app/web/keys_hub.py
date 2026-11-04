@@ -4,7 +4,7 @@ Documented in: docs/architecture/string-keys.md
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse, Response
@@ -502,7 +502,7 @@ def keys_export(
     img_info: dict = {}
     bundle = None
     if want_images:
-        when = datetime.now(timezone.utc)  # the export's own timestamp (manifest generated_at, M3)
+        when = datetime.now(UTC)  # the export's own timestamp (manifest generated_at, M3)
         try:
             bundle, img_info = key_images.build_export_bundle(
                 session,

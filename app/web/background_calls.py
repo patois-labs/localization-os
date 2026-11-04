@@ -179,12 +179,24 @@ def _find(actor: str, idem: str | None, fingerprint: str, is_async: bool) -> tup
     return None, ""
 
 
+def _owner_stamp() -> dict:
+    from app.kernel import jobs
+
+    return jobs.web_owner_stamp()
+
+
 def _insert(actor: str, label: str, fingerprint: str, idem: str | None, is_async: bool) -> int:
     now = datetime.utcnow()
     with Session(engine) as s:
         job = Job(
             kind=KIND,
-            payload={"route": label, "fp": fingerprint, "idem": idem, "async": is_async},
+            payload={
+                "route": label,
+                "fp": fingerprint,
+                "idem": idem,
+                "async": is_async,
+                **_owner_stamp(),
+            },
             created_by=actor,
             status=JobStatus.RUNNING,
             started_at=now,
@@ -350,7 +362,12 @@ class BackgroundCallMiddleware:
         idem = _sha("idem", *caller, path, raw_key) if raw_key is not None else None
         with contextlib.suppress(Exception):
             trim_old_results()
-        with _LOCK:
+        # S3c gate MED-1: two identical requests on two web processes must not both miss each
+        # other either; the cross-process lock is bucketed by key (a no-op in the `all` role).
+        from app.kernel import leader
+
+        bucket = int((idem or fingerprint)[:8], 16) % 64
+        with leader.mutex(f"bgcall:{bucket}"), _LOCK:
             job, why = _find(actor, idem, fingerprint, is_async)
             if job is None:
                 if is_async and not _SLOTS.acquire(blocking=False):
@@ -443,13 +460,20 @@ def trim_old_results(force: bool = False) -> int:
 
 
 def fail_interrupted() -> int:
-    """Boot only: fail every api_task row a restart cut off (no process can still run it)."""
+    """Boot only: fail every api_task row a restart cut off (no process can still run it).
+    With several web processes (S3c, ADR 0097) a row a LIVE peer web process is running is
+    left alone: only rows whose owning process is gone are failed."""
+    from app.kernel import jobs
+
+    gone = jobs.owner_gone_fn()
     n = 0
     now = datetime.utcnow()
     with Session(engine) as s:
         for job in s.exec(
             select(Job).where(Job.kind == KIND, Job.status == JobStatus.RUNNING)
         ).all():
+            if not gone(job.payload):
+                continue
             job.status = JobStatus.FAILED
             job.error = (
                 "Interrupted by a server restart. The work may have partly run: check the "

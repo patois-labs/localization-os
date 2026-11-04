@@ -468,6 +468,7 @@ def _select_matched_entries(
     source_locale: str,
     target_locale: str,
     glossary_id: int | None = None,
+    entry_cache: dict | None = None,
 ) -> list[GlossaryEntry]:
     """THE shared selection core (SPEC-terminology-backend §5.3/H6, L1): the query +
     specificity precedence + span match + longest-match shadowing, returning the
@@ -479,41 +480,22 @@ def _select_matched_entries(
     WILDCARD LOCALES (#60). A blank/NULL stored source_locale or target_locale is a
     documented "any locale" wildcard (glossary_module.add_term's docstring). Match a
     stored locale when it EQUALS the requested locale OR is blank/NULL; a non-blank
-    stored locale still matches only its own locale."""
+    stored locale still matches only its own locale.
 
-    def _loc_ok(col, requested):
-        return sa.or_(col == requested, col == "", col.is_(None))
-
-    if glossary_id is not None:
-        stmt = select(GlossaryEntry).where(
-            GlossaryEntry.glossary_id == glossary_id,
-            _loc_ok(GlossaryEntry.source_locale, source_locale),
-            _loc_ok(GlossaryEntry.target_locale, target_locale),
-        )
+    `entry_cache` (S4 query diet, ADR 0093): a dict owned by ONE translate run. The entry
+    query below does not depend on the segment, so with a cache it runs once per
+    (glossary scope, locale pair) per run and later segments match against snapshots of
+    the same rows (app/services/run_cache.py). None (every other caller): read per call."""
+    cache_key = ("glossary_entries", project_id, glossary_id, source_locale, target_locale)
+    if entry_cache is not None and cache_key in entry_cache:
+        entries = entry_cache[cache_key]
     else:
-        stmt = select(GlossaryEntry).where(
-            GlossaryEntry.project_id == project_id,
-            GlossaryEntry.glossary_id == None,  # noqa: E711
-            _loc_ok(GlossaryEntry.source_locale, source_locale),
-            _loc_ok(GlossaryEntry.target_locale, target_locale),
-        )
-    entries = session.exec(stmt).all()
-    # PRECEDENCE: specific over wildcard (#60). Group by source term (case-folded) and
-    # keep only the entries at the HIGHEST locale specificity — score = (non-blank
-    # source) + (non-blank target) — dropping strictly-less-specific duplicates of the
-    # same term. A term with no same-name rival (the common case) is untouched.
-    if len(entries) > 1:
+        entries = _load_entries(session, project_id, source_locale, target_locale, glossary_id)
+        if entry_cache is not None:
+            from app.services import run_cache
 
-        def _spec(e) -> int:
-            return int(bool((e.source_locale or "").strip())) + int(
-                bool((e.target_locale or "").strip())
-            )
-
-        best: dict[str, int] = {}
-        for e in entries:
-            k = (e.source_term or "").strip().casefold()
-            best[k] = max(best.get(k, -1), _spec(e))
-        entries = [e for e in entries if _spec(e) == best[(e.source_term or "").strip().casefold()]]
+            entries = run_cache.snapshots(entries)
+            entry_cache[cache_key] = entries
     if not entries:
         return []
     # Strip inline-fidelity placeholder tokens (⟦r1⟧…) before matching so a term whose
@@ -531,16 +513,100 @@ def _select_matched_entries(
     return [e for e, _spans in matched if id(e) not in dropped]
 
 
+def _load_entries(session, project_id, source_locale, target_locale, glossary_id):
+    """The scope's entries for the locale pair after locale-specificity precedence: the
+    segment-independent half of `_select_matched_entries`."""
+
+    def _loc_ok(col, requested):
+        return sa.or_(col == requested, col == "", col.is_(None))
+
+    from app import db
+
+    # S7b: each shape is built once per process and run with bound values.
+    src, tgt = sa.bindparam("src"), sa.bindparam("tgt")
+    if glossary_id is not None:
+        stmt = db.prebuilt(
+            "glossary_common.entries_by_glossary",
+            lambda: select(GlossaryEntry).where(
+                GlossaryEntry.glossary_id == sa.bindparam("scope_id"),
+                _loc_ok(GlossaryEntry.source_locale, src),
+                _loc_ok(GlossaryEntry.target_locale, tgt),
+            ),
+        )
+        scope_id = glossary_id
+    elif project_id is None:
+        # A NULL scope must compare with IS NULL, which a bound value cannot express: keep
+        # the per-call statement for this (unused in practice) shape.
+        stmt = select(GlossaryEntry).where(
+            GlossaryEntry.project_id == None,  # noqa: E711
+            GlossaryEntry.glossary_id == None,  # noqa: E711
+            _loc_ok(GlossaryEntry.source_locale, src),
+            _loc_ok(GlossaryEntry.target_locale, tgt),
+        )
+        scope_id = None
+    else:
+        stmt = db.prebuilt(
+            "glossary_common.entries_by_project",
+            lambda: select(GlossaryEntry).where(
+                GlossaryEntry.project_id == sa.bindparam("scope_id"),
+                GlossaryEntry.glossary_id == None,  # noqa: E711
+                _loc_ok(GlossaryEntry.source_locale, src),
+                _loc_ok(GlossaryEntry.target_locale, tgt),
+            ),
+        )
+        scope_id = project_id
+    entries = session.exec(
+        stmt, params={"scope_id": scope_id, "src": source_locale, "tgt": target_locale}
+    ).all()
+    # PRECEDENCE: specific over wildcard (#60). Group by source term (case-folded) and
+    # keep only the entries at the HIGHEST locale specificity — score = (non-blank
+    # source) + (non-blank target) — dropping strictly-less-specific duplicates of the
+    # same term. A term with no same-name rival (the common case) is untouched.
+    if len(entries) > 1:
+
+        def _spec(e) -> int:
+            return int(bool((e.source_locale or "").strip())) + int(
+                bool((e.target_locale or "").strip())
+            )
+
+        best: dict[str, int] = {}
+        for e in entries:
+            k = (e.source_term or "").strip().casefold()
+            best[k] = max(best.get(k, -1), _spec(e))
+        entries = [e for e in entries if _spec(e) == best[(e.source_term or "").strip().casefold()]]
+    return list(entries)
+
+
 def count(session: Session, project_id: int) -> int:
     """Count only a project's legacy entries, without loading entry rows."""
+    from app import db
+
+    if project_id is None:  # a bound None compiles to "= NULL": keep the IS NULL shape per call
+        return int(
+            session.exec(
+                select(sa.func.count())
+                .select_from(GlossaryEntry)
+                .where(
+                    GlossaryEntry.project_id == None,  # noqa: E711
+                    GlossaryEntry.glossary_id == None,  # noqa: E711
+                )
+            ).one()
+        )
+    # S9: built once per process (it runs on every project read-back).
     return int(
         session.exec(
-            select(sa.func.count())
-            .select_from(GlossaryEntry)
-            .where(
-                GlossaryEntry.project_id == project_id,
-                GlossaryEntry.glossary_id == None,  # noqa: E711
-            )
+            db.prebuilt(
+                "glossary_common.count",
+                lambda: (
+                    select(sa.func.count())
+                    .select_from(GlossaryEntry)
+                    .where(
+                        GlossaryEntry.project_id == sa.bindparam("pid"),
+                        GlossaryEntry.glossary_id == None,  # noqa: E711
+                    )
+                ),
+            ),
+            params={"pid": project_id},
         ).one()
     )
 

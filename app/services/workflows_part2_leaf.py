@@ -17,8 +17,8 @@ from app.services.workflows_common import (
     slugify_key,
 )
 
-#: GitHub #502: ceiling for a workflow step's integer overrides (tm_fill_threshold,
-#: tm_context_floor, max_visits). Far above any real value (the engine clamps TM scalars to
+#: GitHub #502: ceiling for a workflow step's integer overrides (max_visits and the
+#: tm_match integer overrides). Far above any real value (the engine clamps TM scalars to
 #: [50, 100]; max_visits is a loop guard defaulting to 5) and far below the int column's range.
 MAX_STEP_INT_OVERRIDE = 1_000_000
 
@@ -87,7 +87,7 @@ def _coerce_tm_tristate_bool(v):
 
 
 def _require_valid_tm_scalar(v, label: str):
-    """N2: validate an inbound tm_match int override (tm_fill_threshold / tm_context_floor)
+    """N2: validate an inbound tm_match int override (generic bound check)
     at the authoring seam, mirroring _require_valid_lqa_threshold. None/blank/'auto'/
     'inherit' -> None (inherit the global); a parseable int -> that int (UNCLAMPED here --
     the engine clamps [50,100] / [50,99] at read); anything else (e.g. '85%', 'abc', '8O')

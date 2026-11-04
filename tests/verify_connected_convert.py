@@ -32,6 +32,8 @@ from tests._bootstrap import init_env
 
 init_env("loctms_cconvert_")
 
+from datetime import UTC
+
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
@@ -484,9 +486,9 @@ def test_convert_refusals():
         content.archive_project(s, p2, actor="t") if hasattr(content, "archive_project") else None
         pr = s.get(Project, p2)
         if pr.archived_at is None:
-            from datetime import datetime, timezone
+            from datetime import datetime
 
-            pr.archived_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            pr.archived_at = datetime.now(UTC).replace(tzinfo=None)
             s.add(pr)
             s.commit()
     with Session(engine) as s:
@@ -1120,7 +1122,7 @@ def test_wording_keys_and_locale_add_gate():
 
         # Review gate: apply-langset is the same gate (API and web), and unbinding leaves a stopped
         # language stopped (decision 10).
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from app.services import languages as langs_svc
 
@@ -1141,7 +1143,7 @@ def test_wording_keys_and_locale_add_gate():
                     TargetLocale.project_id == bound_p, TargetLocale.locale == "it-IT"
                 )
             ).one()
-            tl.stopped_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            tl.stopped_at = datetime.now(UTC).replace(tzinfo=None)
             s.add(tl)
             s.commit()
         pa.unbind(bound_p, actor="t")

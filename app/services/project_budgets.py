@@ -48,6 +48,10 @@ scan, fine at pilot scale. The workflow + vendor legs are project-scoped selects
 Documented in: docs/architecture/cost-and-budgets.md
 """
 
+import logging
+import threading
+import time
+from collections import OrderedDict
 from datetime import datetime
 
 from sqlmodel import Session, select
@@ -64,6 +68,8 @@ from app.models import (
     WorkflowRun,
 )
 from app.services import audit, ids
+
+log = logging.getLogger("loc_tms.project_budgets")
 
 # The Job kinds that write a priced Job row (workflow runs write StepRun rows, never
 # Jobs; see reports._workflow_run_buckets). Matches the reports cost attribution so a
@@ -215,6 +221,7 @@ def upsert_project_budget(
         detail=f"project={pid} usd_limit={monthly_usd_limit}",
         ip=ip,
     )
+    forget_budget_state(pid)  # S1: the cached meter shows the new cap at once
     return row, created
 
 
@@ -227,6 +234,7 @@ def delete_project_budget(session: Session, budget_id, actor="system", ip: str =
     pid = row.project_id
     session.delete(row)
     session.commit()
+    forget_budget_state(pid)  # S1: the cached meter drops the deleted cap at once
     audit.log(
         actor=actor,
         action="budget.delete",
@@ -278,6 +286,135 @@ def _ai_job_spend(
             continue
         if _job_attributes_to(j, project_id, doc_set, conn_ids):
             total += reports._job_cost(j)
+    return total
+
+
+# S1 (gate G5): ONE scan of the month's cost-bearing jobs serves every project's read meter.
+# Each job is reduced to its FIRST-HIT attribution key (the same precedence as
+# _job_attributes_to: payload project_id, payload document_id, payload connection_id,
+# result document_id) and priced once; the per-kind sums make one project's figure a few
+# dict lookups instead of a re-scan. Cached _STATE_TTL_S per month; gates never read it.
+#
+# S9 (WP-METER): the build is SINGLE-FLIGHT per process and reads only the columns the pricing
+# and attribution read. Before, every caller that found the entry expired rebuilt it at once
+# (each holding a pool connection for a scan of every cost-bearing job of the month), which
+# drained the pool at 25 readers on a 20,000-job install. Now one caller builds; the others
+# get the PREVIOUS index at once (stale-while-revalidate) or, when there is none yet or the
+# caller is a background refresh, wait for the builder. A failed build raises to its own
+# caller only (waiters re-check and one of them builds), never stores anything, and a build
+# running longer than _BUILD_MAX_S is treated as abandoned (a late result from it never
+# replaces the newer index). An index served to a caller was built under _STATE_TTL_S ago,
+# or, only while a build is in flight, under 2 x _STATE_TTL_S + that build's elapsed time ago.
+_index_lock = threading.Lock()
+_index: dict = {}  # month start -> (built monotonic, {"p": {}, "d": {}, "c": {}}, started)
+_index_building: dict = {}  # month start -> (done Event, started monotonic)
+_BUILD_MAX_S = 120.0
+_refresh_ctx = threading.local()  # .wait=True on a background meter refresh thread
+
+
+class _IndexJob:
+    """The five Job columns reports._job_cost / _job_attribution_key read, and nothing else
+    (a full Job row drags payload, result, message, error... through the ORM)."""
+
+    __slots__ = ("cost_usd", "created_at", "finished_at", "payload", "result")
+
+    def __init__(self, created_at, finished_at, payload, result, cost_usd):
+        self.created_at = created_at
+        self.finished_at = finished_at
+        self.payload = payload
+        self.result = result
+        self.cost_usd = cost_usd
+
+
+def _job_attribution_key(job: Job):
+    payload, result = (job.payload or {}), (job.result or {})
+    for kind, value in (
+        ("p", payload.get("project_id")),
+        ("d", payload.get("document_id")),
+        ("c", payload.get("connection_id")),
+        ("d", result.get("document_id")),
+    ):
+        v = ids.coerce_id(value)
+        if v is not None:
+            return kind, v
+    return None
+
+
+def _build_month_index(session: Session, lo: datetime, hi: datetime) -> dict:
+    from app.services import reports
+
+    sums: dict = {"p": {}, "d": {}, "c": {}}
+    rows = session.exec(
+        select(Job.created_at, Job.finished_at, Job.payload, Job.result, Job.cost_usd).where(
+            Job.kind.in_(_COST_JOB_KINDS), (Job.finished_at >= lo) | (Job.created_at >= lo)
+        )
+    ).all()
+    for row in rows:
+        j = _IndexJob(*row)
+        if not _in_month(j.finished_at or j.created_at, lo, hi):
+            continue
+        key = _job_attribution_key(j)
+        if key is None:
+            continue
+        bucket = sums[key[0]]
+        bucket[key[1]] = bucket.get(key[1], 0.0) + reports._job_cost(j)
+    return sums
+
+
+def _month_job_index(session: Session, lo: datetime, hi: datetime) -> dict:
+    wait = bool(getattr(_refresh_ctx, "wait", False))
+    while True:
+        with _index_lock:
+            now = time.monotonic()
+            ent = _index.get(lo)
+            if ent is not None and now - ent[0] < _STATE_TTL_S:
+                return ent[1]
+            flight = _index_building.get(lo)
+            if flight is not None and now - flight[1] > _BUILD_MAX_S:
+                flight = None  # the builder is presumed dead: take over
+            if flight is None:
+                done = threading.Event()
+                _index_building[lo] = (done, now)
+                break  # this caller builds
+            if ent is not None and not wait and flight[1] - ent[0] < 2 * _STATE_TTL_S:
+                # A build is in flight and it started within one TTL of this index expiring:
+                # serve the previous index (under 2 x TTL + the build's elapsed time old). An
+                # older index (no reads for a while) is never served: wait for the build.
+                return ent[1]
+            done = flight[0]
+        done.wait(_BUILD_MAX_S)  # no usable index (or a refresh thread): wait, then re-check
+    started = now
+    try:
+        sums = _build_month_index(session, lo, hi)
+        with _index_lock:
+            cur = _index.get(lo)
+            # Never store over a NEWER build (an abandoned-but-alive builder finishing after
+            # the build that took over), nor over a later month's index.
+            if (cur is None or cur[2] <= started) and not any(k > lo for k in _index):
+                _index.clear()  # only the current month is ever asked for
+                _index[lo] = (time.monotonic(), sums, started)
+        return sums
+    finally:
+        with _index_lock:
+            cur = _index_building.get(lo)
+            if cur is not None and cur[0] is done:
+                del _index_building[lo]
+        done.set()
+
+
+def _indexed_job_spend(
+    session: Session, project_id: int, doc_ids: list[int], lo: datetime, hi: datetime
+) -> float:
+    """`_ai_job_spend` from the shared month index (display only, at most _STATE_TTL_S old)."""
+    sums = _month_job_index(session, lo, hi)
+    total = sums["p"].get(project_id, 0.0)
+    by_doc = sums["d"]
+    if by_doc:
+        total += sum(by_doc.get(d, 0.0) for d in doc_ids)
+    by_conn = sums["c"]
+    if by_conn:
+        conn_ids = session.exec(select(Connection.id).where(Connection.project_id == project_id))
+        total += sum(by_conn.get(c, 0.0) for c in conn_ids.all())
     return total
 
 
@@ -404,11 +541,16 @@ def _project_legs(
     return list(legs.values())
 
 
-def project_spend_this_month(session: Session, project_id, now: datetime | None = None) -> dict:
+def project_spend_this_month(
+    session: Session, project_id, now: datetime | None = None, *, display: bool = False
+) -> dict:
     """The money breakdown for one project's current calendar month. Returns:
         {ai_usd, human_settled_usd, enforced_usd, committed_usd, total_display_usd}
     where enforced_usd = ai_usd + human_settled_usd (what project_check gates on) and
-    total_display_usd = enforced_usd + committed_usd (the meter's outer figure)."""
+    total_display_usd = enforced_usd + committed_usd (the meter's outer figure).
+
+    `display=True` (the cached read meter only, never a gate) prices the AI jobs from the
+    shared month index (`_month_job_index`), at most _STATE_TTL_S old."""
     try:
         pid = int(project_id)
     except (TypeError, ValueError):
@@ -424,8 +566,13 @@ def project_spend_this_month(session: Session, project_id, now: datetime | None 
     lo, hi = _month_start(now), _next_month_start(now)
     doc_ids = _project_document_ids(session, pid)
 
+    job_usd = (
+        _indexed_job_spend(session, pid, doc_ids, lo, hi)
+        if display
+        else _ai_job_spend(session, pid, doc_ids, lo, hi)
+    )
     ai_usd = (
-        _ai_job_spend(session, pid, doc_ids, lo, hi)
+        job_usd
         + _ai_workflow_spend(session, doc_ids, lo, hi)
         + _advanced_run_spend(session, pid, lo, hi)
     )
@@ -494,7 +641,9 @@ def _clamp_pct(v: float) -> float:
     return 0.0 if v < 0 else (100.0 if v > 100 else v)
 
 
-def budget_state(session: Session, project_id, now: datetime | None = None) -> dict:
+def budget_state(
+    session: Session, project_id, now: datetime | None = None, *, display: bool = False
+) -> dict:
     """The ONE render-ready spend/budget summary every surface (web /routing, the
     project meter, /api, CLI) reads, so they all show the SAME numbers. Returns:
 
@@ -517,7 +666,7 @@ def budget_state(session: Session, project_id, now: datetime | None = None) -> d
     see (so a surface can still show untracked money honestly). Keyed on project_id
     (not caller org, H2)."""
     budget = get_project_budget(session, project_id)
-    spend = project_spend_this_month(session, project_id, now)
+    spend = project_spend_this_month(session, project_id, now, display=display)
     enforced = spend["enforced_usd"]
     committed = spend["committed_usd"]
     limit = float(budget.monthly_usd_limit) if budget else 0.0
@@ -565,6 +714,106 @@ def budget_state(session: Session, project_id, now: datetime | None = None) -> d
     }
 
 
+# --- cached display state (S1 item 6, gate G5) --------------------------------------
+# `budget_state` recomputes the month's AI spend from every cost-bearing Job of the month
+# (load + JSON-decode each row), which made it the dominant cost of every project page and
+# /api project GET once the TM counts were cached. The READ surfaces use this cached copy;
+# enforcement (`project_check`, `evaluate_thresholds`, the submission gates) always uses the
+# live figures. Stale-while-revalidate: a value is served at once and, once older than
+# _STATE_TTL_S, ONE background thread recomputes it (single-flight per project); the first
+# miss computes on the caller's session. Forgotten when a job finishes (the
+# `evaluate_thresholds` hook every finished job passes) and when a budget row changes; its
+# AI-job figure comes from the shared month index (rebuilt at most every _STATE_TTL_S, by one
+# caller at a time, see _month_job_index). Staleness, precisely: a cached value is served as
+# is for _STATE_TTL_S; after that it is still served (once per read, S1 behaviour) while ONE
+# background refresh recomputes it, so a project nobody read for a while shows its last value
+# on the first read back. A value is computed from an index built under _STATE_TTL_S ago
+# (always so for background refreshes: they wait for a build in flight), or, for a request-
+# path miss during a build, under 2 * _STATE_TTL_S plus that build's elapsed time ago. So while
+# a project is being read, the AI-job part of its meter is behind real spend by under
+# 3 * _STATE_TTL_S plus a refresh and two build durations (typically 2 * _STATE_TTL_S, as
+# before). Vendor and workflow legs are live at compute time.
+_STATE_TTL_S = 15.0
+_STATE_MAX = 4096
+_state_lock = threading.Lock()
+_state_cache: "OrderedDict[int, tuple[dict, float]]" = OrderedDict()
+_state_refreshing: set = set()
+_state_epoch = 0
+
+
+def _state_store(pid: int, value: dict, epoch: int) -> None:
+    with _state_lock:
+        if epoch != _state_epoch:
+            return  # forgotten while computing: the next read recomputes
+        _state_cache[pid] = (value, time.monotonic())
+        _state_cache.move_to_end(pid)
+        while len(_state_cache) > _STATE_MAX:
+            _state_cache.popitem(last=False)
+
+
+def _state_refresh(pid: int) -> None:
+    try:
+        with _state_lock:
+            epoch = _state_epoch
+        _refresh_ctx.wait = True  # a background refresh waits for an index build in flight
+        # ...and does that wait BEFORE it checks out a pool connection, so N refreshes queued
+        # behind one build do not hold N connections while they wait.
+        with _index_lock:
+            flight = _index_building.get(_month_start())
+        if flight is not None:
+            flight[0].wait(_BUILD_MAX_S)
+        with Session(engine) as s:
+            _state_store(pid, budget_state(s, pid, display=True), epoch)
+    except Exception:
+        log.warning("budget meter refresh failed for project %s", pid, exc_info=True)
+    finally:
+        with _state_lock:
+            _state_refreshing.discard(pid)
+
+
+def budget_state_cached(session: Session, project_id) -> dict:
+    """`budget_state` for display surfaces, at most _STATE_TTL_S stale (never for a gate)."""
+    try:
+        pid = int(project_id)
+    except (TypeError, ValueError):
+        return budget_state(session, project_id)
+    with _state_lock:
+        ent = _state_cache.get(pid)
+        if ent is not None:
+            _state_cache.move_to_end(pid)
+            stale = time.monotonic() - ent[1] >= _STATE_TTL_S and pid not in _state_refreshing
+            if stale:
+                _state_refreshing.add(pid)
+        epoch = _state_epoch
+    if ent is not None:
+        if stale:
+            try:
+                threading.Thread(
+                    target=_state_refresh, args=(pid,), daemon=True, name="budget-meter-refresh"
+                ).start()
+            except Exception:
+                with _state_lock:
+                    _state_refreshing.discard(pid)
+        return dict(ent[0])
+    value = budget_state(session, pid, display=True)
+    _state_store(pid, value, epoch)
+    return dict(value)
+
+
+def forget_budget_state(project_id=None) -> None:
+    """Drop the cached meter of one project (or all): the next read is live."""
+    global _state_epoch
+    with _state_lock:
+        _state_epoch += 1
+        if project_id is None:
+            _state_cache.clear()
+        else:
+            try:
+                _state_cache.pop(int(project_id), None)
+            except (TypeError, ValueError):
+                _state_cache.clear()
+
+
 # --- threshold alerts --------------------------------------------------------
 def _band_for_pct(pct: float) -> int:
     """The highest crossed threshold band for a usage percentage (0 = none crossed)."""
@@ -609,6 +858,7 @@ def evaluate_thresholds(
     WHERE is None-safe and dialect-safe (plain IS NULL / <> / < — no IS DISTINCT FROM)."""
     from sqlalchemy import text
 
+    forget_budget_state(project_id)  # S1: spend moved; the cached meter must not lag it
     with Session(engine) as session:
         budget = get_project_budget(session, project_id)
         if budget is None or budget.monthly_usd_limit <= 0:

@@ -606,6 +606,11 @@ _RUN_CREATE_LOCK = threading.RLock()
 
 RESTART_NOTE = "Interrupted by a server restart."
 
+#: Stamped (once per resume) when restart recovery re-queues an interrupted run to resume from
+#: its last completed step instead of failing it (S1, ADR 0090; app/services/run_resume.py).
+#: Informational, not a failure reason: it shares no prefix with any `_REASON_PATTERNS` entry.
+RESTART_RESUME_NOTE = "Resumed after a server restart."
+
 
 STALE_RUN_AFTER = timedelta(hours=6)
 
@@ -813,6 +818,19 @@ def _commit_run_terminal_direct(session: Session, run: WorkflowRun, status: str)
     with Session(_engine) as _probe:
         _cur = _probe.get(WorkflowRun, run.id)
         _cur_status = _cur.status if _cur is not None else None
+        _cur_owner = _cur.owner if _cur is not None else None
+    # S1 (ADR 0090): a thread whose run was taken over by a restart resume writes no verdict.
+    from app.services import run_resume as _rr
+
+    _mine = _rr.held_by_this_thread(run.id)
+    if _mine and _cur_owner != _mine:
+        session.rollback()
+        log.warning(
+            "Run %s was taken over by another execution; its %s verdict was DISCARDED",
+            run.id,
+            status,
+        )
+        return
     if _cur_status == RunStatus.CANCELLED and status != RunStatus.CANCELLED:
         session.rollback()
         log.warning(

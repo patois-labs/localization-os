@@ -199,8 +199,7 @@ modules - the majority (ten of the twenty) - a switch-off **removes** the featur
 than hiding it: its routes answer `404` (indistinguishable from a route that was never
 built, so a disabled feature can't be discovered by probing), its CLI verbs refuse, it
 drops from the `/api` surface, and its **MCP tool refuses** when called. A few modules
-switch off differently by design - the Evaluations Lab and LLMemory stop new writes but
-keep their existing records readable, and a couple ship off by default as opt-ins - but
+switch off differently by design - a couple ship off by default as opt-ins - but
 the on/off test is the same strict whitelist (`== "1"`), so a non-canonical value fails
 toward **off**, the kill-switch-safe direction. The operator decides what the install
 even is.

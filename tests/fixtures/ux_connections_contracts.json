@@ -2140,16 +2140,6 @@
               "type": "number",
               "step": "any",
               "min": "0",
-              "name": "band_repetitions",
-              "value": "0.0"
-            }
-          ],
-          [
-            "input",
-            {
-              "type": "number",
-              "step": "any",
-              "min": "0",
               "name": "band_context",
               "value": "0.0"
             }
@@ -2160,37 +2150,17 @@
               "type": "number",
               "step": "any",
               "min": "0",
+              "name": "band_repetitions",
+              "value": "0.0"
+            }
+          ],
+          [
+            "input",
+            {
+              "type": "number",
+              "step": "any",
+              "min": "0",
               "name": "band_exact",
-              "value": "0.0"
-            }
-          ],
-          [
-            "input",
-            {
-              "type": "number",
-              "step": "any",
-              "min": "0",
-              "name": "band_fuzzy_high",
-              "value": "0.0"
-            }
-          ],
-          [
-            "input",
-            {
-              "type": "number",
-              "step": "any",
-              "min": "0",
-              "name": "band_fuzzy_mid",
-              "value": "0.0"
-            }
-          ],
-          [
-            "input",
-            {
-              "type": "number",
-              "step": "any",
-              "min": "0",
-              "name": "band_fuzzy_low",
               "value": "0.0"
             }
           ],

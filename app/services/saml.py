@@ -35,16 +35,18 @@ Documented in: docs/architecture/sso-provisioning.md
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import logging
 import re
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
 import itsdangerous
 
-from app.services import security, settings
+from app import config
+from app.services import security, settings, shared_state
 
 _logger = logging.getLogger("loc_tms")
 PROXY_WARNING = ""
@@ -419,6 +421,12 @@ def _remember_assertion(assertion_id: str, not_on_or_after: str | None) -> bool:
                 "SAML NotOnOrAfter unparsable (%s); replay guard uses the 10-minute floor",
                 type(exc).__name__,
             )
+    if assertion_id and config.multi_web():
+        # N web processes: the consumed-id set must be shared (S3c, ADR 0097).
+        return shared_state.claim(
+            "saml:" + hashlib.sha256(assertion_id.encode("utf-8")).hexdigest(),
+            ttl_s=max(1, exp - now),
+        )
     with _REPLAY_LOCK:
         _prune_replay(now)
         if assertion_id and assertion_id in _REPLAY:
@@ -604,7 +612,7 @@ def process_acs(request, post_data: dict, *, routed_path: str):
     try:
         ts = auth.get_session_expiration()
         if ts:
-            not_after = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+            not_after = datetime.fromtimestamp(ts, tz=UTC).isoformat()
     except Exception as exc:
         _logger.warning(
             "SAML session expiration unreadable (%s); replay guard uses the 10-minute floor",

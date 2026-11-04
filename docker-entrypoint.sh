@@ -126,15 +126,129 @@ fi
 # The join key is needed only during bootstrap, never by the application.
 unset TS_AUTHKEY
 
+# --- OPT-IN web + N workers in one container (engine redesign S3b) --------------
+# LOC_TMS_WORKER_PROCESSES unset or 0 (the default): none of this runs and the container is
+# one exec'd command process exactly as before. N > 0: this shell stays PID 1 as a small
+# supervisor. It starts N `python -m app.worker` processes (LOC_TMS_ROLE=worker) and the web
+# command (LOC_TMS_ROLE=web), then:
+#   * SIGTERM/SIGINT: TERM to every child (each drains jobs for LOC_TMS_DRAIN_SECONDS), wait
+#     up to LOC_TMS_STOP_WAIT_SECONDS (default drain + 10), KILL stragglers, exit 0.
+#   * a child dies by itself: stop the others the same way and exit nonzero with that
+#     child's status. No in-shell restart: the container restart policy relaunches the whole
+#     group and boot recovery reclaims expired leases. Simple beats clever here.
+# Needs the durable queue (job_queue_backend=db, the default). See
+# docs/guides/postgres-migration.md.
+_alive() {
+    kill -0 "$1" 2>/dev/null || return 1
+    # A finished child stays a zombie until waited for, and kill -0 still succeeds on it.
+    if [ -r "/proc/$1/stat" ]; then
+        _st=$(sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | cut -c1)
+        [ "$_st" = "Z" ] && return 1
+    fi
+    return 0
+}
+
+run_web_and_workers() {
+    case "$LOC_TMS_WORKER_PROCESSES" in
+        *[!0-9]*|"")
+            echo "[entrypoint] LOC_TMS_WORKER_PROCESSES must be a whole number, got '$LOC_TMS_WORKER_PROCESSES'" >&2
+            exit 2 ;;
+    esac
+    if [ "$LOC_TMS_WORKER_PROCESSES" -gt 64 ]; then
+        echo "[entrypoint] LOC_TMS_WORKER_PROCESSES is capped at 64" >&2
+        exit 2
+    fi
+    # S3c (ADR 0097), checked before any worker starts: LOC_TMS_WEB_PROCESSES=N (default 1)
+    # serves HTTP from N uvicorn worker processes (uvicorn --workers N, one listening socket).
+    # The web role only: the background work stays in the worker processes started below.
+    web_procs="${LOC_TMS_WEB_PROCESSES:-1}"
+    case "$web_procs" in
+        *[!0-9]*|""|0)
+            echo "[entrypoint] LOC_TMS_WEB_PROCESSES must be a whole number of at least 1, got '$web_procs'" >&2
+            exit 2 ;;
+    esac
+    if [ "$web_procs" -gt 32 ]; then
+        echo "[entrypoint] LOC_TMS_WEB_PROCESSES is capped at 32" >&2
+        exit 2
+    fi
+    if [ "$web_procs" -gt 1 ]; then
+        set -- "$@" --workers "$web_procs"
+    fi
+    stop_wait="${LOC_TMS_STOP_WAIT_SECONDS:-$(( ${LOC_TMS_DRAIN_SECONDS:-8} + 10 ))}"
+    sup_pids=""
+    sup_stopping=0
+    trap 'sup_stopping=1' TERM INT
+    i=1
+    while [ "$i" -le "$LOC_TMS_WORKER_PROCESSES" ]; do
+        LOC_TMS_ROLE=worker ${LOC_TMS_WORKER_CMD:-python -m app.worker} &
+        sup_pids="$sup_pids $!"
+        echo "[entrypoint] worker $i/$LOC_TMS_WORKER_PROCESSES started (pid $!)"
+        i=$((i + 1))
+    done
+    LOC_TMS_ROLE=web "$@" &
+    sup_web_pid=$!
+    sup_pids="$sup_pids $sup_web_pid"
+    echo "[entrypoint] web started (pid $sup_web_pid) with $LOC_TMS_WORKER_PROCESSES worker process(es)"
+    sup_dead=""
+    while [ "$sup_stopping" -eq 0 ] && [ -z "$sup_dead" ]; do
+        for p in $sup_pids; do
+            if ! _alive "$p"; then sup_dead=$p; break; fi
+        done
+        [ -z "$sup_dead" ] && sleep 1
+    done
+    sup_rc=0
+    if [ -n "$sup_dead" ]; then
+        wait "$sup_dead" 2>/dev/null || sup_rc=$?
+        [ "$sup_rc" -eq 0 ] && sup_rc=1
+        echo "[entrypoint] child $sup_dead exited (status $sup_rc) -> stopping the group" >&2
+    else
+        echo "[entrypoint] stop requested -> signalling children"
+    fi
+    trap '' TERM INT
+    for p in $sup_pids; do kill -TERM "$p" 2>/dev/null || true; done
+    waited=0
+    while [ "$waited" -lt "$stop_wait" ]; do
+        any=0
+        for p in $sup_pids; do _alive "$p" && any=1; done
+        [ "$any" -eq 0 ] && break
+        sleep 1
+        waited=$((waited + 1))
+    done
+    for p in $sup_pids; do
+        if _alive "$p"; then
+            echo "[entrypoint] pid $p still running after ${stop_wait}s -> KILL" >&2
+            kill -KILL "$p" 2>/dev/null || true
+        fi
+        wait "$p" 2>/dev/null || true
+    done
+    exit "$sup_rc"
+}
+
 # Disable uvicorn proxy headers for default and custom uvicorn commands.
 # The application boundary owns forwarding via trusted_proxy_ips alone.
+# The flag is added once: the Dockerfile CMD already carries it, so it is not repeated.
+case " $* " in
+    *" --no-proxy-headers "*) _no_proxy="" ;;
+    *) _no_proxy="--no-proxy-headers" ;;
+esac
 case "${1:-}" in
-    uvicorn|*/uvicorn) set -- "$@" --no-proxy-headers --no-access-log --limit-concurrency 256 ;;
+    uvicorn|*/uvicorn) set -- "$@" $_no_proxy --no-access-log --limit-concurrency 256 ;;
     python|python3|*/python|*/python3)
         if [ "${2:-}" = "-m" ] && [ "${3:-}" = "uvicorn" ]; then
-            set -- "$@" --no-proxy-headers --no-access-log --limit-concurrency 256
+            set -- "$@" $_no_proxy --no-access-log --limit-concurrency 256
         fi ;;
 esac
+
+if [ "${LOC_TMS_WORKER_PROCESSES:-0}" != "0" ]; then
+    run_web_and_workers "$@"
+fi
+
+# Several web processes need the split roles (ADR 0097): refuse instead of starting N copies
+# of the single `all` process (each would run the job pools and the scheduler).
+if [ "${LOC_TMS_WEB_PROCESSES:-1}" != "1" ]; then
+    echo "[entrypoint] LOC_TMS_WEB_PROCESSES=${LOC_TMS_WEB_PROCESSES} needs LOC_TMS_WORKER_PROCESSES of at least 1" >&2
+    exit 2
+fi
 
 echo "[entrypoint] starting: $*"
 exec "$@"

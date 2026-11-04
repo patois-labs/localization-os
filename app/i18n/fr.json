@@ -146,7 +146,7 @@
       "step_workflow_desc": "Automatisez traduction, révision et assurance qualité sous forme de graphe réutilisable.",
       "step_workflow_cta": "Créer un flux",
       "step_provider_title": "Connecter un fournisseur",
-      "step_provider_desc": "Ajoutez une clé d'API pour passer en production. D'ici là, la traduction est bloquée ; choisissez Mock dans Configurer l’IA pour une démo hors ligne.",
+      "step_provider_desc": "Ajoutez une clé d'API pour traduire avec un vrai moteur. D'ici là, le moteur hors ligne Mock traduit, vous pouvez donc essayer chaque étape.",
       "step_provider_cta": "Configurer l'IA",
       "showme": "Montrez-moi",
       "spot_cta_hint": "Ceci ouvre l'écran où vous le ferez - on y va ?",
@@ -249,7 +249,7 @@
     },
     "jobs": {
       "title": "Historique des exécutions",
-      "intro": "Un journal chronologique de chaque tâche en arrière-plan et exécution de flux de travail – comme un journal d'audit, mais pour les exécutions. Les plus récentes d'abord. Les tâches interrompues sont marquées comme échouées au redémarrage.",
+      "intro": "Un journal chronologique de chaque tâche en arrière-plan et exécution de flux de travail – comme un journal d'audit, mais pour les exécutions. Les plus récentes d'abord. Les tâches et exécutions interrompues par un redémarrage sont reprises.",
       "col_type": "Type",
       "col_id": "#",
       "col_kind": "Type / flux",

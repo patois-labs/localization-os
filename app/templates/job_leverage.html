@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_viz_macros.html" as vm %}
+{% block title %}Job {{ job.id }} - leverage{% endblock %}
+{% block content %}
+<p><a href="/jobs" class="back"><span aria-hidden="true">&larr;</span> Jobs</a></p>
+
+{{ m.page_header('Job ' ~ job.id ~ ' - leverage') }}
+<section class="card" id="job-leverage">
+  <p class="muted">Source words per target language in four bands, for the document and
+    language this job covered{% if document %} (<a href="/documents/{{ document.id }}">{{ document.filename }}</a>){% endif %}.
+    A segment already filled keeps the band it was filled with; an unfilled one is looked up in the
+    translation memory now.</p>
+  {% if report and report.totals.words %}
+  {{ vm.leverage_report(report, csv_href="/jobs/" ~ job.id ~ "/leverage.csv") }}
+  {% else %}
+  <p class="muted small">No segmented content for this job - no leverage to show.</p>
+  {% endif %}
+</section>
+{% endblock %}

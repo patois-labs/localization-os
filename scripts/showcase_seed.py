@@ -31,7 +31,7 @@ import json
 import math
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 _ROOT = str(Path(__file__).resolve().parents[1])
@@ -185,7 +185,7 @@ def _seed(session, customer):
             "glossary_id": None,
             "workflow_ids": [],
             "api_key_ids": [],
-            "seeded_at": datetime.now(timezone.utc).isoformat(),
+            "seeded_at": datetime.now(UTC).isoformat(),
         }
         _save(session, customer.id, manifest)
     else:

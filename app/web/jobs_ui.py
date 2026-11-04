@@ -17,11 +17,11 @@ Documented in: docs/architecture/jobs-and-scheduler.md
 
 from fastapi import APIRouter, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlmodel import Session
 
 from app.db import engine
-from app.kernel import access, job_history, jobs, security
+from app.kernel import access, job_history, jobs, leverage, security
 from app.kernel import spend as _spend
 from app.web.deps import optional_id_param, templates
 
@@ -148,3 +148,65 @@ def job_status(jid: int, request: Request):
         # 404 (not 403) so ids cannot be enumerated for existence
         return JSONResponse({"error": "not found"}, status_code=404)
     return JSONResponse(jobs.status_dict(job))
+
+
+def _leverage_job_or_404(jid: int, request: Request):
+    """The job a leverage page may show, or a 404 response (the /jobs/{id}/status rule: a foreign,
+    unowned or missing job is the same 404)."""
+    job = jobs.get(jid)
+    owner = _owner_filter(request)
+    if not job or (owner is not None and job.created_by != owner) or not _job_in_org(request, job):
+        return None, JSONResponse({"error": "not found"}, status_code=404)
+    return job, None
+
+
+def _job_leverage_report(session, request: Request, job):
+    """(report, document, error response): a job without documents is a 400."""
+    from app.web.deps import _visibility_block
+
+    try:
+        scope = leverage.job_scope(session, job)
+    except leverage.LeverageError as exc:
+        return None, None, JSONResponse({"error": str(exc)}, status_code=exc.status)
+    blocked = _visibility_block(request, session, scope["project_id"])
+    if blocked:
+        return None, None, blocked
+    report = leverage.analyze(session, scope["project_id"], job_id=job.id)
+    from app.models import Document
+
+    return report, session.get(Document, scope["document_ids"][0]), None
+
+
+@router.get("/jobs/{jid}/leverage")
+def job_leverage_page(jid: int, request: Request):
+    """The leverage report for the document and language one job covered (web twin of
+    GET /api/jobs/{id}/leverage and `job leverage`)."""
+    job, err = _leverage_job_or_404(jid, request)
+    if err:
+        return err
+    with Session(engine) as session:
+        report, document, err = _job_leverage_report(session, request, job)
+        if err:
+            return err
+        return templates.TemplateResponse(
+            request,
+            "job_leverage.html",
+            {"request": request, "job": job, "report": report, "document": document},
+        )
+
+
+@router.get("/jobs/{jid}/leverage.csv")
+def job_leverage_csv(jid: int, request: Request):
+    """The job's leverage report as a CSV for quoting."""
+    job, err = _leverage_job_or_404(jid, request)
+    if err:
+        return err
+    with Session(engine) as session:
+        report, _document, err = _job_leverage_report(session, request, job)
+        if err:
+            return err
+    return Response(
+        leverage.to_csv(report),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="leverage-job-{jid}.csv"'},
+    )

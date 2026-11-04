@@ -14,7 +14,6 @@ Fixtures are hand-written here. Hermetic + offline. Final line: "TOML FILTER OK"
 
 import os
 import sys
-
 import tomllib
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

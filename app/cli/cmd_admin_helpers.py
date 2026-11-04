@@ -4,6 +4,7 @@ Documented in: docs/architecture/connectors.md
 """
 
 import sys
+from datetime import UTC
 
 from app.cli import _remote_impl
 from app.cli._common import (
@@ -368,9 +369,8 @@ def _parse_since(raw: str):
     if parsed.tzinfo is not None:
         # #546 (CLI twin of GET /api/audit/export): audit.iter_export compares against the stored
         # naive-UTC ts and SQLite binds drop a tz offset, so convert an aware bound to naive UTC.
-        from datetime import timezone
 
-        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
     return parsed
 
 

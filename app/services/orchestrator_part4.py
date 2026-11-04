@@ -409,7 +409,19 @@ def _run_thread_alive(run_id) -> bool:
     if run_id is None:
         return False
     needle = "%s%d-" % (RUN_THREAD_PREFIX, int(run_id))  # noqa: UP031
-    return any(t.name.startswith(needle) for t in threading.enumerate() if t.is_alive())
+    # S1: a batch member executes on `loc-batch-member-<id>` (batch_runs_hub.run_queued_member).
+    member = f"loc-batch-member-{int(run_id)}"
+    # S2 (ADR 0092): a run parked between step visits has no thread for a moment; it is still
+    # being executed by this process (its continuation thread will carry the same name).
+    from app.services import run_segments
+
+    if run_segments.is_parked(run_id):
+        return True
+    return any(
+        (t.name.startswith(needle) or t.name == member)
+        for t in threading.enumerate()
+        if t.is_alive()
+    )
 
 
 def _write_progress_row(
@@ -456,7 +468,11 @@ def _write_progress_row(
             run.progress_at = stamp
             s.add(run)
             s.commit()
-            return True
+        # S3 (ADR 0095): a worker process tells the web role's open run stream.
+        from app.services import wake
+
+        wake.run_changed(run_id, "progress")
+        return True
     except Exception:
         # Telemetry only: a lost persist costs one refresh of a counter, never the run.
         log.debug("run progress persist failed for run %s", run_id, exc_info=True)
@@ -505,7 +521,12 @@ def _abort_if_superseded(session: Session, run: WorkflowRun) -> bool:
     Reads through a SEPARATE session so the answer is committed state rather than
     this session's identity map (which still holds the row as we last saw it)."""
     from app.db import engine
+    from app.services import run_resume
 
+    if run_resume.taken_over(run.id):
+        # S1 (ADR 0090): a restart resume took this run over; its successor owns the write-back.
+        log.warning("Run %s was taken over by another execution; this one stops", run.id)
+        return True
     with Session(engine) as probe:
         fresh = probe.get(WorkflowRun, run.id)
         if fresh is None or fresh.status not in (RunStatus.FAILED, RunStatus.CANCELLED):
@@ -546,10 +567,18 @@ def _commit_run_terminal(session: Session, run: WorkflowRun, final_status: str) 
     back on abort; a segmented run's per-segment content was already committed incrementally
     and stands, exactly as `_abort_if_superseded` documents."""
     from app.db import engine
+    from app.services import run_resume
 
     with Session(engine) as probe:
         cur = probe.get(WorkflowRun, run.id)
         cur_status = cur.status if cur is not None else None
+        cur_owner = cur.owner if cur is not None else None
+    _mine = run_resume.held_by_this_thread(run.id)
+    if _mine and cur_owner != _mine:
+        # S1 (ADR 0090): taken over by a restart resume; the successor finishes the run.
+        session.rollback()
+        log.warning("Run %s was taken over by another execution; write-back DISCARDED", run.id)
+        return False
     if cur_status not in (RunStatus.RUNNING, RunStatus.PENDING):
         session.rollback()
         log.warning(

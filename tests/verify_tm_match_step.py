@@ -649,59 +649,57 @@ def test_add_step_parity_tm_match():
         # a tm_match step needs no provider/prompt and is created cleanly
         step = wf_svc.add_step(s, wf.id, name="Match TM", step_type=StepType.TM_MATCH)
         assert step.step_type == StepType.TM_MATCH and not step.provider, step
-        # Batch 15 T1 (SPEC-tm-match-step-config §8.A): a NEW tm_match step SEEDS its five
-        # scalar config columns from the current globals (a concrete snapshot, D15-4) --
-        # NOT left NULL. With the shipped defaults that is threshold 100 / fuzzy "soft" /
-        # lock_ice on / hundreds_enter_lqa on / context_floor 95; the pool selection is
-        # NEVER snapshotted (S2 -> NULL = all readable).
-        assert step.tm_fill_threshold == 100, step.tm_fill_threshold
-        assert step.tm_fuzzy_lock_mode == "soft", step.tm_fuzzy_lock_mode
+        # Batch 15 T1 (SPEC-tm-match-step-config §8.A): a NEW tm_match step SEEDS its lock
+        # config columns from the current globals (a concrete snapshot, D15-4) -- NOT left
+        # NULL. With the shipped defaults that is lock_ice on / hundreds_enter_lqa on; the
+        # pool selection is NEVER snapshotted (S2 -> NULL = all readable). ADR 0102: the fill
+        # threshold, fuzzy lock mode and context floor no longer exist, so they are not asserted.
         assert step.tm_lock_ice is True, step.tm_lock_ice
         assert step.tm_hundreds_enter_lqa is True, step.tm_hundreds_enter_lqa
-        assert step.tm_context_floor == 95, step.tm_context_floor
         assert step.tm_pool_selection is None, step.tm_pool_selection
-        # Batch 15 T1 (the DE-ALIAS): the six tm_match config fields are now LIVE on a
-        # tm_match step -- a value set on them is ACCEPTED, not refused (the mirror image
-        # of how they are refused on every OTHER type below).
+        # Batch 15 T1 (the DE-ALIAS): the tm_match config fields are LIVE on a tm_match step --
+        # a value set on them is ACCEPTED, not refused (the mirror image of how they are
+        # refused on every OTHER type below).
         live = wf_svc.add_step(
             s,
             wf.id,
             name="Configured",
             step_type=StepType.TM_MATCH,
-            tm_fill_threshold=85,
-            tm_fuzzy_lock_mode="none",
+            tm_lock_ice=False,
         )
-        assert live.tm_fill_threshold == 85 and live.tm_fuzzy_lock_mode == "none", live
+        assert live.tm_lock_ice is False, live
         # a dead field actively set (provider) is REFUSED, not silently dropped
         try:
             wf_svc.add_step(s, wf.id, name="Bad", step_type=StepType.TM_MATCH, provider="claude")
             raise AssertionError("a provider on a tm_match step must be refused")
         except WorkflowError as e:
             assert "tm_match" in str(e), str(e)
-        # ...and the six tm_match config fields are now DEAD on a NON-tm_match step: a
-        # tm_fill_threshold set on an llm_agent step is refused (LAW-TM-10).
+        # ...and the tm_match config fields are DEAD on a NON-tm_match step: a tm_lock_ice
+        # set on an llm_agent step is refused (LAW-TM-10).
         try:
             wf_svc.add_step(
-                s, wf.id, name="BadLLM", step_type=StepType.LLM_AGENT, tm_fill_threshold=85
+                s, wf.id, name="BadLLM", step_type=StepType.LLM_AGENT, tm_lock_ice=False
             )
-            raise AssertionError("tm_fill_threshold on an llm_agent step must be refused")
+            raise AssertionError("tm_lock_ice on an llm_agent step must be refused")
         except WorkflowError as e:
-            assert "TM fill threshold" in str(e), str(e)
+            assert "TM lock in-context" in str(e), str(e)
     print("  add_step parity: tm_match creatable + seeded + config live; dead fields refused: OK")
 
 
 # --- (6) policy resolves from global settings (the §6 mapping) ---------------
 def test_policy_resolves_from_settings():
     with Session(engine) as s:
-        settings.set_many({"tm_hundreds_enter_lqa": "0", "tm_context_floor": "90"})
+        settings.set_many({"tm_hundreds_enter_lqa": "0", "tm_lock_ice": "0"})
         try:
             pol = tm_lock.resolve_policy(s)
-            assert pol.hundreds_enter_lqa is False and pol.context_floor == 90, pol
+            assert pol.hundreds_enter_lqa is False and pol.lock_ice is False, pol
         finally:
-            settings.set_many({"tm_hundreds_enter_lqa": "1", "tm_context_floor": "95"})
+            settings.set_many({"tm_hundreds_enter_lqa": "1", "tm_lock_ice": "1"})
         pol2 = tm_lock.resolve_policy(s)
-        assert pol2.hundreds_enter_lqa is True and pol2.context_floor == 95, pol2
-    print("  policy: resolves lock_ice/hundreds_enter_lqa/context_floor from settings: OK")
+        assert pol2.hundreds_enter_lqa is True and pol2.lock_ice is True, pol2
+    # ADR 0102: the context floor was a deferred-ICE percentage; it is gone with the fuzzy fields.
+    assert not hasattr(pol2, "context_floor") and not hasattr(pol2, "fill_threshold")
+    print("  policy: resolves lock_ice/hundreds_enter_lqa from settings: OK")
 
 
 # --- B4: tm_match never fills/locks over an existing human translation --------

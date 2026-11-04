@@ -294,7 +294,7 @@ def _entry_hash(entries):
     return _hash("glossary", len(sig), *sig)
 
 
-def _glossary_manifest(s, project, plan, src, tgt):
+def _glossary_manifest(s, project, plan, src, tgt, run_cache=None):
     """Glossaries in play, in precedence order: id, name, status, pin state, content
     hash. Lists the module glossaries the plan resolved AND -- when the plan merges the
     project's LEGACY per-project entries (include_legacy) -- a synthetic `legacy` source
@@ -313,7 +313,7 @@ def _glossary_manifest(s, project, plan, src, tgt):
         try:
             from app.services import project_sources
 
-            pinned = set(project_sources.pinned_glossary_ids(s, project) or ())
+            pinned = set(project_sources.pinned_glossary_ids(s, project, run_cache=run_cache) or ())
         except Exception:
             pinned = set()
         for gid in getattr(plan, "glossary_ids", ()) or ():
@@ -363,20 +363,32 @@ def _glossary_manifest(s, project, plan, src, tgt):
     return out
 
 
-def _style_guide_manifest(s, project, src, tgt):
+def _style_guide_manifest(s, project, src, tgt, run_cache=None):
     """The resolved style guide: id, name, status, content hash (over its body), version
     (updated_at). None when none resolves. Replays the run's own resolver."""
     try:
+        from app.services import run_cache as _rc
         from app.services import style_guides
 
-        g = style_guides.resolve_style_guide(
-            s,
-            org_id=getattr(project, "org_id", None),
-            customer_id=getattr(project, "customer_id", None),
-            content_type_id=getattr(project, "content_type_id", None),
-            source_locale=src,
-            target_locale=tgt,
+        scope = (
+            getattr(project, "org_id", None),
+            getattr(project, "customer_id", None),
+            getattr(project, "content_type_id", None),
+            src,
+            tgt,
         )
+        key = _rc.style_guide_key(*scope)
+        if run_cache is not None and key in run_cache:
+            g = run_cache[key]  # the guide the run resolved (S4 follow-up)
+        else:
+            g = style_guides.resolve_style_guide(
+                s,
+                org_id=scope[0],
+                customer_id=scope[1],
+                content_type_id=scope[2],
+                source_locale=src,
+                target_locale=tgt,
+            )
         if g is None:
             return None
         return {
@@ -402,7 +414,7 @@ def _formality_manifest(s, project, doc, tgt):
         return None
 
 
-def _tm_manifest(s, project, src, tgt):
+def _tm_manifest(s, project, src, tgt, run_cache=None):
     """TM sources in play: the run's OWN project plus any ATTACHED source projects, in
     precedence order (own first), each with a content-version hash. The hash is a cheap
     VERSION SIGNATURE (row count + max row id per project) -- it changes when the TM
@@ -418,21 +430,32 @@ def _tm_manifest(s, project, src, tgt):
 
         def _sig(pid):
             try:
-                n_seg = s.exec(
-                    select(func.count()).select_from(SegmentTM).where(SegmentTM.project_id == pid)
+                # S4 follow-up: both counts in one statement (two scalar subqueries).
+                n_seg, n_ft = s.exec(
+                    select(
+                        select(func.count())
+                        .select_from(SegmentTM)
+                        .where(SegmentTM.project_id == pid)
+                        .scalar_subquery(),
+                        select(func.count())
+                        .select_from(FullTextTM)
+                        .where(FullTextTM.project_id == pid)
+                        .scalar_subquery(),
+                    )
                 ).one()
-                n_ft = s.exec(
-                    select(func.count()).select_from(FullTextTM).where(FullTextTM.project_id == pid)
-                ).one()
-                n_seg = n_seg[0] if isinstance(n_seg, (list, tuple)) else n_seg
-                n_ft = n_ft[0] if isinstance(n_ft, (list, tuple)) else n_ft
                 return _hash("tm", pid, int(n_seg or 0), int(n_ft or 0))
             except Exception:
                 return None
 
         precedence = [project.id]
+        from app.services import run_cache as _rc
+
+        ids_key = _rc.tm_source_ids_key(project.id)
         try:
-            attached = list(tm_svc._tm_source_project_ids(s, project.id) or ())
+            if run_cache is not None and ids_key in run_cache:
+                attached = list(run_cache[ids_key] or ())  # the sources the run read
+            else:
+                attached = list(tm_svc._tm_source_project_ids(s, project.id) or ())
         except Exception:
             attached = []
         for pid in attached:
@@ -456,7 +479,7 @@ def _tm_manifest(s, project, src, tgt):
         return None
 
 
-def _llmemory_manifest(s, project, src, tgt):
+def _llmemory_manifest(s, project, src, tgt, run_cache=None):
     """The LLMemory context eligible for this run: the ACTIVE, in-scope recall entries
     (ids + a content hash of each belief's value), consistent with the id+hash rule (D5).
     Best-effort -- recall picks a tiny-k subset per segment at run time; here we record
@@ -470,14 +493,18 @@ def _llmemory_manifest(s, project, src, tgt):
 
         if not extensions.memory.installed:
             return None
+        # Locales normalized exactly as recall normalizes them (select_for_segment /
+        # select_doc_note): _scope_ok compares an entry's normalized locales against these,
+        # so raw "en-US" never matched a pair-scoped memory and the manifest left it out.
         entries = extensions.memory._active_entries(
             s,
             MemoryKind.ALL,
             customer_id=getattr(project, "customer_id", None),
             project_id=project.id,
-            src=src,
-            tgt=tgt,
+            src=extensions.memory._norm_locale(src),
+            tgt=extensions.memory._norm_locale(tgt),
             org_id=getattr(project, "org_id", None),
+            recall_cache=run_cache,
         )
         out = []
         for e in entries or []:

@@ -1,7 +1,7 @@
 """Chunk 2 verification — dual translation memory, offline.
 
 - import a TMX into segment TM
-- exact (100%) and fuzzy (75-99%) lookup; below-threshold returns None
+- exact (100%) lookup only; a near miss returns None (ADR 0102: fuzzy matching was removed)
 - export round-trips back to valid TMX
 - full-text TM: store then retrieve by content hash; different text misses
 - end-to-end: upload a docx, "Apply 100% TM matches" fills exact targets
@@ -79,13 +79,13 @@ def main() -> None:
         m = tm.lookup(s, pid, "Adventure awaits.", "en-US", "fr-FR")
         assert m and m["match_pct"] == 100, f"expected 100% exact, got {m}"
         assert m["target_text"] == "L'aventure vous attend."
-        # fuzzy (punctuation change)
+        # ADR 0102: a punctuation change is NOT a match any more (it was a 75-99 % fuzzy hit)
         m2 = tm.lookup(s, pid, "Adventure awaits!", "en-US", "fr-FR")
-        assert m2 and 75 <= m2["match_pct"] < 100, f"expected fuzzy, got {m2}"
+        assert m2 is None, f"expected no match for a near miss, got {m2}"
         # miss
         m3 = tm.lookup(s, pid, "Totally different content here.", "en-US", "fr-FR")
         assert m3 is None, f"expected no match, got {m3}"
-        print(f"  exact=100%, fuzzy={m2['match_pct']}%, miss=None")
+        print("  exact=100%, near miss=None, miss=None")
 
         # inline-fidelity TM exclusion (Phase 5 chunk 6, revised contract): a
         # source carrying inline placeholder tokens is EXCLUDED from TM entirely —
@@ -192,44 +192,38 @@ def main() -> None:
 
         # length-band miss: a candidate far outside the min_score-aware length
         # band is provably below threshold and must NOT be returned as a match.
-        # "Adventure awaits." (len 17) vs a very long query -> band excludes it.
+        # ADR 0102: the length band and its min_score widening are gone with the fuzzy engine.
+        # A far-off query misses, and asking for a fuzzy floor is refused with a clear error.
         long_q = "Adventure awaits " + ("x " * 60)
-        assert tm.lookup(s, pid, long_q, "en-US", "fr-FR") is None, (
-            "a query far outside the length band must miss"
-        )
-        # low min_score WIDENS the band: the same long query, at min_score=1,
-        # now considers the short row (still scored honestly by fuzz.ratio).
-        low = tm.lookup(s, pid, long_q, "en-US", "fr-FR", min_score=1)
-        assert low is not None and low["match_pct"] >= 1, (
-            f"low min_score should widen the band to find something, got {low}"
-        )
-        print(f"  length-band: high-min miss / low-min widens (match={low['match_pct']}%)")
+        assert tm.lookup(s, pid, long_q, "en-US", "fr-FR") is None
+        try:
+            tm.lookup(s, pid, long_q, "en-US", "fr-FR", min_score=1)
+        except ValueError as exc:
+            assert "ADR 0102" in str(exc)
+        else:
+            raise AssertionError("min_score=1 must raise: fuzzy matching was removed")
+        print("  far-off query misses; min_score below 100 is refused")
 
-    # --- Finding 1 regression: the removed upper length-band bound (adversarial
-    #     review). The band ran on func.length(STORED source_text) but scoring on
-    #     normalize()d text, and stored length >= normalized length. A row whose
-    #     NORMALIZED length is in-band can have a padded STORED length above hi, so
-    #     the old `stored_len <= hi` clause wrongly EXCLUDED a legitimate match.
-    #     Reviewer's exact repro: stored source is a whitespace-run-padded string
-    #     (normalizes to "the quick brown fax", 19 chars) vs query "xhe quick brown
-    #     fox" (also 19). fuzz.ratio ~= 94.7%, so lookup MUST return it (>=75). ---
+    # --- Finding 1 regression (ADR 0102 form): a whitespace-run-padded stored source is matched
+    #     by hash after normalization, so it still hits EXACTLY with a normalized query, and a
+    #     one-letter difference ("xhe quick brown fox", the old fuzzy repro) no longer matches. ---
     with Session(engine) as s:
         padded = "the" + (" " * 30) + "quick brown fax"  # stored length ~48
         tm.write_back(s, pid, padded, "le renard brun rapide", "en-US", "fr-FR")
         assert tm.normalize(padded) == "the quick brown fax"
-        hit = tm.lookup(s, pid, "xhe quick brown fox", "en-US", "fr-FR")
-        assert hit is not None, (
-            "whitespace-run-padded stored source must NOT be dropped by the length band"
-        )
-        assert hit["match_pct"] >= 75, ("expected >=75% match, got", hit)
+        hit = tm.lookup(s, pid, "the quick brown fax", "en-US", "fr-FR")
+        assert hit is not None and hit["match_pct"] == 100, hit
         assert hit["target_text"] == "le renard brun rapide", hit
-        print(f"  finding-1: whitespace-padded stored source matches ({hit['match_pct']}%)")
+        assert tm.lookup(s, pid, "xhe quick brown fox", "en-US", "fr-FR") is None
+        print(
+            "  finding-1: whitespace-padded stored source matches exactly; one-letter diff misses"
+        )
 
     # --- big-TM: exact match still found past the candidate cap ---
     with Session(engine) as s:
         # Seed ~200 filler rows that all share the "Adventure" prefix + length so
         # they crowd the length band + prefix LIKE, then confirm an EXACT source
-        # still returns 100% (exact-hash short-circuit bypasses the cap entirely).
+        # still returns 100% (the exact lookup is one indexed hash probe).
         for i in range(200):
             tm.write_back(
                 s,
@@ -241,7 +235,7 @@ def main() -> None:
             )
         big = tm.lookup(s, pid, "Adventure awaits.", "en-US", "fr-FR")
         assert big and big["match_pct"] == 100, (
-            f"exact match must survive a big TM (>{tm.TM_FUZZY_CANDIDATE_CAP} rows), got {big}"
+            f"exact match must survive a big TM (200+ rows), got {big}"
         )
         assert big["target_text"] == "L'aventure vous attend."
         assert tm.count(s, pid) >= 200

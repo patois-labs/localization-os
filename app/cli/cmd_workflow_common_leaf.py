@@ -33,40 +33,26 @@ def _wait_hours(value: str) -> int:
 
 
 def _tm_match_config_args(p, *, editing: bool) -> None:
-    """The six tm_match per-step config flags (Batch 15 T1, SPEC-tm-match-step-config
+    """The tm_match per-step config flags (Batch 15 T1, SPEC-tm-match-step-config
     §8.D), shared by add-step and edit-step. On ADD (editing=False) the tri-state bools
-    default to "auto" (inherit -> SEED a concrete snapshot) and the scalars/mode/pool
-    default to None/"" (inherit/seed). On EDIT (editing=True) every default is None =
+    default to "auto" (inherit -> SEED a concrete snapshot) and the pool defaults to ""
+    (inherit/seed). On EDIT (editing=True) every default is None =
     "not passed = leave unchanged" (the partial contract); an explicit "auto"/"" value
-    clears the override back to inherit. LIVE only on a tm_match step (refused elsewhere)."""
+    clears the override back to inherit. LIVE only on a tm_match step (refused elsewhere).
+
+    ADR 0102: --fill-threshold, --fuzzy-lock-mode and --context-floor were removed (TM
+    fills exact matches only). They are kept as hidden plain-string flags so a script that
+    still passes one fails with the clear "was removed" message from the service layer
+    (exit code 1, like any WorkflowError) instead of an argparse "unrecognized" crash.
+    `--fill-threshold 100` is an accepted no-op."""
     _tri_default = None if editing else "auto"
     _pool_default = None if editing else ""
-    # M5: the scalar + mode flags are PLAIN STRINGS (not type=int / closed mode choices), so
-    # 'auto' / 'inherit' / '' all clear the override back to inherit -- LAW-TM-1/TM-11 are
-    # fully true on the CLI (web / /api / MCP already clear all six). The service coercers
-    # (_coerce_tm_scalar_int / _coerce_tm_fuzzy_lock_mode) map auto/inherit/blank/junk -> None
-    # and a real value -> the override; the engine clamps the threshold [50,100] / floor
-    # [50,99] at read.
-    p.add_argument(
-        "--fill-threshold",
-        dest="tm_fill_threshold",
-        default=None,
-        metavar="PCT",
-        help="tm_match: minimum match %% to FILL a segment (clamped 50-100; 100 = "
-        "exact matches only). 'auto'/'inherit' (or blank) = inherit the global "
-        "(tm_fill_threshold). Refused on non-tm_match steps.",
-    )
-    p.add_argument(
-        "--fuzzy-lock-mode",
-        dest="tm_fuzzy_lock_mode",
-        default=None,
-        choices=["auto", "inherit", "none", "soft", "policy"],
-        help="tm_match: how a below-100 fuzzy fill locks -- 'none' (a suggestion, "
-        "overwritten by a downstream translate step), 'soft' (enters LQA), or "
-        "'policy' (the same lock the 100 band would give). 'auto'/'inherit' (or "
-        "not passed) = inherit the global (tm_fuzzy_lock_mode). Refused on "
-        "non-tm_match steps.",
-    )
+    for _flag, _dest in (
+        ("--fill-threshold", "tm_fill_threshold"),
+        ("--fuzzy-lock-mode", "tm_fuzzy_lock_mode"),
+        ("--context-floor", "tm_context_floor"),
+    ):
+        p.add_argument(_flag, dest=_dest, default=None, metavar="VALUE", help=argparse.SUPPRESS)
     p.add_argument(
         "--lock-ice",
         dest="tm_lock_ice",
@@ -82,16 +68,6 @@ def _tm_match_config_args(p, *, editing: bool) -> None:
         choices=["auto", "on", "off"],
         help="tm_match: send 100%% matches to LQA (soft lock) instead of hard-locking "
         "('auto' = inherit the global tm_hundreds_enter_lqa; 'on'/'off' override). "
-        "Refused on non-tm_match steps.",
-    )
-    p.add_argument(
-        "--context-floor",
-        dest="tm_context_floor",
-        default=None,
-        metavar="PCT",
-        help="tm_match: attach near matches at or above this score as context "
-        "(clamped 50-99; forward-compat until the ICE/context wave ships). "
-        "'auto'/'inherit' (or blank) = inherit the global (tm_context_floor). "
         "Refused on non-tm_match steps.",
     )
     p.add_argument(

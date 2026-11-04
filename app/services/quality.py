@@ -333,6 +333,19 @@ __all__ = [
 ]
 
 
+def _status_expired_in(session, segment) -> bool:
+    """True when `segment` is a persistent row of `session` whose `status` is not loaded
+    (expired by a commit), so its next attribute read re-loads it from the database.
+    Anything else (a stub, a detached or pending row, another session's row) is False."""
+    try:
+        from sqlalchemy import inspect as _sa_inspect
+
+        state = _sa_inspect(segment)
+        return bool(state.persistent and state.session is session and "status" in state.unloaded)
+    except Exception:
+        return False
+
+
 def commit_mt_output(
     session,
     segment,
@@ -419,6 +432,12 @@ def commit_mt_output(
     never the hard-lock gate. The sole caller is the full-text paragraph editor's
     `_commit_body` (its save/revert routes) -- no machine path passes it. Default False, so
     every machine caller keeps full protection and is byte-identical."""
+    # S4 query diet (ADR 0093): is `status` EXPIRED on a row this session holds (the usual
+    # case right after the caller's previous commit)? Then the first attribute read below
+    # re-loads the whole row from the database, inside this call, and that load IS the
+    # fresh read the freshness check further down wants: the targeted status SELECT would
+    # read the same column a moment later. Taken before any attribute is touched.
+    _status_loads_fresh = _status_expired_in(session, segment)
     # TM-matching HARD-LOCK enforcement (PROPOSAL-tm-matching-workflow-step §5), the
     # FIRST gate: this seam is the sole writer of MACHINE / imported text, so one check
     # here makes an LLM/MT/TM-apply/import overwrite of a hard-locked segment impossible
@@ -486,7 +505,10 @@ def commit_mt_output(
         _mem_status = getattr(segment, "status", None)
         _db_status = None
         _seg_id = getattr(segment, "id", None)
-        if _seg_id is not None:
+        if _status_loads_fresh:
+            # Read from the database inside this call (see _status_expired_in above).
+            _db_status = _mem_status
+        elif _seg_id is not None:
             try:
                 with session.no_autoflush:
                     _db_status = session.exec(

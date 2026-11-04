@@ -17,7 +17,7 @@ _begin_direct_envelope from app.services.translate_common.
 Order of operations per the TMS model:
   full-text mode  -> check Full-Text TM first; on miss, one whole-doc MT call, then store
   segmented mode  -> per segment: 100% segment-TM short-circuit; else MT with glossary
-                     constraints (+ fuzzy TM reference) injected into the prompt
+                     constraints (+ TM example pairs) injected into the prompt
 
 The work is a generator (`pretranslate_stream`) yielding one event per segment so
 the SSE endpoint can show it filling in live; `pretranslate_document` drains it.
@@ -156,6 +156,14 @@ def require_mt_role(user) -> None:
         raise MTRoleRefused("Your role does not allow starting machine translation.")
 
 
+def _pin_run_rows(session: Session, doc_id: int) -> tuple:
+    """(document, project, customer) of a translate run, read once on the run's session
+    (any of them None when missing), in one joined read. See pretranslate_stream."""
+    from app.services import run_cache
+
+    return run_cache.load_document_chain(session, doc_id)
+
+
 def pretranslate_stream(
     session: Session,
     doc_id: int,
@@ -180,10 +188,21 @@ def pretranslate_stream(
     from app.models import TapStatus
     from app.services import ai_optout, spend
 
+    # S4 query diet (ADR 0093): hold this run's document, project and customer rows for the
+    # whole stream. The session's identity map keeps rows only while something references
+    # them, so each helper below (opt-out refusal, envelope, impl, formality, recall) used
+    # to re-read the rows the previous one had just dropped. Same session, same rows; a
+    # commit still expires them and the next read re-loads, exactly as before.
+    _pinned_rows = _pin_run_rows(session, doc_id)
     # AI opt-out (DPAI-08): every direct-MT caller (web SSE, the MT job, the CLI) funnels
     # through here; refuse before the envelope opens so nothing is sent or recorded.
     ai_optout.refuse_for_document(session, doc_id, "machine translation")
     _env_ids = _begin_direct_envelope(session, doc_id, locale)
+    # S4 follow-up: the run's read cache (app/services/run_cache.py) is owned here, not in
+    # the impl, so the envelope's finalize and enrich below reuse what the run already
+    # resolved (glossary plan, entries and matches, style guide, memories, TM sources)
+    # instead of reading it all again after the last segment.
+    _run_cache: dict = {}
     _saw_summary = False
     _exc = False
     _abandoned = False
@@ -206,6 +225,7 @@ def pretranslate_stream(
                 context_brief=context_brief,
                 _env_ids=_env_ids,
                 stats_sink=stats_sink,
+                run_cache=_run_cache,
             ),
             _booked,
         ):
@@ -234,11 +254,13 @@ def pretranslate_stream(
             _status = TapStatus.ABANDONED
         else:
             _status = TapStatus.FAILED
-        tap_envelope.finalize_pair(_aid, _rid, _status)
+        tap_envelope.finalize_pair(_aid, _rid, _status, run_cache=_run_cache)
         # Wave B: enrich the finalized direct-MT leg (manifest from project/doc, totals
         # + engine mix from the call file). Best-effort, never raises; no-ops unless
         # terminal. Observer read over persisted state -- no translate-path work.
-        tap_enrich.enrich(_aid, _rid, document_id=doc_id, target_locale=locale)
+        tap_enrich.enrich(
+            _aid, _rid, document_id=doc_id, target_locale=locale, run_cache=_run_cache
+        )
 
 
 def pretranslate_document(

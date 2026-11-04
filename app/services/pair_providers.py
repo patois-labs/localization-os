@@ -322,14 +322,29 @@ def mapping_for_project(session: Session, project_id: int) -> list[dict]:
     {source_locale, target_locale, provider} dicts (sorted by target) — for the
     project detail view, `project show`, and /api project detail. Empty list when
     the project is UNIFORM or has no rows."""
+    from sqlalchemy import bindparam
+
+    from app import db
+
+    # S9: built once per process; only the three columns the payload carries, as rows.
     rows = session.exec(
-        select(ProjectPairProvider)
-        .where(ProjectPairProvider.project_id == project_id)
-        .order_by(ProjectPairProvider.target_locale)
+        db.prebuilt(
+            "pair_providers.mapping_for_project",
+            lambda: (
+                select(
+                    ProjectPairProvider.source_locale,
+                    ProjectPairProvider.target_locale,
+                    ProjectPairProvider.provider,
+                )
+                .where(ProjectPairProvider.project_id == bindparam("pid"))
+                .order_by(ProjectPairProvider.target_locale)
+            ),
+        ),
+        params={"pid": project_id},
     ).all()
     return [
-        {"source_locale": r.source_locale, "target_locale": r.target_locale, "provider": r.provider}
-        for r in rows
+        {"source_locale": src, "target_locale": tgt, "provider": provider}
+        for src, tgt, provider in rows
     ]
 
 

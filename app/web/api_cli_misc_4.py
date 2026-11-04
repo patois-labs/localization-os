@@ -3,6 +3,8 @@
 Documented in: docs/architecture/surfaces-and-parity.md
 """
 
+from datetime import UTC
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from sqlmodel import Session, select
@@ -279,14 +281,14 @@ def _tm_int(qp, name):
 
 
 def _tm_date(qp, name):
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     raw = (qp.get(name) or "").strip()
     if not raw:
         return None
     try:
         d = datetime.strptime(raw, "%Y-%m-%d")
-        return d.replace(tzinfo=timezone.utc).replace(tzinfo=None)
+        return d.replace(tzinfo=UTC).replace(tzinfo=None)
     except ValueError:
         return None
 

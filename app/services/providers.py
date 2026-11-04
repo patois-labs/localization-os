@@ -452,6 +452,25 @@ def _is_outage_error(e: Exception) -> bool:
     return type(e).__name__.lower() in _OUTAGE_NAMES or isinstance(e, ConnectionError)
 
 
+def _drops_ai_hand_off(fn):
+    """run_completion's AI opt-out hand-off (ADR 0093) ends with the call: whatever path it
+    leaves by, an unused marker is dropped so no later engine call can take it (gate M1).
+    ai_optout is imported lazily, like everywhere else in this module."""
+    import functools
+
+    @functools.wraps(fn)
+    def _wrapped(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            from app.services import ai_optout
+
+            ai_optout.clear_hand_off()
+
+    return _wrapped
+
+
+@_drops_ai_hand_off
 def run_completion(
     spec: ProviderSpec,
     prompt: str,
@@ -503,7 +522,9 @@ def run_completion(
     AIOptOutRefused). Every provider's complete() carries the same guard as well."""
     from app.services import ai_optout
 
-    ai_optout.guard("an AI engine call")
+    # hand_off: the provider complete() guard reached below takes this fresh answer once
+    # instead of resolving the same scopes again (S4, ADR 0093; ai_optout._HAND_OFF).
+    ai_optout.guard("an AI engine call", hand_off=True)
     targets = [(spec.provider, spec.model)]
     if spec.fallback_provider:
         targets.append((spec.fallback_provider, spec.fallback_model))

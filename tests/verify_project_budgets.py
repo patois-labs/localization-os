@@ -886,8 +886,30 @@ def test_api_enforcement_and_rbac():
 
         # DELETE (admin) removes it -> translate allowed again (202).
         assert c.post(f"/api/projects/{pid}/budget/delete", headers=HA).status_code == 200
+        with Session(engine) as s:
+            last_job = max([0, *s.exec(select(Job.id)).all()])
         r = c.post(f"/api/documents/{doc_id}/translate", headers=HA, json={"targets": ["fr-FR"]})
         assert r.status_code == 202, (r.status_code, r.text)
+        # Let the job this POST queued finish here: on the durable queue (the default since S2,
+        # ADR 0092) a worker claims it on its own schedule, and a job left running would call
+        # whatever provider a LATER test registers as "claude" (seen on a test server as a stray
+        # PricedStubProvider call in the Advanced checks).
+        import time as _time
+
+        deadline = _time.time() + 60
+        while _time.time() < deadline:
+            with Session(engine) as s:
+                live = s.exec(
+                    select(Job).where(
+                        Job.id > last_job,
+                        Job.kind == "translate_document",
+                        Job.status.in_((JobStatus.QUEUED, JobStatus.RUNNING)),
+                    )
+                ).all()
+            if not live:
+                break
+            _time.sleep(0.1)
+        assert not live, f"queued translate job(s) never finished: {[j.id for j in live]}"
         print(
             "  api: admin-only CRUD; over-budget 429 (zero jobs); manager+ show block; delete re-opens"  # noqa: E501
         )

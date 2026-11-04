@@ -35,6 +35,8 @@ from tests._bootstrap import init_env
 
 init_env("loctms_segapprove_")
 
+from datetime import UTC
+
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
@@ -168,9 +170,9 @@ def test_service_seam():
 
     with Session(engine) as s:
         k = StringKey(project_id=pid, name="dead.key")
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        k.deleted_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        k.deleted_at = datetime.now(UTC).replace(tzinfo=None)
         s.add(k)
         s.commit()
         s.refresh(k)

@@ -16,6 +16,8 @@ Two caps, both configurable (``app/config.py``):
   every other request that is not signed in (no valid session, no valid API key).
 * ``REQUEST_MAX_BODY_BYTES`` (the upload cap sent base64 in JSON, plus room): a signed-in
   caller, or any caller while sign-in is off. Routes keep their own, smaller caps.
+* ``TMX_IMPORT_MAX_BYTES`` (plus 1 MiB): a signed-in multipart POST to a TM import route
+  only (S6, ADR 0094); the route streams the file to disk, never into memory.
 
 Who is signed in is only worked out for a body larger than the anonymous cap, so a normal
 request costs one header read. The middleware is mounted just inside the session
@@ -28,6 +30,7 @@ Documented in: docs/architecture/browser-surface.md
 from __future__ import annotations
 
 import logging
+import re
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
@@ -40,6 +43,21 @@ _logger = logging.getLogger("loc_tms.body_limit")
 # Paths that are reached before (or instead of) signing in. Their bodies are small by
 # contract, so they keep the anonymous cap even for a signed-in browser.
 _PRE_AUTH_PREFIXES = ("/auth/", "/webhooks/", "/scim/")
+
+# S6 (ADR 0094): the TM import routes take a TMX file far bigger than any other upload. A
+# MULTIPART body to one of them (never a JSON one: that is read into memory) may be as large
+# as TMX_IMPORT_MAX_BYTES plus room for the form fields; the route streams the file to disk.
+_TMX_IMPORT_PATH = re.compile(r"^(/api)?/projects/[0-9]+/tm/import$")
+_TMX_FORM_ROOM = 1024 * 1024
+
+
+def _tmx_multipart(scope, path: str) -> bool:
+    if scope.get("method") != "POST" or not _TMX_IMPORT_PATH.match(path):
+        return False
+    for key, value in scope.get("headers") or ():
+        if key == b"content-type":
+            return value.lower().startswith(b"multipart/form-data")
+    return False
 
 
 class BodyTooLarge(Exception):
@@ -95,6 +113,12 @@ def body_cap(scope) -> int:
         return anon
     try:
         if _signed_in(scope, path):
+            if _tmx_multipart(scope, path):
+                return max(
+                    config.REQUEST_MAX_BODY_BYTES,
+                    config.TMX_IMPORT_MAX_BYTES + _TMX_FORM_ROOM,
+                    anon,
+                )
             return max(config.REQUEST_MAX_BODY_BYTES, anon)
     except Exception:
         _logger.warning("body limit: could not resolve the caller; using the anonymous cap")

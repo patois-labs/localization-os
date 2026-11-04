@@ -384,7 +384,7 @@ _DEAD_FIELD_DEFAULT = {
     "glossary_id": None,
     "adaptive_feedback": False,
     "doc_context_prepass": False,
-    "tm_examples": True,
+    "tm_examples": False,
     "use_image_context": True,
     "concept_glossary_render": False,
     "glossary_concept_cap": 10,
@@ -403,11 +403,8 @@ _DEAD_FIELD_DEFAULT = {
     "parallel_group": None,
     "vendor_id": None,
     "external_wait_hours": None,
-    "tm_fill_threshold": None,
-    "tm_fuzzy_lock_mode": None,
     "tm_lock_ice": None,
     "tm_hundreds_enter_lqa": None,
-    "tm_context_floor": None,
     "tm_pool_selection": None,
 }
 

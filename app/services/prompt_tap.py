@@ -69,7 +69,7 @@ import re
 import stat
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app import config
 from app.services import settings
@@ -426,7 +426,7 @@ def build_record(
     run/API/summary surfaces can show the shape without the bodies."""
     resp_text, truncated, full_len = cap_response(response_text)
     rec = {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "provider": provider,
         "provider_kind": provider_kind,
         "model": model,
@@ -1037,7 +1037,7 @@ def _write_prune_state(result: dict) -> None:
     processes. Atomic tmp+replace; best-effort, never raises; a failure only loses visibility."""
     try:
         state = {
-            "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "ttl_days": result.get("ttl_days", 0),
             "scanned": result.get("scanned", 0),
             "deleted": result.get("deleted", 0),
@@ -1649,7 +1649,7 @@ def export_bundle(
         "workflow_run_id": workflow_run_id,
         "document_id": document_id,
     }
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stamp = now.strftime("%Y%m%d-%H%M%S")
 
     if key:

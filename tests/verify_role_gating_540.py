@@ -27,7 +27,7 @@ Hermetic + offline. ASCII-only prints. Final line: "verify_role_gating_540 OK".
 import json
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from urllib.parse import unquote_plus
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -75,7 +75,7 @@ VISIBLE_NAME = "plain_visible_key_540"
 HIDDEN_DONE = "secret_translated_hidden_540"
 VISIBLE_DONE = "plain_translated_visible_540"
 NS = "ns540"  # [5c] cleanup sweeps one namespace; keep it apart from the other fixtures
-_SINCE = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+_SINCE = (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 RUN_COST = 0.4321  # shown as "0.4321" wherever the AI figure leaks
 
 

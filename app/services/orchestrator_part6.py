@@ -389,18 +389,24 @@ def recover_interrupted_runs() -> int:
          reads as active and is left alone. A true boot corpse's newest StepRun is
          as old as the crash.
 
-    RESIDUAL, ACCEPTED AND DOCUMENTED: a second-process run sitting inside ONE
-    long LLM call for more than ten minutes writes no StepRun in that window, so a
-    server booting at exactly that moment would still fail its row. The run's own
-    thread then finds the row failed and aborts its write-back rather than
-    resurrecting it (see `_abort_if_superseded`), so the outcome is an honest failed
-    run, never a corrupted one. Closing it properly needs a heartbeat column; that is
-    not this change.
+    S1 RESTART RESUME (ADR 0090). An orphan is no longer simply failed: when the run's
+    newest StepRun carries a checkpoint for the step it was on (or nothing ran yet), it is
+    re-queued (QUEUED, `_resume_kind=restart`) and `adopt_queued_runs` resumes it from that
+    step; only a run that cannot be resumed (or that has no owner record, i.e. was executed
+    by code from before this change) is failed as before. The owner + heartbeat
+    columns replace the residual above for runs executed by S1 code: a run whose owner is
+    another live process on this host, or another host with a fresh heartbeat, is left
+    alone however long its current call takes. Rows with no owner (written by older code)
+    keep the ten-minute activity window. See `app/services/run_resume.py::plan`.
 
-    Returns the number of runs healed. Also reachable from the CLI as
+    Returns the number of runs healed (failed or re-queued). Also reachable from the CLI as
     `loc-tms db recover-jobs` (web+CLI parity), alongside the other two healers."""
+    from app.services import run_resume
+
     touched = 0
-    cutoff = datetime.utcnow() - RECOVERY_ACTIVITY_GRACE
+    resumed = 0
+    now = datetime.utcnow()
+    cutoff = now - RECOVERY_ACTIVITY_GRACE
     with _bookkeeping_session() as s:
         runs = s.exec(
             select(WorkflowRun).where(
@@ -410,17 +416,29 @@ def recover_interrupted_runs() -> int:
             )
         ).all()
         for run in runs:
-            if _run_thread_alive(run.id):
-                continue  # this process is executing it right now
-            seen = _last_activity_at(s, run)
-            if seen is not None and seen > cutoff:
-                continue  # something wrote for it very recently
-            run.status = RunStatus.FAILED
-            run.finished_at = datetime.utcnow()
-            _stamp_note(run, RESTART_NOTE)
+            verdict, detail = run_resume.plan(s, run, alive_fn=_run_thread_alive, now=now)
+            if verdict == "skip":
+                continue  # executing here, or its live owner elsewhere is still beating
+            if verdict == "legacy":
+                # No owner record: executed by pre-S1 code (no checkpoints), so the old
+                # rule applies unchanged: spare recent activity, otherwise fail it.
+                seen = _last_activity_at(s, run)
+                if seen is not None and seen > cutoff:
+                    continue  # something wrote for it very recently
+                verdict, detail = "fail", "no owner record (written before restart resume)"
+            if verdict == "resume":
+                run_resume.requeue(run, detail)
+                resumed += 1
+            else:
+                run.status = RunStatus.FAILED
+                run.finished_at = datetime.utcnow()
+                _stamp_note(run, RESTART_NOTE)
+                log.info("run %s not resumable after a restart: %s", run.id, detail)
             s.add(run)
             touched += 1
         s.commit()
+    if resumed:
+        log.warning("restart recovery: %s interrupted run(s) re-queued to resume", resumed)
     return touched
 
 

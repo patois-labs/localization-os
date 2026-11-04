@@ -99,8 +99,8 @@ def test_no_terms_callers(client, pid):
             if path == "manual TM":
                 with patch.object(
                     tm,
-                    "lookup_batch",
-                    return_value={seg.source_text: {"match_pct": 100, "target_text": target}},
+                    "lookup_segments",  # ADR 0102: the positional exact lookup
+                    return_value=[{"match_pct": 100, "target_text": target}],
                 ):
                     assert content.apply_tm_to_document(s, doc, s.get(Project, pid), "fr-FR") == 1
             elif path == "full-text save":
@@ -114,8 +114,8 @@ def test_no_terms_callers(client, pid):
                     patch.object(tm, "ft_lookup", return_value=target),
                     patch.object(
                         tm,
-                        "lookup_batch",
-                        return_value={seg.source_text: {"match_pct": 100, "target_text": target}},
+                        "lookup_segments",  # ADR 0102: the positional exact lookup
+                        return_value=[{"match_pct": 100, "target_text": target}],
                     ),
                 ):
                     list(translate.pretranslate_stream(s, did, "fr-FR"))

@@ -41,7 +41,7 @@ import json
 import logging
 import re
 import threading
-from datetime import datetime
+from datetime import UTC, datetime
 
 from cryptography.fernet import Fernet
 from sqlmodel import Session, select
@@ -422,11 +422,10 @@ def _epoch(ts) -> int:
         return int(ts)
     try:
         from datetime import datetime as _dt
-        from datetime import timezone as _tz
 
         dt = _dt.fromisoformat(str(ts).replace("Z", "+00:00"))
         if dt.tzinfo is None:  # naive -> treat as UTC
-            dt = dt.replace(tzinfo=_tz.utc)
+            dt = dt.replace(tzinfo=UTC)
         return int(dt.timestamp())
     except Exception:
         return 0

@@ -123,8 +123,18 @@ def allowed_tm_source_ids(session: Session, project_id) -> tuple:
     target = session.get(Project, project_id)
     if target is None:
         return ()
+    from sqlalchemy import bindparam
+
+    from app import db
+
     rows = session.exec(
-        select(ProjectTmSource.source_project_id).where(ProjectTmSource.project_id == project_id)
+        db.prebuilt(  # S7b: built once (every translate run reads it)
+            "project_sources.tm_source_ids",
+            lambda: select(ProjectTmSource.source_project_id).where(
+                ProjectTmSource.project_id == bindparam("project_id")
+            ),
+        ),
+        params={"project_id": project_id},
     ).all()
     allowed = []
     # AI opt-out (DPAI-08): an opted-out source project (directly or through its customer)
@@ -363,7 +373,7 @@ def remove_tm_source(session: Session, project_id: int, source_project_id) -> bo
 
 
 # --- Glossary pins: read-side (the seam build_glossary_plan calls) -------------
-def pinned_glossary_ids(session: Session, project) -> tuple:
+def pinned_glossary_ids(session: Session, project, run_cache: dict | None = None) -> tuple:
     """The module-glossary ids pinned to `project` that may CURRENTLY contribute.
 
     Filtered, at RUN time, by (a) the isolation predicate against the live Glossary row
@@ -373,17 +383,38 @@ def pinned_glossary_ids(session: Session, project) -> tuple:
     precedence between two pins is stable and explainable.
 
     EMPTY for every project with no pin rows, which is what keeps build_glossary_plan
-    byte-identical for existing installs."""
+    byte-identical for existing installs.
+
+    `run_cache` (S4 follow-up): a translate run's cache (app/services/run_cache.py); the
+    answer is resolved once per run, so the run envelope's manifest reports the pins the
+    run used instead of re-reading them."""
     pid = getattr(project, "id", None) if not isinstance(project, int) else project
     if session is None or pid is None:
         return ()
+    if run_cache is not None:
+        from app.services import run_cache as _rc
+
+        key = _rc.glossary_pins_key(pid)
+        if key not in run_cache:
+            run_cache[key] = pinned_glossary_ids(session, project)
+        return run_cache[key]
     proj = project if not isinstance(project, int) else session.get(Project, pid)
     if proj is None:
         return ()
+    from sqlalchemy import bindparam
+
+    from app import db
+
     links = session.exec(
-        select(ProjectGlossary)
-        .where(ProjectGlossary.project_id == pid)
-        .order_by(ProjectGlossary.created_at, ProjectGlossary.id)
+        db.prebuilt(  # S7b: built once (every translate run reads it)
+            "project_sources.glossary_pins",
+            lambda: (
+                select(ProjectGlossary)
+                .where(ProjectGlossary.project_id == bindparam("project_id"))
+                .order_by(ProjectGlossary.created_at, ProjectGlossary.id)
+            ),
+        ),
+        params={"project_id": pid},
     ).all()
     out = []
     for link in links:

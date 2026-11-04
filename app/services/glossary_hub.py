@@ -1405,6 +1405,7 @@ def _emit_for_entry(
     provider,
     disambig: str | None,
     project_id=None,
+    entry_cache: dict | None = None,
 ) -> tuple[dict | None, GlossarySense | None, object]:
     """The shared per-entry emission core (SPEC-terminology-backend §5.3/H6). Runs
     sense selection for one surviving entry and returns
@@ -1416,10 +1417,22 @@ def _emit_for_entry(
     resolved (get_provider()) ONLY when a matched term actually carries senses, once,
     and passed back so the caller caches it across entries — byte-identical to the
     pre-refactor provider timing. The emitted dict is EXACTLY the five keys
-    source_term/target_term/sense_label/dnt/case_sensitive, in that order (LAW-TERM-1/E5)."""
-    senses = session.exec(
-        select(GlossarySense).where(GlossarySense.glossary_entry_id == e.id)
-    ).all()
+    source_term/target_term/sense_label/dnt/case_sensitive, in that order (LAW-TERM-1/E5).
+
+    `entry_cache` (S4, ADR 0093): the run's cache (see glossary_common._select_matched_entries);
+    an entry's senses are then read once per run, not once per matching segment."""
+    cache_key = ("glossary_senses", e.id)
+    if entry_cache is not None and cache_key in entry_cache:
+        senses = entry_cache[cache_key]
+    else:
+        senses = session.exec(
+            select(GlossarySense).where(GlossarySense.glossary_entry_id == e.id)
+        ).all()
+        if entry_cache is not None:
+            from app.services import run_cache
+
+            senses = run_cache.snapshots(senses)
+            entry_cache[cache_key] = senses
     if senses:
         # AI opt-out (DPAI-08): sense choice is an LLM call that carries the segment text.
         # For an opted-out project it is skipped and the entry's BASE translation applies

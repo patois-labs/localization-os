@@ -1490,6 +1490,7 @@ def add_step(
     tm_protect: str = Form("auto"),
     over_translation_guard: str = Form("auto"),
     memory_mode: str = Form("auto"),
+    # ADR 0102: removed parameters, kept so a stale form gets the clear error (not a 422).
     tm_fill_threshold: str = Form(""),
     tm_fuzzy_lock_mode: str = Form(""),
     tm_lock_ice: str = Form("auto"),
@@ -1766,6 +1767,7 @@ def edit_step(
     tm_protect: str = Form("auto"),
     over_translation_guard: str = Form("auto"),
     memory_mode: str = Form("auto"),
+    # ADR 0102: removed parameters, kept so a stale form gets the clear error (not a 422).
     tm_fill_threshold: str = Form(""),
     tm_fuzzy_lock_mode: str = Form(""),
     tm_lock_ice: str = Form("auto"),

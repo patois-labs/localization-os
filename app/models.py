@@ -325,6 +325,9 @@ class Customer(SQLModel, table=True):
     # NULL = no default (no instruction, byte-identical). Resolved after document and project
     # entries by app/services/formality.py.
     formality: dict | None = Field(default=None, sa_column=Column(JSON))
+    # Semantic TM examples for this customer's projects (alembic a7e3c9d1f4b2): NULL = use the
+    # install default, "on" or "off". A project value overrides it. Used by an optional add-on.
+    semantic_examples: str | None = Field(default=None)
 
 
 class ContentType(SQLModel, table=True):
@@ -468,11 +471,14 @@ class Project(SQLModel, table=True):
     # MT formality per TARGET LOCALE of this project (#617 item 7, ADR 0062): {"de-DE": "du"}.
     # NULL = inherit the customer default. Overrides the customer, is overridden by a document.
     formality: dict | None = Field(default=None, sa_column=Column(JSON))
+    # Semantic TM examples (alembic a7e3c9d1f4b2): NULL = use the customer value, then the install
+    # default; "on" or "off" overrides both. Used by an optional add-on.
+    semantic_examples: str | None = Field(default=None)
 
 
 class TargetLocale(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    project_id: int = Field(foreign_key="project.id")
+    project_id: int = Field(foreign_key="project.id", index=True)  # S7b: ADR 0103
     locale: str
     # Connected projects: "stop this language". A language of a project that has a
     # ProjectAutomation binding is never deleted when it is removed: the row stays (its
@@ -882,6 +888,11 @@ class SegmentTM(SQLModel, table=True):
     # context_prev/next hashes, formality at capture time; makes retrieval smarter +
     # TMX export richer). NULL today = byte-identical; nothing reads it this phase.
     meta: dict | None = Field(default=None, sa_column=Column(JSON))
+    # In-context (101 %) key of the LAST write for this (project, source hash, locale pair)
+    # row (ADR 0102): "ctx:" + sha256 of the previous and next source segments for a document
+    # segment, "key:" + sha256 of the key's full name for a string-key segment. NULL = no
+    # context known, so the unit is a 100 % match only. See tm_common.context_key.
+    context_key: str | None = Field(default=None)
 
 
 class FullTextTM(SQLModel, table=True):
@@ -1668,7 +1679,7 @@ class WorkflowStep(SQLModel, table=True):
     # alembic revision (nullability-parity CI guard).
     lqa_threshold: int | None = Field(default=None)
     # --- TM few-shot examples (SPEC-context-metadata phase 2B) -----------------
-    # Render the top-N FUZZY TM matches for each segment as fenced example pairs in
+    # Render the top-N TM examples for each segment as fenced example pairs in
     # this step's prompt (research: TM-few-shot is the #1 evidenced quality lever;
     # returns concentrate in the first 3-5 matches, and one bad match is worse than
     # none — so retrieval is relevance-gated at a similarity floor and SKIPS rather
@@ -1676,10 +1687,11 @@ class WorkflowStep(SQLModel, table=True):
     # cap), so a step with qualifying fuzzy matches WILL inject examples; a step with
     # NO qualifying match (or tm_examples OFF / window 0) renders NOTHING and the
     # prompt is byte-identical to pre-2B.
-    #   tm_examples: master toggle for this step (default True).
+    #   tm_examples: master toggle for this step (default False in the core: examples need a
+    #     TM examples add-on, ADR 0102; legacy rows keep their stored value and get none).
     #   tm_examples_window: how many top matches to inject, clamped 0-5 (default 3;
     #     0 disables just like the toggle).
-    tm_examples: bool = True
+    tm_examples: bool = False
     tm_examples_window: int = 3
     # --- Per-step image context toggle (Batch 14 T2, SPEC §25) -----------------
     # llm_agent-only visual-context gate. DEFAULT TRUE = "this agent step sees the
@@ -1711,7 +1723,7 @@ class WorkflowStep(SQLModel, table=True):
     glossary_token_cap: int = 0
     # --- tm_match step per-step policy config (Batch 15 T1, SPEC-tm-match-step-config
     # §5.1) -----------------------------------------------------------------------
-    # SIX nullable-inherit overrides, LIVE only on a StepType.TM_MATCH step (dead on
+    # Nullable-inherit overrides, LIVE only on a StepType.TM_MATCH step (dead on
     # every other type via workflows._TM_MATCH_CONFIG_FIELDS). Follows the tm_protect
     # NULLABLE-TRISTATE precedent (NULL = inherit the live global, a concrete value =
     # per-step override), NOT the NOT-NULL use_image_context shape: every existing row
@@ -1720,20 +1732,16 @@ class WorkflowStep(SQLModel, table=True):
     # globals at creation (add_step, D15-4/LAW-TM-8); the pool selection is NEVER
     # snapshotted (S2 — pool membership is dynamic). Resolved by
     # tm_lock.resolve_policy_for_step. These names ECHO the like-named GLOBAL settings
-    # keys (tm_lock_ice / tm_hundreds_enter_lqa / tm_context_floor) but live in a
+    # keys (tm_lock_ice / tm_hundreds_enter_lqa) but live in a
     # different namespace (column vs setting); NOT the LLM_AGENT few-shot controls
     # (tm_examples / tm_examples_window / tm_protect), which are a different feature.
-    tm_fill_threshold: int | None = Field(
-        default=None
-    )  # min match % to FILL; NULL->global; clamp [50,100]
-    tm_fuzzy_lock_mode: str | None = Field(default=None)  # "none"|"soft"|"policy"; NULL->global
+    # ADR 0102: the former tm_fill_threshold, tm_fuzzy_lock_mode and tm_context_floor
+    # fields are removed from the model. Alembic revision d6b3f8a2c4e1 drops their
+    # database columns (an install that never had them upgrades cleanly).
     tm_lock_ice: bool | None = Field(default=None)  # override; NULL->global tm_lock_ice
     tm_hundreds_enter_lqa: bool | None = Field(
         default=None
     )  # override; NULL->global tm_hundreds_enter_lqa
-    tm_context_floor: int | None = Field(
-        default=None
-    )  # override; NULL->global tm_context_floor; clamp [50,99]
     tm_pool_selection: list | None = Field(
         default=None, sa_column=Column(JSON)
     )  # JSON list of readable project ids; NULL/[] -> all readable pools
@@ -2047,6 +2055,16 @@ class WorkflowRun(SQLModel, table=True):
     # every existing row and every non-fan-out launch is byte-identical. Mirrors the
     # app/db.py workflowrun shim + alembic revision e2b6c9f4a713 (nullability-parity CI).
     queue_group: str | None = None
+    # --- restart resume (S1 engine reliability, ADR 0090; alembic b4d8e2f6a9c1) ---
+    # `owner` names the execution that holds the run right now (process instance + a
+    # per-execution nonce); `heartbeat_at` is renewed about every 30 s while it runs. Boot
+    # recovery never takes a run whose heartbeat is fresh under another owner, and a run
+    # thread whose owner was replaced stops before its next write. `resume_count` counts
+    # restart resumes (shown on the run). All NULL on every existing row and on runs that
+    # never executed under this code.
+    owner: str | None = None
+    heartbeat_at: datetime | None = None
+    resume_count: int | None = None
 
 
 class StepRun(SQLModel, table=True):
@@ -2127,6 +2145,13 @@ class StepRun(SQLModel, table=True):
     # #356 phase 2b: which scope's head won ("workflow" | "org" | "builtin"); NULL on rows
     # stamped by phase 2a (read there as org when version > 0, else builtin).
     system_prompt_scope: str | None = None
+    # --- step-visit checkpoint (S1 engine reliability, ADR 0090; alembic b4d8e2f6a9c1) ---
+    # `idempotency_key` = "<run>:<cursor>:<seq>" for a completed step visit; UNIQUE
+    # (ux_steprun_idempotency_key), so a duplicate execution of the same visit cannot land
+    # twice. `checkpoint` is the run's resumable state right after this visit (next cursor,
+    # working texts, run-local records); cleared when the run ends. NULL on every other row.
+    idempotency_key: str | None = None
+    checkpoint: dict | None = Field(default=None, sa_column=Column(JSON))
 
 
 class DeliveryEmptyApproval(SQLModel, table=True):
@@ -3320,6 +3345,9 @@ class Job(SQLModel, table=True):
     # unknown (a row from before this column, a cut-off live stream): reports and project
     # budgets then re-price the result tokens as before (reports._job_cost).
     cost_usd: float | None = Field(default=None)
+    # S1 engine reliability (alembic b4d8e2f6a9c1): how many times the job was retried after
+    # a transient failure (jobs.TransientJobError). NULL = never retried.
+    retries: int | None = None
 
 
 class JobQueueState:
@@ -3366,6 +3394,15 @@ class JobQueue(SQLModel, table=True):
     lease_expires_at: datetime | None = None  # lease deadline; a running row past it re-queues
     enqueued_at: datetime = Field(default_factory=_utcnow, index=True)
     updated_at: datetime = Field(default_factory=_utcnow)
+    # S1 engine reliability (alembic b4d8e2f6a9c1): a pending row is not claimable before
+    # `not_before` (transient-retry backoff); `last_error` is the transient error that caused
+    # the latest retry. Both NULL on every ordinary row.
+    not_before: datetime | None = None
+    last_error: str | None = None
+    # ADR 0105 (alembic e5a1c9d3b7f2): "tm_import:<project id>" for a TM import, NULL for every
+    # other kind. At most ONE running row per key (partial unique index ux_jobqueue_serial_running);
+    # the claim skips a pending row whose key has a running or an older pending row.
+    serial_key: str | None = None
 
 
 # --- integrations / connectors ---
@@ -5176,6 +5213,43 @@ class BlobDeleteOutbox(SQLModel, table=True):
     source_document_id: int = Field(default=0, sa_column_kwargs={"server_default": "0"})
     attempts: int = Field(default=0, sa_column_kwargs={"server_default": "0"})
     created_at: datetime = Field(default_factory=_utcnow)
+
+
+class LiveEvent(SQLModel, table=True):
+    """Cross-process live events (app/services/events.py, ADR 0110, engine redesign S3).
+
+    SQLite: EVERY published event is a row here; each process polls it with an id cursor
+    (at most every 500 ms) and fans the rows out to its in-process subscribers. Postgres: only
+    payloads too big for one NOTIFY land here; the NOTIFY then carries the row id. Rows are
+    transient (a retention sweep deletes them after events.RETENTION_S), never content of
+    record. `sqlite_autoincrement` keeps ids strictly increasing even after the sweep deleted
+    the newest row, which is what makes a subscriber's id cursor safe. Classified
+    EXPLICIT_EXCLUSIONS in data_export_part2: pure infrastructure, nothing to export."""
+
+    __table_args__ = {"sqlite_autoincrement": True}
+    id: int | None = Field(default=None, primary_key=True)
+    channel: str = ""
+    payload: str = ""
+    created_at: datetime = Field(default_factory=_utcnow, index=True)
+
+
+class SharedState(SQLModel, table=True):
+    """Small cross-process key/value state (app/services/shared_state.py, S3c, ADR 0097).
+
+    Written ONLY when `config.multi_web()` is true (N web processes); a single-process
+    install keeps these in memory and never touches the table. Holds three kinds of
+    transient rows, namespaced by key prefix: `rl:<identity>:<window>` rate-limit window
+    counters (`counter`), `saml:<sha256>` consumed SAML assertion ids (replay guard) and
+    `stash:<nonce>` short-lived Fernet-ENCRYPTED one-time values (`value`). `expires_at` is
+    a unix epoch in seconds; an expired row is dead (read as absent) and is deleted by an
+    opportunistic sweep. Never content of record. Classified EXPLICIT_EXCLUSIONS in
+    data_export_part2: rate-limit counters, replay ids and one-time secrets, nothing to
+    export."""
+
+    key: str = Field(primary_key=True, max_length=255)
+    value: str = ""
+    counter: int = 0
+    expires_at: float = Field(default=0, index=True)
 
 
 class NotifyChannelKind:

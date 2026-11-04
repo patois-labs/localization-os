@@ -8,7 +8,7 @@ carries it as <prop type="x-..."> lines + standard provenance attrs and TMX impo
 them back (round-trip); glossary CSV import/export gains the four TBX-ish meta columns.
 
 The load-bearing invariant: meta is ADDITIVE provenance, NEVER a match key. A row with no
-meta exports BYTE-IDENTICAL to before, and TM matching (lookup + example_matches_batch) is
+meta exports BYTE-IDENTICAL to before, and TM matching (exact lookup + example_matches_hybrid) is
 unaffected by whether meta is present.
 
 Covers:
@@ -16,7 +16,7 @@ Covers:
   tmx export props   — x-origin/x-content_type/... + creationtool/creationdate/usagecount.
   tmx round-trip     — export -> import preserves meta; foreign/absent props tolerated.
   byte-stable        — a meta-less TM exports identical to a hand-built plain TMX.
-  match-unaffected   — lookup + example_matches_batch identical with/without meta.
+  match-unaffected   — lookup + example_matches_hybrid identical with/without meta.
   glossary csv       — export has the 4 TBX cols; import reads them to meta; a legacy
                        CSV (no cols) imports unchanged (back-compat) + round-trips.
 
@@ -261,20 +261,17 @@ def test_matching_unaffected_by_meta():
         assert ea["match_pct"] == eb["match_pct"] == 100
         assert ea["target_text"] == eb["target_text"], (ea, eb)
 
-        # fuzzy match (a near variant)
-        q_fuzzy = "The quick brown fox jumped."
-        fa = tm.lookup(s, pa.id, q_fuzzy, SRC, TGT)
-        fb = tm.lookup(s, pb.id, q_fuzzy, SRC, TGT)
-        assert fa and fb, (fa, fb)
-        assert fa["match_pct"] == fb["match_pct"], (fa, fb)
-        assert fa["target_text"] == fb["target_text"], (fa, fb)
+        # ADR 0102: a near variant is a miss with or without meta (the fuzzy leg is gone)
+        q_near = "The quick brown fox jumped."
+        assert tm.lookup(s, pa.id, q_near, SRC, TGT) is None
+        assert tm.lookup(s, pb.id, q_near, SRC, TGT) is None
 
-        # example_matches_batch (TM few-shot, phase 2B) — identical with/without meta.
-        exa = tm.example_matches_batch(s, pa.id, [q_fuzzy], SRC, TGT)
-        exb = tm.example_matches_batch(s, pb.id, [q_fuzzy], SRC, TGT)
-        assert exa[q_fuzzy] == exb[q_fuzzy], (exa, exb)
-        assert exa[q_fuzzy], "expected at least one few-shot example over the floor"
-    print("  match-unaffected: lookup (exact+fuzzy) + example_matches_batch identical: OK")
+        # example_matches_hybrid (TM few-shot, phase 2B) - identical with/without meta (both
+        # empty here: semantic examples are off and need a real embedder).
+        exa = tm.example_matches_hybrid(s, pa.id, [q_near], SRC, TGT)
+        exb = tm.example_matches_hybrid(s, pb.id, [q_near], SRC, TGT)
+        assert exa[q_near] == exb[q_near] == [], (exa, exb)
+    print("  match-unaffected: exact lookup + example_matches_hybrid identical: OK")
 
 
 def test_glossary_csv_meta_columns():

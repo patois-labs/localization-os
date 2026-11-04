@@ -18,6 +18,7 @@ from app.kernel import (
     glossary_tbx,
     security,
     tm,
+    tm_import_job,
 )
 from app.kernel import (
     keys as keys_svc,
@@ -204,11 +205,43 @@ async def tm_import(
     me = security.session_user(request)
     if security.auth_required() and not security.can_write(me):
         return _error_page(request, 403, "Importing TM requires a write role.")
-    # Bounded read: abort past the cap so a hostile/huge upload can never be
-    # fully buffered into memory (shared helper in app/web/deps.py).
-    data = await read_capped_upload(file, config.MAX_UPLOAD_BYTES)
-    if data is None:
-        return RedirectResponse(f"/projects/{project_id}?err=toolarge_tmx", status_code=303)
+    # S6 (ADR 0094): a file at or under TMX_IMPORT_INLINE_MAX_BYTES is imported right here,
+    # as before (counts on the page at once). A bigger one is never buffered in memory: what
+    # was read so far plus the rest of the upload is copied to disk in a bounded worker (under
+    # TMX_IMPORT_MAX_BYTES) and imported by a background job; the page shows its progress.
+    inline_cap = min(int(config.TMX_IMPORT_INLINE_MAX_BYTES), int(config.MAX_UPLOAD_BYTES))
+    head, total = [], 0
+    while total <= inline_cap:
+        piece = await file.read(1024 * 256)
+        if not piece:
+            break
+        head.append(piece)
+        total += len(piece)
+    if total > inline_cap:
+        try:
+            # Refuse a pair this project does not translate now, not minutes later in the job.
+            await offload_parse(
+                tm.resolve_import_locales, session, project_id, source_locale, target_locale
+            )
+        except tm.LocaleMismatchError:
+            return RedirectResponse(f"/projects/{project_id}?err=tmx_locales", status_code=303)
+        try:
+            token, size = await offload_parse(tm_import_job.stage_upload, b"".join(head), file.file)
+        except tm_import_job.UploadTooLarge:
+            return RedirectResponse(f"/projects/{project_id}?err=toolarge_tmx", status_code=303)
+        jid = tm_import_job.submit(
+            project_id,
+            token,
+            source_locale,
+            target_locale,
+            acknowledge_placeholder_loss=acknowledge_placeholder_loss in ("1", "true", "yes"),
+            filename=file.filename or "",
+            size=size,
+            actor=_actor_email(request),
+        )
+        return RedirectResponse(f"/projects/{project_id}?tm_import_job={int(jid)}", status_code=303)
+    data = b"".join(head)
+    del head
     try:
         res = await offload_parse(
             tm.import_tmx,

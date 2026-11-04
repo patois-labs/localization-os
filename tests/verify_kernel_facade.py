@@ -143,9 +143,11 @@ def test_narrowness_bound():
         # became < 85), so the bound is exactly as tight for everything else. Open-core S1
         # (2026-10-14) added ONE core family on the pipeline path, app.extensions (the optional
         # add-on registry; app.editions is not loaded by the pipeline): < 85 became < 86.
+        # 2026-10-22 (ADR 0091): app.services.native, the loader the segment / TM / QA hot paths
+        # rebind through, is one new responsibility on this surface: < 86 became < 87.
         families = {"app.filters" if f.startswith("app.filters.") else f for f in families}
         n_app = len(families)
-        assert n_app < 86, "pipeline surface is not narrow: %d module families (>= 86)" % n_app
+        assert n_app < 87, "pipeline surface is not narrow: %d module families (>= 87)" % n_app
         print("PIPELINE app.* modules:", len(app_mods), "families:", n_app)
     """)
     print(

@@ -30,6 +30,8 @@ from tests._bootstrap import init_env
 
 init_env("loctms_sec_boundary_")
 
+from datetime import UTC
+
 import httpx
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
@@ -938,7 +940,7 @@ def test_unsigned_delivery_headers_and_zendesk_freshness():
     import hashlib
     import hmac
     import json
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from app.services.connectors import webhooks
 
@@ -959,7 +961,7 @@ def test_unsigned_delivery_headers_and_zendesk_freshness():
             "X-Zendesk-Webhook-Signature-Timestamp": timestamp,
         }
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     signed = headers(now)
     for i in range(4):
         result = webhooks.handle_intake(

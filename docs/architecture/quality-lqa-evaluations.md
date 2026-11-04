@@ -107,6 +107,14 @@ reporting surfaces that read the post-edit rows.
   twins show both (engines-and-providers). Running SemIf or Kev as a local judge is the operator
   guide [jev-compatible-server](../guides/jev-compatible-server.md). Enforced by
   `verify_jev_inspector`.
+- **The editor save reads the newest episode once, after its own commit.** Since 2026-10-26
+  `app/web/documents_part3.py::_scope_and_episode` loads the project, its customer and the
+  segment's newest episode in one statement for both observers, and hands the episode to
+  `capture` as `prefetched_last`. A concurrent save of the same segment between that read and
+  the capture can leave it stale: the capture then continues the older episode instead of
+  opening a new one (post-edit metrics only; the same race already loses one of the two texts),
+  and a stale "no episode" hits the unique index and `capture_guarded` re-reads. Enforced by
+  `verify_save_budget_s9` [6] and [7].
 
 ### D1: TM provenance and correction-loop LQA (#159)
 

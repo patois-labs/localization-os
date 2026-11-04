@@ -4,25 +4,38 @@ Spend routes use api_rate_limit_per_minute (default 120); reads and cheap writes
 use api_read_rate_limit_per_minute (default 600). Either budget can be disabled
 with 0. The shared API middleware charges once before running a handler.
 
-Single-process caveat: state lives in this process's memory only (like the login
-lockout and the job queue). A restart clears every window; a multi-instance deploy
-would need a shared store (Redis), documented, not solved here.
+One process (the default): state lives in this process's memory as a sliding window (like
+the login lockout and the job queue); a restart clears every window.
+
+N web processes (config.multi_web(), S3c, ADR 0097): the budget must hold across processes,
+so the window is a shared FIXED window in the `sharedstate` table (key
+"rl:<identity>:<window index>", window = WINDOW_S). To avoid one database write per request
+each process reserves a slab of hits at a time (max(1, min(10, limit // (4 * WEB_PROCESSES))))
+and spends it locally. The total allowed per window never exceeds the limit, but a process
+may hold reserved hits it did not spend, so up to WEB_PROCESSES * slab hits can be refused
+early in a window.
 The limit is per calling identity (per-user API key actor, or the shared connector
 token), NOT global, so one noisy client can't starve the others.
 
 Documented in: docs/architecture/identity-and-access.md
 """
 
+import hashlib
 import re
 import threading
 import time
 
-from app.services import settings
+from app import config
+from app.services import settings, shared_state
 
 WINDOW_S = 60.0
 
 _hits: dict[str, list[float]] = {}  # identity key -> recent request timestamps
 _lock = threading.Lock()
+# multi_web only: shared-window key -> hits this process has reserved and not yet spent.
+_slabs: dict[str, int] = {}
+# multi_web only: shared-window keys this process has seen used up (refused locally until they end).
+_exhausted: set[str] = set()
 
 # Structural actions cover future factory connectors; explicit paths cover odd shapes.
 # verify_api_keys_hardening checks the live route table and transitive engine callers.
@@ -147,6 +160,8 @@ def check(identity: str, now: float | None = None, limit: int | None = None) -> 
         return True, 0
     now = time.time() if now is None else now
     key = identity or "anon"
+    if config.multi_web():
+        return _check_shared(key, now, limit)
     with _lock:
         recent = [t for t in _hits.get(key, []) if now - t < WINDOW_S]
         if len(recent) >= limit:
@@ -159,7 +174,43 @@ def check(identity: str, now: float | None = None, limit: int | None = None) -> 
     return True, 0
 
 
+def _check_shared(key: str, now: float, limit: int) -> tuple[bool, int]:
+    """Shared fixed window with slab reservation (N web processes).
+
+    The identity is hashed into the key (gate LOW-4): `sharedstate.key` is at most 255
+    characters, and an email does not belong in an operational table. Once this process
+    learns that a window is used up it answers 429 locally until the window ends (gate MED-2),
+    so a client over its budget costs no database write per refused request."""
+    index = int(now // WINDOW_S)
+    ident = hashlib.sha256(key.encode("utf-8", "surrogatepass")).hexdigest()[:32]
+    skey = f"rl:{ident}:{index}"
+    retry_after = max(1, int((index + 1) * WINDOW_S - now) + 1)
+    with _lock:
+        if skey in _exhausted:
+            return False, retry_after
+        left = _slabs.get(skey, 0)
+        if left > 0:
+            _slabs[skey] = left - 1
+            return True, 0
+        # Drop slabs and refusal memos of finished windows so the maps stay small.
+        for stale in [k for k in _slabs if not k.endswith(f":{index}")]:
+            _slabs.pop(stale, None)
+        _exhausted.difference_update([k for k in _exhausted if not k.endswith(f":{index}")])
+    slab = max(1, min(10, limit // (4 * config.WEB_PROCESSES)))
+    counter, _exp = shared_state.incr_window(skey, by=slab, ttl_s=WINDOW_S * 2, now=now)
+    granted = max(0, min(slab, limit - (counter - slab)))
+    if granted <= 0:
+        with _lock:
+            _exhausted.add(skey)
+        return False, retry_after
+    with _lock:
+        _slabs[skey] = _slabs.get(skey, 0) + granted - 1  # this call spends one
+    return True, 0
+
+
 def reset() -> None:
     """Clear all windows — for tests and a manual admin flush."""
     with _lock:
         _hits.clear()
+        _slabs.clear()
+        _exhausted.clear()

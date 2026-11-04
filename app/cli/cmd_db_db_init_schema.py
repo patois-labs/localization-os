@@ -1,4 +1,4 @@
-"""cmd_db: db init-schema
+"""cmd_db: db init-schema (also `db copy-to-postgres`, the SQLite-to-Postgres data copy)
 
 Documented in: docs/architecture/backups-and-dr.md
 """
@@ -473,6 +473,51 @@ def _convert(args, emit, direction) -> int:
     return 0
 
 
+# --- db copy-to-postgres -------------------------------------------------------
+def _copy_to_postgres(args, emit) -> int:
+    require_local(args)
+    from scripts import sqlite_to_postgres as s2p
+
+    src = args.src
+    if not os.path.isfile(src):
+        raise CliError(f"source not found: {src}")
+    env_name = args.target_env
+    url = os.environ.get(env_name, "")
+    if not url:
+        raise CliError(
+            f"set {env_name} to the target Postgres URL first (the URL carries the password, "
+            "so it is never taken from the command line).",
+            EXIT_USAGE,
+        )
+    try:
+        report = s2p.run(
+            src,
+            url,
+            batch_size=args.batch_size,
+            check_only=args.check,
+            log=emit.detail,
+        )
+    except s2p.CopyError as exc:
+        raise CliError(str(exc)) from exc
+    rows = sum(t["target"] for t in report["tables"])
+    if args.check:
+        human = (
+            f"Preflight ok (revision {report['revision']}): {report['source_rows']} rows "
+            "would be copied. Nothing was written."
+        )
+    else:
+        human = (
+            f"Copied {rows} rows in {len([t for t in report['tables'] if t['target']])} tables "
+            f"to {report['target']} in {report['seconds']}s; row counts match per table; "
+            f"{report['sequences_reset']} sequences reset; {report['foreign_keys_restored']} "
+            "foreign keys re-validated.\n"
+            "Next: point DATABASE_URL at the target and start the app (see "
+            "docs/guides/postgres-migration.md)."
+        )
+    emit.result(human, report)
+    return 0
+
+
 def _encrypt(args, emit) -> int:
     return _convert(args, emit, "encrypt")
 
@@ -848,6 +893,32 @@ def register_cmd_db_db_init_schema_db_sub_2(db_sub) -> None:
     p.add_argument("dst", help="plaintext destination file.")
     p.add_argument("--force", action="store_true", help="overwrite dst if it exists.")
     p.set_defaults(func=_decrypt)
+
+    p = db_sub.add_parser(
+        "copy-to-postgres",
+        help="HOST-ONLY: copy a SQLite install file into an EMPTY, migrated Postgres "
+        "database in one transaction (parents first, sequences reset, per-table row counts "
+        "verified, all-or-nothing). The target URL comes from an environment variable.",
+    )
+    p.add_argument("src", help="the SQLite database file to read (opened read-only).")
+    p.add_argument(
+        "--target-env",
+        default="LOC_TMS_TARGET_PG_URL",
+        help="name of the environment variable holding the target URL "
+        "(default LOC_TMS_TARGET_PG_URL); never pass the URL on the command line.",
+    )
+    p.add_argument(
+        "--check",
+        action="store_true",
+        help="preflight only: revisions, empty target, foreign-key orphans; writes nothing.",
+    )
+    p.add_argument(
+        "--batch-size",
+        type=int,
+        default=2000,
+        help="rows per insert batch (default 2000).",
+    )
+    p.set_defaults(func=_copy_to_postgres)
 
     p = db_sub.add_parser(
         "recover-jobs",

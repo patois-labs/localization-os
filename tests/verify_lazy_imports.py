@@ -177,8 +177,14 @@ def test_e_server_start_still_requires_the_lazy_libraries():
             raise AssertionError("server start must refuse an install without PyJWT")
     with open(main.__file__, encoding="utf-8") as fh:
         src = fh.read()
-    body = src[src.index("def _startup() -> None:") :]
-    assert body.split("\n", 2)[1].strip() == "_require_lazy_libraries()", body[:200]
+    # S3 (ADR 0095): the startup steps begin with the shared boot, whose first statement is
+    # the check (the worker process runs the same boot_common()). S3c (ADR 0097): _startup
+    # runs _startup_steps, under the boot lock in the split roles.
+    body = src[src.index("def _startup_steps() -> None:") :]
+    assert body.split("\n", 2)[1].strip() == "boot_common()", body[:200]
+    common = src[src.index("def boot_common() -> None:") :]
+    first = next(ln.strip() for ln in common.split('"""', 2)[2].splitlines() if ln.strip())
+    assert first == "_require_lazy_libraries()", common[:400]
     print("  [E] server start refuses an install missing a lazily imported library OK")
 
 

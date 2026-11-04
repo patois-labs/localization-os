@@ -79,6 +79,9 @@ _CORE_EXPECTED = {
     "presence/non-emptiness (the restore-verification control)",
     "db restore": "restore from a backup (destructive); auto-detects a --full "
     "archive (DB + uploads + keyfiles) vs a legacy single-file DB backup",
+    "db copy-to-postgres": "HOST-ONLY: copy a SQLite install file into an empty migrated "
+    "Postgres database (one transaction, per-table row-count check, sequences reset); "
+    "reads a host file and a database server the operator names, so no web/API/MCP surface",
     "db encrypt": "write a SQLCipher-encrypted copy of a plaintext DB",
     "db decrypt": "write a plaintext copy of an encrypted DB",
     "db recover-jobs": "re-queue interrupted jobs after a restart",
@@ -161,8 +164,9 @@ _CORE_EXPECTED = {
     "description (SPEC-promptable-setup; POST /projects/author.json parity)",
     "project list": "list projects",
     "project show": "full project detail (locales, docs, TM/glossary counts)",
-    "project leverage": "7-band word-based TM-leverage breakdown (CV-1; the project page "
-    "7-band bar + GET /api/projects/{id}/leverage parity)",
+    "project leverage": "word leverage per target language, four bands: 101 % in-context, "
+    "repetitions, 100 % exact, new (ADR 0102; the project page table + "
+    "GET /api/projects/{id}/leverage parity, --csv)",
     "project add-locale": "add one target locale (additive, idempotent)",
     "project remove-locale": "remove one target locale - untranslated locales only "
     "(translated = permanent), deletes seeded segments, keeps "
@@ -690,6 +694,8 @@ _CORE_EXPECTED = {
     "job run": "run a job kind SYNCHRONOUSLY (jobs.run_sync, never submit-and-exit)",
     "job status": "show one job's status/progress/result",
     "job list": "list recent jobs (filter by kind/status)",
+    "job leverage": "word leverage of the documents and languages one job covered "
+    "(ADR 0102; GET /api/jobs/{id}/leverage parity, --csv)",
     # --- (i) Workflow CRUD + prompt-template + clone + run/resume (extraction). -
     "workflow create": "create a workflow (extracted services.workflows)",
     "workflow list": "list workflows",

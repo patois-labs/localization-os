@@ -6,7 +6,7 @@ Documented in: docs/architecture/audit-chain.md
 import hashlib
 import hmac as _hmac
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.services import audit_state, settings
 
@@ -26,8 +26,9 @@ AUDIT_WRITE_ATTEMPTS = 2
 #   cost of a shed write is ~one <1s backoff, not attempts*BUSY_TIMEOUT.) This mirrors the
 #   apikeys usage-stamp attempts=1 reasoning (a best-effort write on the auth/mutation hot
 #   path), pitched one higher because a dropped audit row matters more than a stale last_used.
-#   Governs the ROW INSERT only; the _write_anchor update uses attempts=1 (it is stale-
-#   tolerant + self-healing — see _write_anchor), so the worst-case lock hold is ~2×+1.
+#   Governs the group append's ONE transaction (ADR 0100): the group's rows and
+#   the head anchor commit together, so the worst-case lock hold is ~2x one commit. A
+#   standalone _write_anchor (rotate-key, reset-anchor) keeps attempts=1.
 #
 #   CONTENTION POSTURE — under sustained contention the audit row write can be SHED after
 #   the bounded retry. FAIL-OPEN (the default) DROPS the row with one loud WARN and lets the
@@ -146,7 +147,7 @@ def _parse_iso(raw):
     except (TypeError, ValueError):
         return None
     if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        dt = dt.astimezone(UTC).replace(tzinfo=None)
     return dt
 
 

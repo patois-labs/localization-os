@@ -36,6 +36,8 @@ from tests._piece_patch import set_pieces
 
 init_env("loctms_zd_")
 
+from datetime import UTC
+
 import httpx
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
@@ -506,9 +508,9 @@ def main() -> None:
     secret = "super-secret-webhook-key"
     connw = _zconn("ZD webhook", secret={"webhook_secret": secret})
 
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    timestamp = datetime.now(timezone.utc).isoformat()
+    timestamp = datetime.now(UTC).isoformat()
 
     def sign(body: bytes) -> str:
         signed = timestamp.encode() + body

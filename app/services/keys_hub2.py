@@ -329,7 +329,12 @@ def launch_translation(
     conflicts = list(outcome.get("conflicts", []))
     # Close the request checkout before the shared, non-waiting admission pass.
     session.commit()
-    orchestrator.ADMISSION.drain_once(slot_wait=0, limit=len(queued), queue_group=queue_group)
+    from app import config
+
+    if config.runs_background_work():
+        # S3 (ADR 0095): the web role admits nothing itself; the worker processes take the
+        # rows (the notify below pokes them) and they are reported queued.
+        orchestrator.ADMISSION.drain_once(slot_wait=0, limit=len(queued), queue_group=queue_group)
     still_queued = []
     for row in queued:
         run = session.get(WorkflowRun, row["run_id"], populate_existing=True)

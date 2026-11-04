@@ -39,6 +39,7 @@ from app.services import orchestrator as _orchestrator
 from app.web import ALL_ROUTERS, API_ROUTERS, HEALTH_ROUTERS, auth_mfa
 from app.web import background_calls as _background_calls_mw
 from app.web import body_limit as _body_limit
+from app.web import lite_http as _lite_http
 from app.web import page_guard as _page_guard
 from app.web import route_path as routing
 from app.web.deps import WorkerBusy as _WorkerBusy
@@ -769,9 +770,13 @@ async def _csrf_ok(request: Request) -> bool:
 app.add_middleware(_background_calls_mw.BackgroundCallMiddleware)
 
 
-@app.middleware("http")
 async def _security_audit(request: Request, call_next):
-    """Enforce auth + RBAC when enabled, and audit every mutating request."""
+    """Enforce auth + RBAC when enabled, and audit every mutating request.
+
+    S9 WP-FW: this function is the dispatch of `lite_http.LiteHTTPMiddleware` (registered right
+    after it below), which keeps Starlette's `BaseHTTPMiddleware` contract (a child task, the
+    held start message, the cached body) at a fraction of its per-request cost. The body of
+    this function is unchanged by that move."""
     path = routing.route_path(request.scope)
     skip = path.startswith(_ALLOW_PREFIX) or path in _ALLOW_EXACT
     mutating = request.method in ("POST", "PUT", "PATCH", "DELETE")
@@ -924,7 +929,7 @@ async def _security_audit(request: Request, call_next):
         # request (retryable 503) and nothing changes unrecorded. Fail-open (the desktop
         # default) keeps the historical write-after shape below, byte for byte.
         try:
-            prerecorded = _audit_mutating_request(request, prerecord=True)
+            prerecorded = await _audit_off_loop(request, prerecord=True)
         except _db.WriteContentionError as exc:
             return await _write_contention_error(request, exc)
         # Gate round 1 L1: once the request's own row is written, a later audit row in the
@@ -952,12 +957,12 @@ async def _security_audit(request: Request, call_next):
             # fails as well (usually the same storage), log it and keep that clean page rather
             # than replace it with a raw traceback. A successful request still fails loud.
             try:
-                _audit_mutating_request(request, response.status_code)
+                await _audit_off_loop(request, response.status_code)
             except Exception:
                 _logger.exception("audit write failed for a request that had already failed")
             return response
         try:
-            _audit_mutating_request(request, response.status_code)
+            await _audit_off_loop(request, response.status_code)
         except _db.WriteContentionError:
             # Gate round 1 L2: under fail-closed a write-after row (a sign-in, a refused
             # /api call, a webhook) that sheds answers a clean retryable 503, never an
@@ -971,6 +976,71 @@ async def _security_audit(request: Request, call_next):
                 "audit_contention",
             )
     return response
+
+
+def _add_http_middleware(dispatch) -> None:
+    """Register `dispatch(request, call_next)` as an `http` middleware layer, in the position
+    `@app.middleware("http")` would take. The cheaper `LiteHTTPMiddleware` is used when the
+    Starlette internals it relies on are present, else the stock `BaseHTTPMiddleware`."""
+    if _lite_http.supported():
+        app.add_middleware(_lite_http.LiteHTTPMiddleware, dispatch=dispatch)
+    else:  # pragma: no cover - only on a Starlette without the private pieces
+        from starlette.middleware.base import BaseHTTPMiddleware
+
+        app.add_middleware(BaseHTTPMiddleware, dispatch=dispatch)
+
+
+_add_http_middleware(_security_audit)
+
+
+async def _audit_off_loop(request: Request, status: int | None = None, *, prerecord=False) -> bool:
+    """`_audit_mutating_request` for the security middleware. In the split roles (S3c, ADR
+    0097) it runs on a worker thread instead of the event loop: an audit append is a
+    serialized chain write under a cross-process lock (about 13 ms on Postgres), and with
+    several web processes a process can wait its turn for that lock; on the event loop that
+    wait froze every other request of the process (the multi-web save and pipeline tail).
+    The request's context variables (caller IP, actor) travel with the call, and the result
+    and any exception come back unchanged. The single `all` process keeps the call on the
+    loop, byte for byte."""
+    if config.ROLE == "all":
+        return _audit_mutating_request(request, status, prerecord=prerecord)
+    # Gate round 3 HIGH: decide ON the loop whether a row can be written at all, so reads,
+    # static files and the liveness probes never queue for a threadpool token (#99/#495).
+    if not _audit_candidate(request, routing.route_path(request.scope), prerecord):
+        return False
+    if prerecord and not _prerecord_wanted():
+        return False
+    import anyio
+
+    from app.web import streaming
+
+    # Shielded (gate round 3 LOW): a request cancelled while waiting for a token must still
+    # write the row of a handler that already ran. Its own limiter (streaming.run_audit): the
+    # append never takes a token from the shared sync-route pool.
+    with anyio.CancelScope(shield=True):
+        return await streaming.run_audit(
+            _audit_mutating_request, request, status, prerecord=prerecord
+        )
+
+
+def _audit_candidate(request: Request, path: str, prerecord: bool) -> bool:
+    """Whether `_audit_mutating_request` can write a row for this request at all (no I/O):
+    the one home of the policy, shared with `_audit_off_loop` (S3c gate round 3)."""
+    return (
+        request.method in ("POST", "PUT", "PATCH", "DELETE")
+        and not _is_static(path)
+        # /scim (Train I) writes its OWN precise, attributed audit rows for every
+        # provisioning mutation (scim.user.create/update/deactivate, scim.group.*), keyed
+        # to the acting admin + the SCIM key prefix — a generic "POST /scim/... by system"
+        # row here would be a poorly-attributed duplicate. The service is the authority.
+        and not path.startswith("/scim/")
+        # An overlapping retention purge did no work. Its 409 must not create
+        # either a purge-completion row or a generic mutation row.
+        and not (
+            path == "/api/admin/retention/purge"
+            and (prerecord or getattr(request.state, "retention_purge_busy", False))
+        )
+    )
 
 
 def _audit_mutating_request(
@@ -992,21 +1062,7 @@ def _audit_mutating_request(
     security.unauthenticated_actor), as "refused <status>" in the detail column, so a
     scanner probe reads as the refusal it was. Identified rows are unchanged."""
     path = routing.route_path(request.scope)
-    if (
-        request.method in ("POST", "PUT", "PATCH", "DELETE")
-        and not _is_static(path)
-        # /scim (Train I) writes its OWN precise, attributed audit rows for every
-        # provisioning mutation (scim.user.create/update/deactivate, scim.group.*), keyed
-        # to the acting admin + the SCIM key prefix — a generic "POST /scim/... by system"
-        # row here would be a poorly-attributed duplicate. The service is the authority.
-        and not path.startswith("/scim/")
-        # An overlapping retention purge did no work. Its 409 must not create
-        # either a purge-completion row or a generic mutation row.
-        and not (
-            path == "/api/admin/retention/purge"
-            and (prerecord or getattr(request.state, "retention_purge_busy", False))
-        )
-    ):  # the mount audits its own actions
+    if _audit_candidate(request, path, prerecord):  # the mount audits its own actions
         from app.services import bookkeeping
 
         if prerecord and not _prerecord_wanted():
@@ -1116,8 +1172,7 @@ def _prerecord_wanted() -> bool:
         return False
 
 
-@app.middleware("http")
-async def _feature_gate(request: Request, call_next):
+def _feature_gate_block(request: Request):
     """Kill-switch layer 1: a disabled REMOVED-semantics feature's web/api/hooks
     routes answer 404 (never 403 — a switched-off capability is non-enumerable),
     before auth (matching keys.py's accepted posture: unenumerable even to an
@@ -1141,7 +1196,11 @@ async def _feature_gate(request: Request, call_next):
     the 404 (the prompt-tap lesson -- warn, don't swallow, never alter the response).
     ACCEPTED RESIDUAL DIVERGENCE: a logged-in user's CSRF-failing mutating request is
     audited here (it 404s before the CSRF check) but would be 403'd unaudited by
-    _security_audit; a signed-in probe leaving a trail is the safe direction."""
+    _security_audit; a signed-in probe leaving a trail is the safe direction.
+
+    S9 WP-FW: this layer never looks at the response, so it is plain ASGI (`_FeatureGate`
+    below) instead of a `BaseHTTPMiddleware`. This function holds the whole decision: it
+    returns the 404 to answer with, or None to let the request through to the next layer."""
     path = routing.route_path(request.scope)
     if path in _LIVENESS_PATHS:
         # GitHub #99: the container liveness surface is answered without asking the
@@ -1151,7 +1210,7 @@ async def _feature_gate(request: Request, call_next):
         # anti-lockout invariant (tests/verify_features.py [6]) already guarantees no
         # feature may ever gate /health or /ready, so this branch could only ever have
         # returned False for them.
-        return await call_next(request)
+        return None
     if not _is_static(path) and features.path_is_off(path):
         if not security.auth_required() or security.session_user(request) is not None:
             try:
@@ -1164,7 +1223,37 @@ async def _feature_gate(request: Request, call_next):
                     exc_info=True,
                 )
         return _error_page(request, 404, features.REMOVED_REFUSAL)
+    return None
+
+
+async def _feature_gate(request: Request, call_next):
+    """`_feature_gate_block`, then the next layer: the dispatch shape tests drive directly."""
+    blocked = _feature_gate_block(request)
+    if blocked is not None:
+        return blocked
     return await call_next(request)
+
+
+class _FeatureGate:
+    """The feature gate as plain ASGI: answer the 404 `_feature_gate_block` decides, else pass
+    the request straight on with the same scope, receive and send. Nothing runs after the
+    downstream app, so there is no response to hold and no task to start."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        blocked = _feature_gate_block(Request(scope, receive))
+        if blocked is None:
+            await self.app(scope, receive, send)
+            return
+        await blocked(scope, receive, send)
+
+
+app.add_middleware(_FeatureGate)
 
 
 #: Scope key for the per-request access-log client holder. The server runs with
@@ -1420,6 +1509,48 @@ class _CapacityMiddleware:
 app.add_middleware(_ai_optout.AIScopeMiddleware)
 app.add_middleware(_CapacityMiddleware)
 
+
+class _ConnectionRebalanceMiddleware:
+    """S3c (ADR 0097), multi-process web only: close every REBALANCE_EVERY-th keep-alive
+    connection after its response (`Connection: close`).
+
+    N uvicorn worker processes share one listening socket; whichever process accepts a
+    connection serves every request on it for as long as the client keeps it alive. Clients
+    that hold connections (proxies, API scripts, the load harness) therefore stay pinned to
+    the process that happened to accept them, and one process ends up with more than its share
+    while the others idle: the 3-web tail in S3b. Closing a connection now and then sends the
+    client back through accept, which the least busy process (a free event loop) wins first,
+    and a busy process (more responses) sheds connections faster. Costs one reconnect per
+    REBALANCE_EVERY requests; a proxy in front reconnects transparently. Pure ASGI, no I/O."""
+
+    REBALANCE_EVERY = 16
+
+    def __init__(self, app):
+        self.app = app
+        self._n = 0
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+        self._n += 1
+        if self._n % self.REBALANCE_EVERY:
+            return await self.app(scope, receive, send)
+
+        async def _send(message):
+            if message.get("type") == "http.response.start":
+                headers = [
+                    (k, v) for k, v in message.get("headers", []) if k.lower() != b"connection"
+                ]
+                headers.append((b"connection", b"close"))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, _send)
+
+
+if config.multi_web():
+    app.add_middleware(_ConnectionRebalanceMiddleware)
+
 # G-01: application-wide security-header middleware. Installed by WRAPPING
 # build_middleware_stack (see apply_security_headers) so it is the TRUE outermost
 # layer — outside Starlette's ServerErrorMiddleware, so even an unhandled 500
@@ -1486,6 +1617,89 @@ def _require_lazy_libraries() -> None:
 
 @app.on_event("startup")
 def _startup() -> None:
+    if config.ROLE == "all":
+        if config.WEB_PROCESSES > 1:
+            # N copies of the single process would each run the job pools and the scheduler.
+            raise RuntimeError(
+                f"LOC_TMS_WEB_PROCESSES={config.WEB_PROCESSES} needs LOC_TMS_ROLE=web plus worker "
+                "processes (python -m app.worker); see docs/architecture/deployment.md (ADR 0097)."
+            )
+        _startup_steps()
+        return
+    # S3c (ADR 0097): N web processes and M workers boot together. Each one's boot is the
+    # same sequence as before, run one process at a time (leader.boot_lock), and a web process
+    # first marks itself present so a peer's boot cleanup never fails a row it is serving. The
+    # protected-data-dir guard (#13) still runs before anything touches the data directory.
+    from app.services import leader
+
+    config.assert_data_dir_allowed()
+    leader.hold_presence(jobs.instance_id())
+    with leader.boot_lock():
+        leader.sweep_presence_files()
+        _startup_steps()
+        _check_connection_budget()
+
+
+def _check_connection_budget() -> None:
+    """Warn when the processes' pools can ask Postgres for more connections than it allows
+    (S3c, ADR 0097). Every process owns its own pool (LOC_TMS_DB_POOL_SIZE + _MAX_OVERFLOW) plus
+    two dedicated connections (the events listener and a leadership/presence lock); past
+    max_connections a busy moment turns into connection errors instead of a pool wait."""
+    if config.IS_SQLITE:
+        return
+    try:
+        import os as _os
+
+        from sqlalchemy import text as _text
+
+        with _db.engine.connect() as c:
+            max_conn = int(c.execute(_text("SHOW max_connections")).scalar() or 0)
+        workers = int(_os.environ.get("LOC_TMS_WORKER_PROCESSES", "0") or 0)
+    except Exception:
+        _logger.debug("connection budget check skipped", exc_info=True)
+        return
+    per_process = config.DB_POOL_SIZE + config.DB_MAX_OVERFLOW + 2
+    need = (config.WEB_PROCESSES + workers) * per_process
+    if max_conn and need > max_conn - 5:
+        _logger.warning(
+            "Connection budget: %s web + %s worker process(es) x (pool %s + overflow %s + 2) = "
+            "%s connections at peak, but Postgres max_connections is %s. Lower "
+            "LOC_TMS_DB_POOL_SIZE / LOC_TMS_DB_MAX_OVERFLOW per process or raise max_connections "
+            "(docs/architecture/deployment.md).",
+            config.WEB_PROCESSES,
+            workers,
+            config.DB_POOL_SIZE,
+            config.DB_MAX_OVERFLOW,
+            need,
+            max_conn,
+        )
+
+
+def _startup_steps() -> None:
+    boot_common()
+    # #728/#747: background /api calls (api_task rows) a restart cut off are failed with a
+    # message that says the work may have partly run, before the generic sweep below.
+    _background_calls_mw.fail_interrupted()
+    if config.runs_background_work():
+        recover_background_work()
+    else:
+        # The live translate streams of the web role run in THIS process, so their orphans
+        # from before this boot are this boot's to fail (a worker boot never touches them).
+        live = jobs.fail_orphaned_live_rows()
+        if live:
+            _logger.warning("Failed %s live translation(s) a restart interrupted", live)
+        _logger.info(
+            "LOC_TMS_ROLE=web: no job workers, run execution or scheduler in this process; "
+            "worker processes (python -m app.worker) run them (ADR 0095)."
+        )
+    _boot_tail()
+
+
+def boot_common() -> None:
+    """The boot every process role shares (S3, ADR 0095): data-dir guard, schema, settings,
+    the boot-time adapters (blob/export stores, PII, SAML, the job queue) and the boot
+    warnings. The HTTP process (`_startup`) and the worker process (`app.worker`) both run it
+    first."""
     _require_lazy_libraries()
     # Data-dir protection guard (issue #13): refuse to serve a `.protected` data
     # dir unless LOC_TMS_ALLOW_REAL_DATA=1 is set. This runs FIRST — before
@@ -1600,11 +1814,14 @@ def _startup() -> None:
                 "to close G-02.",
                 base,
             )
+
+
+def recover_background_work() -> None:
+    """Boot recovery and re-adoption of the background work (jobs, batches, runs, the run
+    queue). Runs in the processes that execute that work: the single-process role and every
+    worker process (`app.worker`); the web role skips it (S3, ADR 0095)."""
     # A restart loses the in-memory job queue: re-queue never-started jobs and
     # mark the ones that were mid-run as failed (visible, not silently lost).
-    # #728/#747: background /api calls (api_task rows) a restart cut off are failed with a
-    # message that says the work may have partly run, before the generic sweep below.
-    _background_calls_mw.fail_interrupted()
     interrupted = jobs.recover_interrupted(at_boot=True)
     if interrupted:
         _logger.warning("Recovered %s interrupted background job(s) after restart", interrupted)
@@ -1639,6 +1856,12 @@ def _startup() -> None:
     adopted = _orchestrator.adopt_queued_runs()
     if adopted:
         _logger.warning("Adopted %s queued workflow run(s) after restart", adopted)
+
+
+def _boot_tail() -> None:
+    """The rest of the HTTP process boot (after the background-work recovery)."""
+    from app import extensions as _extensions
+
     # ...and any run-recovery sweep an installed add-on registered (app/extensions.py
     # "tick_runs"); nothing registered means nothing runs and nothing is logged.
     # Best-effort: a failure here must never block startup.
@@ -1736,11 +1959,32 @@ def _startup() -> None:
         # itself carries the embedded gate, so the startup call is unconditional.
         from app.ports import scheduler as scheduler_port
 
-        scheduler_port.get().start()
+        # S3 (ADR 0095): the scheduler tick and its sweeps run where the background work
+        # runs; in the web role the worker processes run them.
+        if config.runs_background_work():
+            scheduler_port.get().start()
 
 
 @app.on_event("shutdown")
 def _shutdown() -> None:
+    # Graceful drain (S1): stop claiming, give running jobs LOC_TMS_DRAIN_SECONDS (default 8)
+    # to finish, then hand the rest back to the queue so the next boot re-runs them. Never
+    # raises out of shutdown. The container stop timeout must exceed this: the default 8 s
+    # fits docker stop's default 10 s; a longer drain needs `docker stop -t` raised with it.
+    try:
+        import os as _os
+
+        try:
+            drain_s = float(_os.environ.get("LOC_TMS_DRAIN_SECONDS", "8"))
+        except ValueError:
+            drain_s = 8.0
+        from app.services import jobs as _jobs
+
+        handed = _jobs.drain(drain_s)
+        if handed:
+            _logger.warning("Shutdown drain handed %s running job(s) back to the queue.", handed)
+    except Exception:
+        _logger.exception("Shutdown drain failed; continuing shutdown")
     # File-encryption at rest only applies when the DB is a local SQLite file.
     # On Postgres there is no local file to lock; encryption is the server's job.
     if dbcrypt.enabled():
@@ -1763,6 +2007,12 @@ def _shutdown() -> None:
 _ROUTERS = (HEALTH_ROUTERS + API_ROUTERS) if config.IS_EMBEDDED else ALL_ROUTERS
 for r in _ROUTERS:
     app.include_router(r)
+
+# S7b round 2 (ADR 0103): skip an included router whose routes cannot match the request's first
+# path segment (same first match, a fraction of the route checks). No-op on an unknown FastAPI.
+from app.web import route_prefilter as _route_prefilter  # noqa: E402
+
+_route_prefilter.install()
 
 
 # The BACK-OFFICE operator console was mounted here (multi-org P5) and was REMOVED on

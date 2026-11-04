@@ -417,29 +417,15 @@ def project_show(args, emit) -> int:
 
 
 def project_leverage(args, emit) -> int:
-    """CV-1: GET /api/projects/{id}/leverage — the 7-band word-based TM leverage. Same
-    human/JSON shape as the local `project leverage` arm."""
+    """GET /api/projects/{id}/leverage: the same report and CSV as the local `project leverage`."""
+    from app.cli import _leverage_out
+
     c = _client(args)
-    info = c.get(f"/api/projects/{args.project_id}/leverage")
-    if emit.as_json:
-        emit.json(info)
-    else:
-        emit.say(f"Project #{info['project_id']} - 7-band word leverage")
-        emit.table(
-            [
-                (r["label"], r["words"], r["segments"], "covered" if r["covered"] else "billable")
-                for r in info.get("bands", [])
-            ],
-            headers=("band", "words", "segments", "scope"),
-        )
-        emit.say(
-            f"  total words: {info.get('total_words', 0)}   "
-            f"covered: {info.get('covered_words', 0)}   "
-            f"billable (post-edit): {info.get('billable_words', 0)}"
-        )
-        if info.get("note"):
-            emit.say(f"  note: {info['note']}")
-    return 0
+    path = f"/api/projects/{args.project_id}/leverage"
+    if _leverage_out.wants_csv(args):
+        return _leverage_out.deliver_csv(args, emit, c.download(path, {"format": "csv"}).text)
+    info = c.get(path)
+    return _leverage_out.deliver_report(emit, {k: v for k, v in info.items() if k != "ok"})
 
 
 def project_set_providers(args, emit) -> int:
@@ -502,14 +488,15 @@ def _edit_step_body(args) -> dict:
         # run-190 Item D / M5: the over-translation guard opt-out on the wire (update arm).
         "over_translation_guard",
         "memory_mode",
-        # Batch 15 T1 (SPEC-tm-match-step-config §8.D): the six tm_match config overrides,
+        # Batch 15 T1 (SPEC-tm-match-step-config §8.D): the tm_match config overrides,
         # partial (present-value / present-"auto"/"" clears / absent-unchanged).
-        "tm_fill_threshold",
-        "tm_fuzzy_lock_mode",
         "tm_lock_ice",
         "tm_hundreds_enter_lqa",
-        "tm_context_floor",
         "tm_pool_selection",
+        # ADR 0102: removed flags, forwarded so the server answers with the clear 400.
+        "tm_fill_threshold",
+        "tm_fuzzy_lock_mode",
+        "tm_context_floor",
         "glossary_id",
         "redact_pii",
         "adaptive_feedback",

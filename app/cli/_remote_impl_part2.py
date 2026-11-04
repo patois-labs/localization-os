@@ -7,6 +7,7 @@ import base64
 import os
 
 from app.cli._common import (
+    EXIT_FAIL,
     EXIT_USAGE,
     CliError,
 )
@@ -386,20 +387,77 @@ def style_guide_delete(args, emit) -> int:
 # ============================================================================
 # tm
 # ============================================================================
+# S6 (ADR 0094): a file bigger than this goes up as a streamed multipart upload and is
+# imported by a background job on the server (the CLI follows the job); a smaller one keeps
+# the base64 JSON import, answered in one request as before.
+TM_IMPORT_STREAM_OVER = 8 * 1024 * 1024
+# How long the CLI follows a background TM import before handing back the job id.
+TM_IMPORT_WAIT_S = 4 * 3600.0
+
+
+def _tm_import_background(c, args, emit) -> dict:
+    """Stream the file as multipart, then follow GET /api/jobs/{id} until the import ends.
+    Returns the import's counts (the job result), like the JSON reply."""
+    import time
+
+    ack = bool(getattr(args, "acknowledge_placeholder_loss", False))
+    with open(args.tmx, "rb") as fh:
+        launched = c.upload(
+            f"/api/projects/{args.project_id}/tm/import",
+            os.path.basename(args.tmx),
+            fh,
+            form={
+                "source": args.source,
+                "target": args.target,
+                "acknowledge_placeholder_loss": "true" if ack else "false",
+            },
+        )
+    job_id = int(launched["job_id"])
+    emit.detail(f"uploaded {launched.get('bytes', 0)} bytes; importing as job #{job_id}")
+    deadline = time.time() + TM_IMPORT_WAIT_S
+    last = ""
+    while True:
+        job = c.get(f"/api/jobs/{job_id}")
+        status = str(job.get("status") or "").lower()
+        if status in ("completed", "failed", "cancelled"):
+            break
+        msg = str(job.get("message") or "")
+        if msg and msg != last:
+            emit.detail(msg.encode("ascii", "backslashreplace").decode("ascii"))
+            last = msg
+        if time.time() >= deadline:
+            raise CliError(
+                f"the TM import is still running on the server as job #{job_id}. "
+                f"Check it with: job status {job_id}",
+                EXIT_FAIL,
+            )
+        time.sleep(2.0)
+    if status != "completed":
+        raise CliError(
+            f"could not import TMX (job #{job_id}): {job.get('error') or status}", EXIT_FAIL
+        )
+    return {**(job.get("result") or {}), "job_id": job_id}
+
+
 def tm_import(args, emit) -> int:
     c = _client(args)
-    data = _read_bytes(args.tmx)
-    body = c.post(
-        f"/api/projects/{args.project_id}/tm/import",
-        json={
-            "tmx_b64": base64.b64encode(data).decode(),
-            "source": args.source,
-            "target": args.target,
-            "acknowledge_placeholder_loss": bool(
-                getattr(args, "acknowledge_placeholder_loss", False)
-            ),
-        },
-    )
+    if not os.path.isfile(args.tmx):
+        raise CliError(f"file not found: {args.tmx}", EXIT_USAGE)
+    if os.path.getsize(args.tmx) > TM_IMPORT_STREAM_OVER:
+        body = _tm_import_background(c, args, emit)
+    else:
+        data = _read_bytes(args.tmx)
+        body = c.post(
+            f"/api/projects/{args.project_id}/tm/import",
+            json={
+                "tmx_b64": base64.b64encode(data).decode(),
+                "source": args.source,
+                "target": args.target,
+                "acknowledge_placeholder_loss": bool(
+                    getattr(args, "acknowledge_placeholder_loss", False)
+                ),
+            },
+        )
     n = body["imported"]
     skipped_ref = body.get("skipped_refusal", 0)
     emit.result(

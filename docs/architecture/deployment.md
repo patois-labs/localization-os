@@ -29,9 +29,46 @@ swapped in, with the previous container kept as `-old` for rollback (decision
 `deploy/aws-hosted/caddy/Caddyfile.cloudflare`. Run the full suite sweep before every deploy.
 
 The shipped topology is a **single machine**. Localization OS is a modular monolith on one
-SQLite (or Postgres) core, so a production deploy is one FastAPI process behind a reverse
-proxy, with the durable job queue and Postgres as the multi-instance path (documented in
-jobs-and-scheduler and data-and-migrations). The proxy contract is two probes:
+SQLite (or Postgres) core. By default a production deploy is one FastAPI process
+(`LOC_TMS_ROLE=all`) behind a reverse proxy. Since S3 (decision
+[0095](../decisions/0095-process-roles-web-and-workers.md)) the same image can run one web
+process (`LOC_TMS_ROLE=web`, HTTP only) plus N worker processes (`python -m app.worker`,
+`LOC_TMS_ROLE=worker`) on one database, which is how the app uses more than one core: the
+container entrypoint starts them when `LOC_TMS_WORKER_PROCESSES` is above 0 and stops the
+whole container when any of them dies, so the restart policy and the boot recovery bring
+the set back together. Postgres is the recommended database for more than a couple of
+workers (runbook `docs/guides/postgres-migration.md`).
+
+Since decision [0097](../decisions/0097-multi-process-web.md)) the web side can also be
+N processes: `LOC_TMS_WEB_PROCESSES=N` (with `LOC_TMS_WORKER_PROCESSES` of at least 1) makes
+the entrypoint run uvicorn with `--workers N` on one listening socket. What makes that safe:
+
+- **Boot one at a time.** Every web and worker process boots under `leader.boot_lock()`
+  (`app/services/leader.py`): a blocking Postgres advisory lock, or a file lock in the data
+  directory on SQLite. The steps are the single process's, run serially.
+- **Presence and owner-aware cleanups.** Each web process holds a presence lock for its
+  lifetime (`leader.hold_presence`). Rows that execute inside a web process (live translate
+  streams, background `/api` calls) record `payload.owner`; a booting web process fails only
+  the rows whose owner is gone (`leader.present`), so restarting one process never fails a
+  peer's live work.
+- **Shared web-to-web state.** With N above 1 the `/api` rate-limit windows, SAML replay ids
+  and the one-time stash live in the `sharedstate` table (`app/services/shared_state.py`);
+  with one web process they stay in memory as before. Settings already reload across
+  processes through the settings version probe, and live run progress rides the cross-process events
+  bus, which every process listens to.
+- **Connection rebalancing.** Every 16th response closes its keep-alive connection
+  (`app/main.py::_ConnectionRebalanceMiddleware`), so long-lived client connections do not
+  pile up on whichever process accepted them first.
+- **Fair audit lock.** The audit chain's cross-process lock caps a process's tenure at 50 ms
+  in the split roles (`app/services/audit_state.py::process_lock`), so a busy process cannot
+  starve its peers' writes.
+
+Sizing: every process owns its own pool, so at peak Postgres needs, per process,
+`LOC_TMS_DB_POOL_SIZE` plus `LOC_TMS_DB_MAX_OVERFLOW` plus 2 connections (the 2 are the
+events listener and a leadership or presence lock), times the web and worker processes. The web boot warns when that passes
+`max_connections - 5`. Choose web processes for request rate (one process tops out near 20 to
+30 requests/s of mixed API traffic) and worker processes for job throughput, and leave one or
+two cores for Postgres. `docs/guides/postgres-migration.md` has the per-size numbers. The proxy contract is two probes:
 `app/web/health.py` serves an instant no-DB liveness answer and a DB-coupled readiness
 answer, mounted in every profile including the embedded one that drops the whole web
 surface.
@@ -118,6 +155,15 @@ Boot recovery deliberately ignores dispatcher_owner under the single-instance, i
   `/auth/accept/<token>` at any `root_path`/mount prefix (the match is the `auth/accept`
   segment boundary at any depth, not a leading anchor, and everything after that boundary
   is blanked; #402). Enforced by `verify_ops` and `verify_engines`.
+- **A web-role process answers requests and executes no background work.** With
+  `LOC_TMS_ROLE=web` the startup (`app/main.py::_startup`) runs only the shared boot
+  (`app/main.py::boot_common`) and the HTTP tail; job, batch and run recovery, the job pools,
+  the run admission scheduler and the scheduler tick run in the worker processes
+  (`app/worker.py::main`, which runs `app/main.py::recover_background_work`). Launches and
+  resumes become queued rows (workflow-engine) and a submitted job waits on the durable queue
+  (jobs-and-scheduler), so a busy worker never slows a page through the GIL. Enforced by
+  `verify_worker_roles` (`/health` p95 under 50 ms while a worker runs
+  translate jobs).
 - **Tailnet routing is destination-scoped.** `app/services/tailnet.py::is_tailnet_host`
   gates `app/services/tailnet.py::tailnet_client_kwargs` so only tailnet hosts route through
   the sidecar proxy and all other egress is untouched. Enforced by `verify_tailnet`.
@@ -131,6 +177,7 @@ Boot recovery deliberately ignores dispatcher_owner under the single-instance, i
 | Liveness + readiness | `app/web/health.py::health` · `app/web/health.py::ready` · `app/web/health.py::router` | The instant no-DB liveness answer, the DB-coupled readiness answer, and the all-profiles router. |
 | Structured logging | `app/logging_config.py::configure_logging` · `app/logging_config.py::JsonFormatter` | The opt-in JSON logging (root logger untouched under text output); HTTP client request lines quieted in every format. |
 | Tailnet egress seam | `app/services/tailnet.py::is_tailnet_host` · `app/services/tailnet.py::tailnet_proxy_url` · `app/services/tailnet.py::tailnet_client_kwargs` | The destination-scoped SOCKS5 routing for LOCAL and self-hosted engine HTTP. |
+| Multi-process web state | `app/services/shared_state.py::incr` · `app/services/shared_state.py::claim` · `app/services/shared_state.py::put` · `app/services/shared_state.py::take` | The `sharedstate` table behind the `/api` rate-limit windows, SAML replay ids and the one-time stash when more than one web process serves the install (ADR 0097); the boot lock and web-process presence are in the jobs-and-scheduler doc. |
 
 ## Proxy runtime configuration
 
@@ -198,6 +245,9 @@ and `verify_ingress_boundary` describe and exercise the same boundary.
   the probes staying inside budget through a launch burst.
 - `verify_ops`: the opt-in structured-logging configuration and its default-neutral no-op.
 - `verify_tailnet`: the destination-scoped tailnet routing and its inertness off-tailnet.
+- `verify_worker_roles`: the process roles: the worker entry point, a web role
+  that starts no background work, web-queued work finished by workers, `/health` latency
+  while workers are busy.
 
 ## 6. Battle scars
 

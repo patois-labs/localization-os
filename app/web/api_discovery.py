@@ -246,22 +246,39 @@ def project_locale_spelling(s: Session, project_id, locale: str) -> str:
     """`locale` in the spelling the project already stores for that language (a project holding
     pt-BR translates "pt-br" as pt-BR), else as given. The translate doors seed, enqueue and
     translate in this spelling, so a second spelling never makes a second segment set."""
-    want = languages_catalog.normalize(locale)
-    for tl in s.exec(
-        select(TargetLocale).where(TargetLocale.project_id == project_id).order_by(TargetLocale.id)
-    ).all():
-        if languages_catalog.normalize(tl.locale) == want:
-            return tl.locale
-    return locale
+    return project_locale_spellings(s, project_id, [locale])[0]
 
 
-def prepare_translate_locale(s: Session, doc: Document, locale: str):
+def project_locale_spellings(s: Session, project_id, locales) -> list:
+    """project_locale_spelling for several locales from ONE read of the project's target
+    locales (S4 follow-up: the translate door used to read them once per requested
+    language)."""
+    stored = [
+        tl.locale
+        for tl in s.exec(
+            select(TargetLocale)
+            .where(TargetLocale.project_id == project_id)
+            .order_by(TargetLocale.id)
+        ).all()
+    ]
+    out = []
+    for locale in locales:
+        want = languages_catalog.normalize(locale)
+        out.append(next((t for t in stored if languages_catalog.normalize(t) == want), locale))
+    return out
+
+
+def prepare_translate_locale(s: Session, doc: Document, locale: str, has_source=None):
     """Register and seed a target after the caller clears document and launch gates.
 
     Shared by the dedicated translate endpoint and the generic jobs API. Empty
     source documents cannot produce a translation and must be refused before launch.
+    `has_source`: True when the caller already checked, in this request, that the
+    document has source segments (seeding only ever adds rows); None checks here.
     """
-    if s.exec(select(Segment.id).where(Segment.document_id == doc.id)).first() is None:
+    if not has_source and (
+        s.exec(select(Segment.id).where(Segment.document_id == doc.id)).first() is None
+    ):
         return JSONResponse(
             {"ok": False, "error": "Document has no source segments to translate."},
             status_code=400,
@@ -574,7 +591,7 @@ async def api_translate_document(doc_id: int, request: Request):
         if denied:
             return denied
         # one language, one spelling: a target the project already has is used in its spelling
-        targets = _dedupe(project_locale_spelling(s, doc.project_id, t) for t in targets)
+        targets = _dedupe(project_locale_spellings(s, doc.project_id, targets))
         blocked, _gate_ctx = translate_launch_gate(
             s, ident, doc, project, targets, str(payload.get("provider") or "").strip()
         )
@@ -596,13 +613,19 @@ async def api_translate_document(doc_id: int, request: Request):
         }
 
         # Both API launch doors register and seed only after the same gates.
+        # The source-segment check runs for the first language only: seeding adds rows, so
+        # once it passed it holds for the rest of this request.
+        _has_source = None
         for loc in targets:
             try:
-                blocked = await deps.offload_blocking(prepare_translate_locale, s, doc, loc)
+                blocked = await deps.offload_blocking(
+                    prepare_translate_locale, s, doc, loc, _has_source
+                )
             except deps.WorkerBusy as exc:
                 return deps.busy_response(str(exc))
             if blocked:
                 return blocked
+            _has_source = True
 
         # Per-locale estimated token cost, for the in-flight budget accounting
         # (Finding 2). Heuristic: total source characters for that locale's segments
@@ -610,21 +633,16 @@ async def api_translate_document(doc_id: int, request: Request):
         # deliberately conservative). Stamped on the job payload so budgets.spend_
         # this_month can count a QUEUED/RUNNING job's estimate before it produces
         # real token stats.
-        est_by_locale = {
-            loc: max(
-                1,
-                sum(
-                    len(st or "")
-                    for st in s.exec(
-                        select(Segment.source_text).where(
-                            Segment.document_id == doc_id, Segment.target_locale == loc
-                        )
-                    ).all()
-                )
-                // 4,
+        # S4 follow-up: every requested language's source text in one read.
+        _chars = dict.fromkeys(targets, 0)
+        for _loc, st in s.exec(
+            select(Segment.target_locale, Segment.source_text).where(
+                Segment.document_id == doc_id, Segment.target_locale.in_(list(targets))
             )
-            for loc in targets
-        }
+        ).all():
+            if _loc in _chars:
+                _chars[_loc] += len(st or "")
+        est_by_locale = {loc: max(1, _chars[loc] // 4) for loc in targets}
 
     # Department stamped on the job so budget accounting sums by the SUBMIT-TIME
     # department, not the actor's current (possibly later-changed) User.department

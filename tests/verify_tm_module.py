@@ -6,7 +6,7 @@ Covers the /tm module (browse / usage / lifecycle over the EXISTING SegmentTM ro
         - translate.pretranslate_stream segmented 100% apply -> bump
         - orchestrator.run_workflow step-0 100% apply -> bump
         - content.apply_tm_to_document 100% apply -> bump
-        - a fuzzy (<100%) match is NOT applied and NOT counted
+        - a near (non-exact) source is NOT a match, so NOT applied and NOT counted (ADR 0102)
         - one entry applying to MANY identical segments in a run counts each apply
   (3) browse + filters (pair / project / text / date / usage / unused) + pagination
   (4) stats summary (totals, per-pair, used-vs-never, top-used, oldest/newest)
@@ -39,7 +39,7 @@ from tests._bootstrap import init_env
 
 init_env("loctms_tmmod_")
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import inspect
 from sqlmodel import Session, select
@@ -201,8 +201,8 @@ def test_usage_tracking_workflow_step0():
 
 
 # A ~209-character source whose only difference from the query is ONE DIGIT of the amount.
-# fuzz.ratio scores that 99.52 (one differing char out of 209), which `round` pushed up to
-# 100 while the hashes differ (so the exact-hash path correctly misses).
+# fuzz.ratio used to score that 99.52 (one differing char out of 209), which `round` pushed up
+# to 100 while the hashes differ (#491). Now it is just a miss (ADR 0102).
 _MONEY_SRC = (
     "Please transfer 100 dollars to the account numbered 4471 8823 0092 before the end of "
     "the business day so the vendor invoice for March can be settled on time and without "
@@ -212,14 +212,12 @@ _MONEY_ALT = _MONEY_SRC.replace("100 dollars", "900 dollars")
 _MONEY_TGT = "Veuillez virer 100 dollars au compte 4471 8823 0092."
 
 
-def test_fuzzy_99_5_floors_to_99_never_100():
-    """#491: a fuzzy score in 99.5..99.9 must report 99, never a rounded-up 100.
+def test_one_digit_variant_is_never_a_hit():
+    """#491 / ADR 0102: a source one DIGIT away from a stored one is NOT a TM hit at all.
 
-    The bug: `int(round(best_score))` turned a 99.52 fuzzy hit into match_pct 100, and every
-    auto-apply gate keys on `match_pct == 100` (orchestrator step-0 TM fill, the tm_lock
-    "100" band, the tm_match offer list). A segment differing by ONE DIGIT of an amount was
-    therefore filled with the stored target and locked as a 100% match, so a wrong number
-    shipped with no MT and no review, even at the default fill_threshold=100.
+    #491 was a 99.52 fuzzy score that `round` pushed up to a 100 (so a wrong amount was filled
+    and locked as a 100 % match). Fuzzy matching is gone (ADR 0102), so the same segment now
+    simply misses on every lookup path: no hit, no fill, no usage bump, no TM provenance.
     """
     assert _MONEY_SRC != _MONEY_ALT and tm.hash_text(_MONEY_SRC, "en-US", "fr-FR") != tm.hash_text(
         _MONEY_ALT, "en-US", "fr-FR"
@@ -229,19 +227,17 @@ def test_fuzzy_99_5_floors_to_99_never_100():
         e = tm.write_back(s, pid, _MONEY_SRC, _MONEY_TGT, "en-US", "fr-FR")
         eid = e.id
 
-        # A hash-exact hit still reports 100 (the fix only floors NON-hash scores).
+        # A hash-exact hit still reports 100.
         exact = tm.lookup(s, pid, _MONEY_SRC, "en-US", "fr-FR")
         assert exact and exact["match_pct"] == 100, exact
 
-        # The one-digit variant is a FUZZY hit and must report 99 on both lookup paths.
-        hit = tm.lookup(s, pid, _MONEY_ALT, "en-US", "fr-FR")
-        assert hit and hit["match_pct"] == 99, ("a 99.52 fuzzy hit must floor to 99", hit)
-        assert hit["target_text"] == _MONEY_TGT, hit
+        # The one-digit variant misses on both lookup paths.
+        assert tm.lookup(s, pid, _MONEY_ALT, "en-US", "fr-FR") is None
         batch = tm.lookup_batch(s, pid, [_MONEY_ALT, _MONEY_SRC], "en-US", "fr-FR")
-        assert batch[_MONEY_ALT]["match_pct"] == 99, batch[_MONEY_ALT]
+        assert batch[_MONEY_ALT] is None, batch[_MONEY_ALT]
         assert batch[_MONEY_SRC]["match_pct"] == 100, batch[_MONEY_SRC]
 
-        # The orchestrator step-0 gate (`match_pct == 100`) must NOT fire for the variant:
+        # The orchestrator step-0 gate must NOT fire for the variant:
         # no TM fill, no usage bump; the MT step translates it instead.
         doc = _mk_doc_with_segments(s, pid, "fr-FR", [_MONEY_ALT])
         wf = Workflow(name="Fuzz99WF")
@@ -256,18 +252,18 @@ def test_fuzzy_99_5_floors_to_99_never_100():
             select(Segment).where(Segment.document_id == doc.id, Segment.target_locale == "fr-FR")
         ).first()
         assert seg.target_text != _MONEY_TGT, (
-            "#491: a 99.5 fuzzy hit must never be auto-applied as a 100% match",
+            "#491: a one-digit variant must never be filled from TM",
             seg.target_text,
         )
-        assert not seg.tm_match_pct or seg.tm_match_pct < 100, (
-            "the segment must not carry 100% TM provenance",
+        assert not seg.tm_match_pct, (
+            "the segment must not carry TM provenance",
             seg.tm_match_pct,
         )
         assert tm_module.get_entry(s, eid).use_count == 0, (
-            "an un-applied fuzzy hit must not bump use_count",
+            "an un-applied variant must not bump use_count",
             tm_module.get_entry(s, eid).use_count,
         )
-    print("  fuzzy: a 99.5 one-digit-difference hit reports 99 and is never auto-applied: OK")
+    print("  one-digit variant: no hit on any path, never auto-applied (ADR 0102): OK")
 
 
 def test_browse_filters_and_pagination():
@@ -382,12 +378,12 @@ def test_bulk_delete_created_before_and_embeddings():
         olds = [tm.write_back(s, pid, f"old-{i}", f"vieux-{i}", "en-US", "fr-FR") for i in range(3)]
         old_ids = [e.id for e in olds]
         # backdate the 3 rows so created_before selects them
-        past = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=10)
+        past = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=10)
         for e in olds:
             e.created_at = past
             s.add(e)
         s.commit()
-        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
+        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1)
         for e in olds:
             _plant_embedding(s, e)
         # embeddings exist for the old rows
@@ -822,7 +818,7 @@ def main():
     test_usage_tracking_many_applies_one_run()
     test_usage_tracking_apply_tm_to_document()
     test_usage_tracking_workflow_step0()
-    test_fuzzy_99_5_floors_to_99_never_100()
+    test_one_digit_variant_is_never_a_hit()
     test_browse_filters_and_pagination()
     test_stats_summary()
     test_delete_single_and_embedding_invalidation()

@@ -666,6 +666,9 @@
     "/api/jobs/{jid}": [
       "GET"
     ],
+    "/api/jobs/{jid}/leverage": [
+      "GET"
+    ],
     "/api/keys/{key_id}": [
       "DELETE",
       "PATCH"
@@ -1732,6 +1735,12 @@
     "/jobs": [
       "GET"
     ],
+    "/jobs/{jid}/leverage": [
+      "GET"
+    ],
+    "/jobs/{jid}/leverage.csv": [
+      "GET"
+    ],
     "/jobs/{jid}/status": [
       "GET"
     ],
@@ -1926,6 +1935,9 @@
     ],
     "/projects/{project_id}/languages": [
       "POST"
+    ],
+    "/projects/{project_id}/leverage.csv": [
+      "GET"
     ],
     "/projects/{project_id}/make-connected": [
       "POST"
@@ -2736,11 +2748,8 @@
     "tag_llm_repair_verify_provider",
     "tag_llm_repair_verify_votes",
     "terminology_concept_editor_enabled",
-    "tm_context_floor",
     "tm_empty_delivery_gate",
-    "tm_fill_threshold",
     "tm_fix_protection_enabled",
-    "tm_fuzzy_lock_mode",
     "tm_hundreds_enter_lqa",
     "tm_lock_ice",
     "trusted_proxy_ips",

@@ -145,6 +145,12 @@ _KERNEL_SURFACE = (
     "languages",
     "languages_catalog",
     "ldap_auth",
+    # S3c (ADR 0097): cross-process critical sections (background-call idempotency).
+    "leader",
+    # ADR 0102: the leverage report (101 % / repetitions / 100 % / new per language).
+    # api_cli_projects_1.py, api_part2.py, jobs_ui.py, projects.py and the CLI are the FIRST
+    # shells to import it.
+    "leverage",
     "lifecycle",
     # #576 ingest caps: the add-language seeding cap service. app/web/api_discovery.py (the
     # add-language route) is the FIRST shell to import it.
@@ -214,6 +220,8 @@ _KERNEL_SURFACE = (
     "segment_review",
     "segmentation_profiles",
     "settings",
+    # S3c (ADR 0097): web-to-web shared state (one-time stash) for multi-process web.
+    "shared_state",
     "setup_author",
     "spend",
     "srx",
@@ -235,6 +243,9 @@ _KERNEL_SURFACE = (
     "term_extraction",
     "tm",
     "tm_delivery",
+    # S6 (ADR 0094): the background TMX import (upload sink + job submit). The web and API TM
+    # import routes and the CLI are the FIRST shells to import it.
+    "tm_import_job",
     "tm_lock",
     "tm_module",
     "translate",

@@ -27,9 +27,7 @@ from app.services.workflows_common import (
     _clamp_threshold,
     _coerce_glossary_cap,
     _coerce_pt_id,
-    _coerce_tm_fuzzy_lock_mode,
     _coerce_tm_pool_selection,
-    _coerce_tm_scalar_int,
     _empty_held_marker_orphans,
     _FieldLabels,
     _is_step_ref,
@@ -290,11 +288,8 @@ _DEAD_FIELD_LABELS = _FieldLabels(
         "parallel_group": "parallel group",
         "vendor_id": "vendor",
         "external_wait_hours": "external wait window",
-        "tm_fill_threshold": "TM fill threshold",
-        "tm_fuzzy_lock_mode": "TM fuzzy lock mode",
         "tm_lock_ice": "TM lock in-context matches",
         "tm_hundreds_enter_lqa": "TM send 100% matches to LQA",
-        "tm_context_floor": "TM context-attach floor",
         "tm_pool_selection": "TM pool selection",
     }
 )
@@ -318,8 +313,8 @@ _DEAD_FIELD_HINT = {
     ),
     StepType.TM_MATCH: (
         "a tm_match step makes no provider call -- it fills + locks TM matches per its "
-        "own config. Only its TM policy (fill threshold, fuzzy lock mode, lock_ice, "
-        "hundreds_enter_lqa, context_floor, pool selection), run_condition, max_visits, "
+        "own config. Only its TM policy (lock_ice, "
+        "hundreds_enter_lqa, pool selection), run_condition, max_visits, "
         "and key apply."
     ),
     StepType.EXTERNAL: (
@@ -410,13 +405,6 @@ def _dead_field_is_meaningful(field: str, value) -> bool:
         # inert; BOTH True and False are deliberate overrides, so a coerced non-None value
         # is meaningful (worth refusing on a non-tm_match step).
         return _coerce_tm_tristate_bool(value) is not None
-    if field == "tm_fuzzy_lock_mode":
-        # NULLABLE: None/blank/"auto"/junk -> None (inherit); a recognised mode is a
-        # deliberate override worth refusing on a non-tm_match step.
-        return _coerce_tm_fuzzy_lock_mode(value) is not None
-    if field in ("tm_fill_threshold", "tm_context_floor"):
-        # NULLABLE int override: None/blank/junk -> None (inherit); a real int is a choice.
-        return _coerce_tm_scalar_int(value) is not None
     if field == "tm_pool_selection":
         # NULLABLE list: None/blank -> None (all readable, inherit); a list (INCLUDING the
         # deliberate empty [] "select nothing") is a choice worth refusing off tm_match.

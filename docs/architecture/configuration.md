@@ -2,12 +2,6 @@
 
 ## 1. Role
 
-Semantic TM backfill uses the same project authorization on the generic job API and
-`/api/admin/semantic/backfill`. In multi-org mode, both require a visible project;
-the web Setup AI install-wide backfill is refused. Unrestricted multi-org sweeps remain
-available to the host CLI operator. Remote API launches also require admin scope,
-admin role and `remote_admin_enabled`. The worker caps batches at 1000 rows.
-
 This subsystem is **how the install is configured**: the environment and keyfile bootstrap
 that runs before anything else, the runtime settings registry stored in the database, and
 the preflighted enablement path for the features that must not be flipped over the wire. It is the
@@ -91,11 +85,10 @@ No settings key or migration is added.
   in `app/web/admin.py` that save the default provider, the local engine URL and sampling, the
   accessibility contact and the login-security fields. The batch `app/services/settings.py::validate_values`
   runs in the `config apply` handler (`_apply` in `app/cli/cmd_config.py`), in the shared admin CLI
-  helper `app/cli/cmd_admin_helpers.py`, and at two `app/web/admin.py` saves: the
-  `POST /setup-ai/web-verification` save (`setup_ai_web_verification_save`) and the Security page
+  helper `app/cli/cmd_admin_helpers.py`, and at the `app/web/admin.py` Security page
   session save. Other `set_many` callers do not call the shared registry validators; several apply
   their own per-form bounds instead (for example the spend-cap save refuses an over-cap value,
-  `POST /setup-ai/tm` clamps the context floor and `POST /setup-ai/semantic` the semantic cosine,
+  `POST /setup-ai/tm` saves the lock policy as 0/1 flags,
   `POST /settings` clamps the glossary token cap and the retention save its retention days, and the
   segmentation save refuses a rejected SRX upload), and the `/api` identity and SMTP writers
   validate nothing. Enforced by `verify_settings_propagation` (the version
@@ -350,6 +343,15 @@ Result serialization reads only the caller's session. A synchronous result needi
 relief binds that entire read to the bounded relief pool, including batch attributes
 and member details; ordinary pure reads never open emergency sessions.
 
+Step hand-off (ADR 0092, rules ADR 0098): `LOC_TMS_STEP_QUANTUM_S` (default 30 seconds,
+0 allowed) is how long a background run executes before it hands its slot back at the next
+completed step visit, when another customer's work waits; `LOC_TMS_STEP_PARK_MAX_WAIT_S`
+(default 60 seconds) caps how long a parked run waits before it goes first; `LOC_TMS_BATCH_GANG_WAIT_S`
+(default 30 seconds, 0 allowed, ADR 0099) caps how long the scheduler holds freed slots for one
+document's languages before it starts the ones it has slots for; `LOC_TMS_STEP_HANDOFF` is `auto` (default), `off` (a
+run keeps its slot to the end, as before 1.1) or `always` (park at every step boundary: a
+proof mode for tests, never for production). Both are read at boot.
+
 Emergency relief admits at most four concurrent requests and four simultaneous
 request relief sessions (`db.RELIEF_MAX_SESSIONS`), with no checkout wait.
 A separate, unbounded, blocking NullPool engine records crash and recovery notes;
@@ -459,7 +461,10 @@ resident sizing estimate (MiB) = P*C/1024 + T*8 + K*32 + 256
 ```
 
 The 8 MiB stack allowance is conservative accounting, not measured committed stack or
-`threading.stack_size`. The 32 MiB working allowance and 256 MiB baseline are planning
+`threading.stack_size`. Not in T: the split roles' middleware audit threads
+(`app/web/streaming.py::AUDIT_WORKERS`, 32 per web process, ADR 0104; another 32 x 8 MiB if
+counted the same way), which wait for their audit group and hold no connection while they wait.
+The 32 MiB working allowance and 256 MiB baseline are planning
 reserves. The registered mock measurement and measured values were kept with the build record.
 The default stream allowance alone is 32 x 8 MiB = 256 MiB of thread-stack reserve,
 included in T x 8 below, plus the existing conservative parent and child allowances.

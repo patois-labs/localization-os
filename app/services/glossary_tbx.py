@@ -115,6 +115,7 @@ Documented in: docs/architecture/terminology.md
 import io
 import re
 import xml.etree.ElementTree as ET
+from datetime import UTC
 
 from lxml import etree as _lxml  # export side only (mirrors tm.export_tmx)
 from sqlmodel import Session
@@ -1267,7 +1268,7 @@ def _export_concepts_dca(
     leg), emits the required <tbxHeader> + every §6.1 datcat + the los: private ns.
     `dialect="tbx-basic"` (default) emits los:; `dialect="tbx-core"` and `strict_portable`
     suppress los: (the latter also drops the xmlns:los declaration)."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from app import branding
     from app.services import glossary_concepts, tbx_conformance
@@ -1308,7 +1309,7 @@ def _export_concepts_dca(
     gname = (
         glossary_name if glossary_name is not None else (doc.get("glossary") or {}).get("name", "")
     )
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     brand = branding.brand_name()
     ver = _app_version()
     # Separators are plain hyphens, not em dashes (the maintainer's standing outward-facing copy

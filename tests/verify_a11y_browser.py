@@ -435,7 +435,7 @@ def _seed() -> dict:
                 )
             )
         s.commit()
-    # T4 fix round 1 (gate MEDIUM): QA flags and TM locks (fuzzy soft lock and hard lock)
+    # T4 fix round 1 (gate MEDIUM): QA flags and TM locks (100% soft lock and hard lock)
     # on a document segment and on key values, so axe meets the Editor's and the key
     # grid's QA / TM lock disclosures (a flag message is markup-like on purpose: it must
     # stay text). The Editor keyboard block edits the FIRST row, so the hard lock sits on
@@ -453,8 +453,8 @@ def _seed() -> dict:
             },
             {"type": "terminology", "message": "Glossary term not used", "severity": "minor"},
         ]
-        segs[0].lock_band = "fuzzy"
-        segs[0].tm_match_pct = 87
+        segs[0].lock_band = "100"
+        segs[0].tm_match_pct = 100
         segs[-1].lock_band = "exact"
         segs[-1].lock_hard = True
         values = s.exec(
@@ -465,8 +465,8 @@ def _seed() -> dict:
             v.qa_flags = [
                 {"type": "char_limit", "message": "Too long <i>by</i> 4", "severity": "minor"}
             ]
-            v.lock_band = "fuzzy" if i == 0 else "exact"
-            v.tm_match_pct = 91 if i == 0 else 100
+            v.lock_band = "100" if i == 0 else "exact"
+            v.tm_match_pct = 100
             v.lock_hard = i == 2
             v.target_text = v.target_text or "Kasse"
         s.add_all([*segs, *values[:3]])

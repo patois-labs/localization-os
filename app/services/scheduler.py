@@ -45,7 +45,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlmodel import Session, select
 
@@ -102,7 +102,7 @@ def _parse_dt(raw) -> datetime | None:
     if dt is not None and dt.tzinfo is not None:
         # A hand-edited config may carry a tz-aware stamp; normalize to naive UTC
         # so comparisons with a naive utcnow() can never raise.
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        dt = dt.astimezone(UTC).replace(tzinfo=None)
     return dt
 
 

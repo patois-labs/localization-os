@@ -32,7 +32,7 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 PYTHON = sys.executable
@@ -1123,7 +1123,7 @@ def main():
         "branch": branch,
         "brief": str(brief) if brief else None,
         "brief_sha256": initial_brief_hash,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "passed": passed,
         "items": items,
         "record": str(record),

@@ -161,7 +161,7 @@ def _call_rows_by_run(action_id):
     return out
 
 
-def _matched_terms(s, project, segments, src, tgt):
+def _matched_terms(s, project, segments, src, tgt, run_cache=None):
     """The glossary terms that matched this leg's segments, and the segment ids each
     matched -- by REPLAYING the run's own resolver (build_glossary_plan +
     match_terms_merged) over the persisted segments. Deterministic, so it recovers the
@@ -185,17 +185,37 @@ def _matched_terms(s, project, segments, src, tgt):
         return [], None, False
     try:
         from app.services import glossary_module as gm
+        from app.services import run_cache as _rc
 
-        plan = gm.build_glossary_plan(s, project, src, tgt)
+        plan = None
+        if run_cache is not None:
+            plan = run_cache.get(_rc.glossary_plan_key(project.id, src, tgt))
+        if plan is None:
+            plan = gm.build_glossary_plan(s, project, src, tgt, run_cache=run_cache)
         by_key = {}
         cache = {}
+        # S4 query diet (ADR 0093): the replay's glossary entries/senses are read once,
+        # not once per distinct segment source (glossary_common._select_matched_entries).
+        # A direct-MT run's own cache also holds the matches the run made per source text
+        # (S4 follow-up): those are reported as made, not replayed (a replay re-runs sense
+        # selection, an engine call per sense-bearing segment).
+        entry_cache: dict = run_cache if run_cache is not None else {}
         truncated = len(segments) > ENRICH_MATCH_SEGMENT_CAP
         for seg in segments[:ENRICH_MATCH_SEGMENT_CAP]:
             text = seg.source_text or ""
             terms = cache.get(text)
+            if terms is None and run_cache is not None:
+                terms = run_cache.get(_rc.glossary_matches_key(project.id, src, tgt, text))
             if terms is None:
                 terms = gm.match_terms_merged(
-                    s, project.id, text, src, tgt, plan, conflict_state=set()
+                    s,
+                    project.id,
+                    text,
+                    src,
+                    tgt,
+                    plan,
+                    conflict_state=set(),
+                    entry_cache=entry_cache,
                 )
                 cache[text] = terms
             for t in terms or []:
@@ -301,17 +321,18 @@ def _adherence(segments, matched, lqa_step_ran):
     return out
 
 
-def _build_manifest(s, project, doc, src, tgt, plan, workflow_run_id=None):
+def _build_manifest(s, project, doc, src, tgt, plan, workflow_run_id=None, run_cache=None):
     """Assemble the asset manifest for the action. Each asset class is independently
     guarded so one resolver failing never loses the others. `workflow_run_id` (Wave C)
-    adds the vendor leg class -- the human-vendor dispatches this run made."""
+    adds the vendor leg class -- the human-vendor dispatches this run made. `run_cache`
+    (direct MT, S4 follow-up): the run's own resolutions, reported instead of re-read."""
     manifest = {
         "schema_version": ENRICH_SCHEMA_VERSION,
         "source_locale": src,
-        "tm": _tm_manifest(s, project, src, tgt),
-        "glossaries": _glossary_manifest(s, project, plan, src, tgt),
-        "style_guide": _style_guide_manifest(s, project, src, tgt),
-        "llmemory": _llmemory_manifest(s, project, src, tgt),
+        "tm": _tm_manifest(s, project, src, tgt, run_cache),
+        "glossaries": _glossary_manifest(s, project, plan, src, tgt, run_cache),
+        "style_guide": _style_guide_manifest(s, project, src, tgt, run_cache),
+        "llmemory": _llmemory_manifest(s, project, src, tgt, run_cache),
         "vendor": _vendor_manifest(s, workflow_run_id),
     }
     # #617 item 7: the MT formality register that applied (key present only when one resolved,
@@ -325,7 +346,21 @@ def _build_manifest(s, project, doc, src, tgt, plan, workflow_run_id=None):
 # --------------------------------------------------------------------------- #
 # Roll-up totals (TapAction.totals) -- summed upward from the runs, parts stored
 # --------------------------------------------------------------------------- #
-def rollup_action_totals(s, action_id):
+def _leg_segments(s, document_id, target_locale, run_cache=None):
+    """_run_segments, read once per direct-MT run when `run_cache` is given (snapshots):
+    the finalize roll-up counts the leg's segments and the enrich right after it replays
+    adherence over the same rows (S4 follow-up)."""
+    if run_cache is None or document_id is None:
+        return _run_segments(s, document_id, target_locale)
+    key = ("run_segments", document_id, target_locale)
+    if key not in run_cache:
+        from app.services import run_cache as _rc
+
+        run_cache[key] = _rc.snapshots(_run_segments(s, document_id, target_locale))
+    return run_cache[key]
+
+
+def rollup_action_totals(s, action_id, runs=None, run_cache=None):
     """Sum every TapRun leg of this action into the action totals, STORING the per-run
     parts (by_run) so total == sum(by_run) is verifiable -- no aggregate without its raw
     parts (§4).
@@ -341,7 +376,12 @@ def rollup_action_totals(s, action_id):
     its exact recorded cost, else "estimated_from_usage"); `capture_withheld` (True when the
     disk-budget backstop withheld per-call capture -- the file-derived totals then
     UNDER-COUNT, and this says so); `enrichment_truncated` (True when any leg's adherence
-    replay hit the segment cap)."""
+    replay hit the segment cap).
+
+    `runs` (S4 follow-up): the action's TapRun rows when the caller has just read them on
+    `s` (finalize_action_if_all_runs_done), so they are not read twice. `run_cache`: a
+    direct-MT run's cache; the leg's segments read here are kept on it for the enrich that
+    follows (tap_enrich.enrich), which needs the same rows."""
     from sqlmodel import select
 
     from app.models import TapAction, TapRun
@@ -377,7 +417,8 @@ def rollup_action_totals(s, action_id):
     by_run = []
     any_est = False
     any_trunc = False
-    runs = s.exec(select(TapRun).where(TapRun.action_id == action_id)).all()
+    if runs is None:
+        runs = s.exec(select(TapRun).where(TapRun.action_id == action_id)).all()
     # Wave C (decision 5): HUMAN spend per leg, keyed by the TapRun's workflow_run_id (a
     # TapRun maps 1:1 to a WorkflowRun, which owns the vendor dispatch legs). AI spend is
     # the call-file rollup (spend_usd); this is the disjoint vendor-post-edit track.
@@ -396,7 +437,7 @@ def rollup_action_totals(s, action_id):
         if "segments" in d:
             seg_n = int(d.get("segments") or 0)
         else:
-            seg_n = len(_run_segments(s, doc_id, r.target_locale)) if doc_id else 0
+            seg_n = len(_leg_segments(s, doc_id, r.target_locale, run_cache)) if doc_id else 0
         if roll.get("spend_source") == "estimated_from_usage":
             any_est = True
         if d.get("enrichment_truncated"):
@@ -531,15 +572,16 @@ def _write_run_detail(run_id, detail):
     DEGRADES (one WARN naming the taprun, the update dropped) rather than raising the lock
     traceback the volume flood surfaced. Idempotent: re-writes `detail` from the run's
     finalized state, so a duplicate terminal finalize writes byte-identical enrichment."""
+    from sqlalchemy import update
+
     from app.models import TapRun
     from app.services import tap_envelope
 
     with _session() as s:
 
         def _stage():
-            run = s.get(TapRun, run_id)
-            if run is None:
-                return
+            # S4 follow-up: one UPDATE by primary key (a missing row updates nothing, as the
+            # old get-then-skip did), no read first.
             # TODO(observability): `detail` was built from a PHASE-1 snapshot and is
             # blind-overwritten here -- a concurrent terminal re-finalize could land a
             # newer detail between phase 1 and this write, and this would clobber it back
@@ -549,8 +591,7 @@ def _write_run_detail(run_id, detail):
             # state, and both writers derive from the SAME finalized run, so the values
             # converge -- not worth a version guard for a MED fix. Revisit if detail ever
             # carries a non-idempotent field.
-            run.detail = detail
-            s.add(run)
+            s.exec(update(TapRun).where(TapRun.id == run_id).values(detail=detail))
 
         tap_envelope.commit_tap_write(
             s,
@@ -563,28 +604,41 @@ def _write_action_manifest(action_id, src, tgt, run_manifest):
     """Write a NON-batch action's per-locale MANIFEST ONCE, in its own short transaction.
     Re-checks manifest-is-None INSIDE the stage so a concurrent finalize cannot double-
     write (write-once = a stable historical record) -- also the correct behaviour after a
-    P-C5 retry's rollback. Degrades cleanly on sustained contention."""
+    P-C5 retry's rollback. Degrades cleanly on sustained contention.
+
+    S4 follow-up: the re-check is the UPDATE's own `manifest IS NULL` predicate (the column
+    stores None as SQL NULL, none_as_null), so the write is one statement, no read first."""
+    from sqlalchemy import update
+
     from app.models import TapAction
     from app.services import tap_envelope
 
+    manifest = {
+        "schema_version": ENRICH_SCHEMA_VERSION,
+        "source_locale": src,
+        "by_locale": {tgt: run_manifest},
+    }
     with _session() as s:
 
         def _stage():
-            action = s.get(TapAction, action_id)
-            if action is None or action.manifest is not None:
-                return
-            action.manifest = {
-                "schema_version": ENRICH_SCHEMA_VERSION,
-                "source_locale": src,
-                "by_locale": {tgt: run_manifest},
-            }
-            s.add(action)
+            s.exec(
+                update(TapAction)
+                .where(TapAction.id == action_id, TapAction.manifest.is_(None))
+                .values(manifest=manifest)
+            )
 
         tap_envelope.commit_tap_write(s, _stage, what=f"action manifest for {action_id}")
 
 
 def enrich(
-    action_id, run_id, *, workflow_run_id=None, document_id=None, target_locale="", source_locale=""
+    action_id,
+    run_id,
+    *,
+    workflow_run_id=None,
+    document_id=None,
+    target_locale="",
+    source_locale="",
+    run_cache=None,
 ):
     """Populate the run's per-leg DETAIL and (for a non-batch action) its per-locale
     MANIFEST for a FINALIZED run envelope. Best-effort, never raises. Safe to call from
@@ -599,7 +653,15 @@ def enrich(
 
     Idempotent by construction: detail is (re)written from the run's final persisted
     state, so a duplicate terminal finalize writes byte-identical enrichment; the action
-    manifest is write-once (a stable historical record)."""
+    manifest is write-once (a stable historical record).
+
+    `run_cache` (S4 follow-up, direct MT only): the translate run's own read cache
+    (app/services/run_cache.py). The leg's detail and manifest then report what the run
+    actually resolved (glossary plan, pins and per-segment matches, style guide, memories,
+    TM sources) instead of resolving it all again: the same rows on a quiet install, and on
+    a busy one the assets the run used rather than the ones in place a moment later. A
+    segment the run did not match (a TM fill) is replayed as before. Without a cache (every
+    workflow caller) nothing changes."""
     if not action_id or not run_id:
         return
     try:
@@ -607,7 +669,10 @@ def enrich(
 
         if not tap_envelope.envelopes_enabled():
             return
-        from app.models import Document, Project, TapAction, TapRun, TapStatus
+        from sqlmodel import select
+
+        from app.models import TapAction, TapRun, TapStatus
+        from app.services import run_cache as run_cache_mod
 
         # --- PHASE 1: ENRICH OUTSIDE THE WRITE TRANSACTION (R1-F1) --------------
         # ALL the replay/read work runs in a READ-ONLY session that is CLOSED before any
@@ -621,17 +686,26 @@ def enrich(
         # `detail` first and writing it from a FRESH short session holds the writer lock for
         # milliseconds, off a stale snapshot.
         with _session() as s:
-            run = s.get(TapRun, run_id)
+            # S4 follow-up: run and action in one read (the ON clause names the action id
+            # itself, so a missing action still returns the run, exactly like two gets).
+            _ra = s.exec(
+                select(TapRun, TapAction)
+                .outerjoin(TapAction, TapAction.id == action_id)
+                .where(TapRun.id == run_id)
+            ).first()
+            run, action = (_ra[0], _ra[1]) if _ra is not None else (None, None)
             if run is None or run.status not in TapStatus.TERMINAL:
                 return
-            action = s.get(TapAction, action_id)
             if action is None:
                 return
 
-            doc = s.get(Document, document_id) if document_id else None
-            project = None
-            if doc is not None and doc.project_id:
-                project = s.get(Project, doc.project_id)
+            # Document, project and customer in one read; the customer stays in this
+            # session's identity map for the opt-out and formality reads below.
+            doc, project, _customer = (
+                run_cache_mod.load_document_chain(s, document_id)
+                if document_id
+                else (None, None, None)
+            )
             src = (
                 source_locale or run.source_locale or (getattr(project, "source_locale", "") or "")
             )
@@ -644,8 +718,8 @@ def enrich(
             steps, lqa_ran, ledger_spend = _step_detail(s, workflow_run_id)
             if ledger_spend is not None:
                 rollup["ledger_spend_usd"] = ledger_spend
-            segments = _run_segments(s, document_id, tgt)
-            matched, plan, truncated = _matched_terms(s, project, segments, src, tgt)
+            segments = _leg_segments(s, document_id, tgt, run_cache)
+            matched, plan, truncated = _matched_terms(s, project, segments, src, tgt, run_cache)
             # Terminology T3 (LAW-TERM-16): when a toggle-ON step stamped its shown set onto
             # the capture records, the ADHERENCE view measures against that ACTUAL shown set
             # (the enforced set) instead of the divergent replay above — so the audit never
@@ -665,7 +739,14 @@ def enrich(
             # 17-locale action records all 17 locales' TM/glossary/style/LLMemory here,
             # each tagged with its target_locale, race-free.
             run_manifest = _build_manifest(
-                s, project, doc, src, tgt, plan, workflow_run_id=workflow_run_id
+                s,
+                project,
+                doc,
+                src,
+                tgt,
+                plan,
+                workflow_run_id=workflow_run_id,
+                run_cache=run_cache,
             )
             run_manifest["target_locale"] = tgt
             detail = {

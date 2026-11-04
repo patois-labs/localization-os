@@ -64,6 +64,7 @@ def _pretranslate_stream_impl(
     context_brief: str | None = None,
     _env_ids=(None, None),
     stats_sink: dict | None = None,
+    run_cache: dict | None = None,
 ):
     """Translate the document, yielding an event per segment then a summary.
 
@@ -91,7 +92,8 @@ def _pretranslate_stream_impl(
     (its callers pass the project/step choice through)."""
     # #683: imported here, not at module top, so the kernel pipeline surface stays
     # narrow (verify_kernel_facade); it is only needed once a translation runs.
-    from app.services import adaptive, mt_chunking
+    from app.services import adaptive, mt_chunking, tm_common
+    from app.services import run_cache as run_cache_mod
     from app.services import tags_only as _tags_only
 
     doc = session.get(Document, doc_id)
@@ -148,17 +150,28 @@ def _pretranslate_stream_impl(
     # (document override > project > customer) rides the same block, and is recorded on the
     # summary. None (nothing set, or `auto`) adds not a byte.
     _formality = formality.resolve_for(session, project=project, document=doc, target_locale=locale)
-    _sg_block = style_guides.render_style_guide(
-        style_guides.resolve_style_guide(
-            session,
-            org_id=getattr(project, "org_id", None),
-            customer_id=getattr(project, "customer_id", None),
-            content_type_id=getattr(project, "content_type_id", None),
-            source_locale=src,
-            target_locale=locale,
-        ),
-        _formality,
+    # S4 query diet (ADR 0093): this run's read cache. Glossary entries/senses and LLMemory
+    # entries are read once per run instead of once per segment (app/services/run_cache.py).
+    # `run_cache` is the wrapper's dict (pretranslate_stream): the envelope's enrich reuses
+    # the style guide, glossary plan and matches, memories and TM sources resolved here.
+    _run_cache: dict = run_cache if run_cache is not None else {}
+    _sg_scope = (
+        getattr(project, "org_id", None),
+        getattr(project, "customer_id", None),
+        getattr(project, "content_type_id", None),
+        src,
+        locale,
     )
+    _sg = style_guides.resolve_style_guide(
+        session,
+        org_id=_sg_scope[0],
+        customer_id=_sg_scope[1],
+        content_type_id=_sg_scope[2],
+        source_locale=src,
+        target_locale=locale,
+    )
+    _run_cache[run_cache_mod.style_guide_key(*_sg_scope)] = run_cache_mod.snapshot(_sg)
+    _sg_block = style_guides.render_style_guide(_sg, _formality)
     stats = _new_stats()
     if _formality is not None:
         stats["formality"] = _formality.record()
@@ -198,7 +211,8 @@ def _pretranslate_stream_impl(
     # output and this path stays byte-identical.
     from app.services import glossary_module as _gm
 
-    _gloss_plan = _gm.build_glossary_plan(session, project, src, locale)
+    _gloss_plan = _gm.build_glossary_plan(session, project, src, locale, run_cache=_run_cache)
+    _run_cache[run_cache_mod.glossary_plan_key(project.id, src, locale)] = _gloss_plan
     _gloss_conflicts: set = set()
 
     # F2.2 document-context pre-pass: ONE cheap call over a truncated sample BEFORE
@@ -304,6 +318,7 @@ def _pretranslate_stream_impl(
                     _gloss_plan,
                     conflict_state=_gloss_conflicts,
                     disambig=_sense_hint,
+                    entry_cache=_run_cache,
                 )
                 # AI Tagging 1.1: mask ⟦⟧ tokens (outside PII) before the engine call,
                 # restore BEFORE _apply_result_ft (the commit gate sees real ⟦⟧). No-op
@@ -371,8 +386,8 @@ def _pretranslate_stream_impl(
 
     # segmented mode — phase 1: TM/glossary prep (DB-bound, sequential); TM hits
     # apply immediately, everything else becomes a work item for the pool.
-    # One batched fuzzy lookup for every not-yet-translated segment's source,
-    # instead of a tm.lookup() query pair per segment.
+    # One batched EXACT lookup (100 %, or 101 % in context; ADR 0102) for every
+    # not-yet-translated segment, instead of a tm.lookup() query per segment.
     #
     # F2.1 adaptive feedback: when ON, a FeedbackBuffer accumulates confirmed
     # source->target pairs IN order_index ORDER — TM short-circuits + already-
@@ -404,23 +419,42 @@ def _pretranslate_stream_impl(
             return source_text, target_text
         return pii.redact(source_text, lang=src)[0], pii.redact(target_text, lang=locale)[0]
 
-    needs_tm = [seg.source_text for seg in segments if not seg.target_text]
-    tm_matches = tm.lookup_batch(session, doc.project_id, needs_tm, src, locale)
-    # TM few-shot (2B): ONE batched top-N fuzzy pull for every not-yet-translated
-    # source (reuses the same fuzzy seam as lookup_batch — no second similarity
-    # engine, no N+1). Relevance-gated (floor + skip-not-pad + self-exclusion) inside
-    # example_matches_batch; rendered per segment below. Empty when nothing clears the
-    # floor -> no examples block -> byte-identical prompt (the plain-MT path uses the
-    # default window, always ON, generalizing the old single tm_ref reference).
-    tm_examples_map = tm.example_matches_batch(
-        session,
-        doc.project_id,
-        needs_tm,
-        src,
-        locale,
-        floor=context_pkg.TM_EXAMPLES_FLOOR,
-        window=context_pkg.TM_EXAMPLES_DEFAULT_WINDOW,
-    )
+    needs_segs = [seg for seg in segments if not seg.target_text]
+    needs_tm = [seg.source_text for seg in needs_segs]
+    # S4 follow-up: the two batched TM reads below resolve the project's attached TM
+    # sources once between them (tm_common.source_ids_memo), not once each.
+    with tm_common.source_ids_memo(session, _run_cache):
+        # Positional by segment: the same source can occur twice with different neighbours
+        # (101 % depends on them), so the hit is keyed by segment id, not source text.
+        from app.services import tm_context  # lazy: keeps the kernel pipeline surface narrow
+
+        _ctx_by_seg = dict(
+            zip(
+                (s.id for s in segments),
+                tm_context.segment_context_keys(session, segments),
+                strict=True,
+            )
+        )
+        _hits = tm.lookup_segments(
+            session,
+            doc.project_id,
+            [(s.source_text, _ctx_by_seg.get(s.id)) for s in needs_segs],
+            src,
+            locale,
+        )
+        tm_hits = {s.id: h for s, h in zip(needs_segs, _hits, strict=True)}
+        # TM few-shot (2B): ONE batched pull of example pairs for every not-yet-translated
+        # source (ADR 0102: the fuzzy ranker is gone; the core ships no example retriever, so
+        # this is empty unless an add-on registers one, see tm.example_matches_hybrid).
+        # Rendered per segment below. Empty -> no examples block -> byte-identical prompt.
+        tm_examples_map = tm.example_matches_hybrid(
+            session,
+            doc.project_id,
+            needs_tm,
+            src,
+            locale,
+            window=context_pkg.TM_EXAMPLES_DEFAULT_WINDOW,
+        )
     # LLMemory recall (PROPOSAL-llmemory §5, the SECOND translate path). This whole
     # path IS a translate step — there is no workflow, no LQA judge and no correction-
     # loop fixer here, so the orchestrator's step-role gate has no analogue: every call
@@ -441,6 +475,7 @@ def _pretranslate_stream_impl(
             target_locale=locale,
             org_id=getattr(project, "org_id", None),
             mark_used=False,
+            recall_cache=_run_cache,
         )
         _mem_note_ids = list(_mem_note_ids)
     except Exception:
@@ -472,6 +507,7 @@ def _pretranslate_stream_impl(
                 org_id=getattr(project, "org_id", None),
                 glossary_terms=glossary_terms,
                 mark_used=False,
+                recall_cache=_run_cache,
             )
         except Exception:
             _logger.warning("llmemory: segment recall failed", exc_info=True)
@@ -524,8 +560,8 @@ def _pretranslate_stream_impl(
                 "status": seg.status,
             }
             continue
-        exact = tm_matches.get(seg.source_text)
-        if exact and exact["match_pct"] == 100:
+        exact = tm_hits.get(seg.id)
+        if exact:  # ADR 0102: every hit is exact (100) or in context (101)
             # SEAM FIX (Phase 0). Route the 100% TM fill through the SOLE sanctioned
             # write seam (quality.commit_mt_output) instead of writing target_text
             # directly. Pre-fix this block set seg.target_text/status straight, so a
@@ -555,14 +591,14 @@ def _pretranslate_stream_impl(
                     "index": seg.order_index,
                     "target": "",
                     "source": "tm-refused",
-                    "pct": 100,
+                    "pct": exact["match_pct"],
                     "status": seg.status,
                 }
                 continue
             # Committed. On a clean pass the seam set SegStatus.MT; a SOFT gate
             # (length/number/tag/meta) leaves the text committed but routes to
             # NEEDS_REVIEW — honour whatever status the seam set. Stamp TM provenance.
-            seg.tm_match_pct = 100
+            seg.tm_match_pct = exact["match_pct"]
             session.add(seg)
             session.commit()
             if exact.get("id") is not None:
@@ -584,7 +620,7 @@ def _pretranslate_stream_impl(
                 "index": seg.order_index,
                 "target": seg.target_text,
                 "source": "tm",
-                "pct": 100,
+                "pct": exact["match_pct"],
                 "qa": qa.check_segment(seg.source_text, seg.target_text),
             }
             continue
@@ -597,7 +633,13 @@ def _pretranslate_stream_impl(
             _gloss_plan,
             conflict_state=_gloss_conflicts,
             disambig=_sense_hint,
+            entry_cache=_run_cache,
         )
+        # The envelope's enrich reports these matches instead of replaying them (a replay
+        # re-runs sense selection, an engine call per sense-bearing segment).
+        _run_cache[
+            run_cache_mod.glossary_matches_key(doc.project_id, src, locale, seg.source_text)
+        ] = [dict(t) for t in terms or []]
         tm_examples_block = context_pkg.render_tm_examples(tm_examples_map.get(seg.source_text, []))
         # AI Tagging 1.1: mask ⟦⟧ tokens (segment-granular, OUTSIDE PII) before the
         # engine call; restored in _emit BEFORE _apply_result (the commit gate sees real
@@ -645,7 +687,6 @@ def _pretranslate_stream_impl(
             "memory_block": _mem_blk,
             "pii_map": pii_map,
             "tag_map": tag_map,
-            "exact": exact,
             # Prompt Tap correlation (additive; observer-only). This is the plain
             # per-segment MT path, so it carries the document + segment identity.
             "tap_meta": _tap,
@@ -725,7 +766,7 @@ def _pretranslate_stream_impl(
     # ever-matters and the sync warm call is exactly one of the N calls we'd make
     # anyway (no extra cost). Skipped when there's only one segment.
     def _emit(item, res):
-        seg, exact = item["seg"], item["exact"]
+        seg = item["seg"]
         if item["pii_map"]:
             res["text"] = pii.restore(res["text"], item["pii_map"])
         if item.get("tag_map"):
@@ -739,16 +780,18 @@ def _pretranslate_stream_impl(
             mt_chunking.stamp(seg, res.get("chunks"))
             if (res.get("chunks") or 1) > 1:
                 stats["chunked_segments"] = stats.get("chunked_segments", 0) + 1
-        if exact:
-            seg.tm_match_pct = exact["match_pct"]
-            session.add(seg)
+        # S4 (ADR 0093): read the event's values BEFORE the commit expires the row, so
+        # building the event does not re-load the segment it just wrote (one SELECT a
+        # segment). They are the values the commit writes.
+        index, target = seg.order_index, seg.target_text
         session.commit()
         return {
             "type": "segment",
-            "index": seg.order_index,
-            "target": seg.target_text,
+            "index": index,
+            "target": target,
             "source": res["provider_used"] or "error",
-            "pct": exact["match_pct"] if exact else None,
+            # Only an applied TM hit carries a percentage (100 or 101, set above); MT is None.
+            "pct": None,
         }
 
     if pending:
