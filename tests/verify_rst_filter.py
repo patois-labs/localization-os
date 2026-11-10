@@ -175,10 +175,11 @@ def test_inline_escaping_and_paragraph_start():
     out = F.build(data, {"0": "Use *all* the_ items | now", "1": "- not a bullet"})
     assert out == b"Use \\*all\\* the\\_ items \\| now\n\n\\- not a bullet\n", out
     assert len(units(out)) == 2, units(out)  # still two paragraphs, no list item
-    # a translation that drops a pair keeps the markup balanced; unknown tokens dropped
+    # a translation that drops a pair keeps the markup balanced; a token that names no code
+    # of the unit is text (#814.1, g12)
     data = b"A **bold** word.\n"
     out = F.build(data, {"0": "Ein ⟦g1⟧fettes⟦/g1⟧ Wort ⟦x9⟧."})
-    assert out == b"Ein **fettes** Wort .\n", out
+    assert out == "Ein **fettes** Wort ⟦x9⟧.\n".encode(), out
     # gate: a lone close is dropped, an open the translation never closes is closed
     assert F.build(data, {"0": "Ein ⟦g1⟧fettes Wort."}) == b"Ein **fettes Wort.**\n"
     assert F.build(data, {"0": "Ein fettes⟦/g1⟧ Wort."}) == b"Ein fettes Wort.\n"

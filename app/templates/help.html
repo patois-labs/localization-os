@@ -25,6 +25,7 @@
     <a href="#customers">Customers &amp; admin</a>
     {% if feature_enabled('vendors') %}<a href="#vendors">Vendors &amp; external steps</a>{% endif %}
     <a href="#segmentation">Segmentation</a>
+    <a href="#parsing">File parsing (Bilingua)</a>
     <a href="#engines">Engines &amp; Setup AI</a>
     <a href="#connectors">Connectors</a>
     <a href="#routing">Routing &amp; language sets</a>
@@ -381,6 +382,8 @@
       PDFs default to 1000 pages; scanned pages are scaled to at most 4000 pixels per edge
       for OCR, with at most 2.5 billion rendered pixels per document
       (PDF_OCR_MAX_TOTAL_PIXELS). Over-budget PDFs are refused before any rendering.
+      A PDF that keeps the reader busy past 60 seconds per step or 150 seconds in all
+      (PDF_CALL_TIMEOUT_S, PDF_TOTAL_TIMEOUT_S) is stopped and refused.
       Administrators can configure these limits. They also apply to API, CLI and
       MCP uploads and to reopening Office files for export. If upload capacity is busy,
       retry shortly. Remote clients receive HTTP 413 for size limits or retryable 503 for
@@ -1282,6 +1285,31 @@ bank,rive,,river,river water shore stream</pre>
           (<code>\p{L} \p{Lu} \p{Ll} \p{N}</code>) to Python regex.</li>
       </ul>
       <p><strong>Segmentation profiles</strong> package a rule configuration and can be selected per project.</p>
+    </section>
+
+    <section class="doc-section" id="parsing">
+      <h2>File parsing (Bilingua)</h2>
+      <p>New uploads are read by the <strong>Bilingua</strong> engine for every format it parses (the
+      default, <code>all</code>). An admin can narrow that to chosen formats, or switch every format back to the
+      built-in Python filters with an empty list, under <a href="/settings">Settings &rarr; File parsing</a>,
+      with <code>loc config set bilingua_formats md,json,po</code> (or <code>all</code>, or an empty value), or
+      through the admin config API and the MCP <code>manage_install</code> tool (<code>set_config</code>). On a
+      server where the Bilingua module is not installed (it ships for x86_64 Linux and Windows) every format
+      uses the built-in filters whatever the setting says.</p>
+      <ul class="doc-list">
+        <li><code>bilingua_formats</code>: format names whose <strong>new uploads</strong> Bilingua reads, or
+          <code>all</code> (the default) for every format Bilingua parses. A
+          document keeps the engine that imported it, so emptying the list stops new Bilingua imports at once
+          and never changes an existing document. A Bilingua document needs the Bilingua module on the server;
+          without it, its export is refused with a plain message (re-import the file). A name Bilingua does
+          not parse, or a list of more than 256 names, is refused on every door and nothing is saved.</li>
+        <li><code>bilingua_shadow_formats</code>: format names Bilingua also reads in the background on each new
+          upload so the two engines can be compared. Only counts and hashes are written to the server log, never
+          file content, and nothing stored changes.</li>
+        <li>Install-wide settings: the host operator sets them when several organizations share the install. The
+          environment variables <code>LOC_TMS_BILINGUA_FORMATS</code> and <code>LOC_TMS_BILINGUA_SHADOW_FORMATS</code>
+          override the stored values.</li>
+      </ul>
     </section>
 
     <section class="doc-section" id="engines">

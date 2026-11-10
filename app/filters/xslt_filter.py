@@ -45,6 +45,7 @@ Documented in: docs/architecture/translation-pipeline.md
 """
 
 import re
+from bisect import bisect_left, bisect_right
 
 from lxml import etree
 
@@ -62,7 +63,7 @@ from app.filters.base import (
     note_source_encoding,
     register,
 )
-from app.filters.xml_guard import make_hardened_parser
+from app.filters.xml_guard import check_tag_budget, make_hardened_parser
 from app.filters.xml_text import xml_target_text
 
 XSL_NS = "http://www.w3.org/1999/XSL/Transform"
@@ -317,6 +318,7 @@ def _doctype_span(text: str) -> tuple[int, int] | None:
 
 def _check_xml(raw: bytes) -> int:
     """Hardened well-formedness gate; returns the element count lxml sees."""
+    check_tag_budget(raw, what="This XSLT file")  # #792
     try:
         root = etree.fromstring(raw, parser=make_hardened_parser())
     except etree.XMLSyntaxError as exc:
@@ -860,7 +862,9 @@ def _rebuild_unit(unit: _Unit, target: str, render) -> str:
             out.append(_escape_lit(s, ctxs[-1], attr, unit.quote, unit.crlf))
 
     pos = 0
-    for m in _TOKEN.finditer(target):
+    # #814.1: a token that names no code of the unit is text
+    nums = {name.lstrip("/")[1:] for name in tokens}
+    for m in (m for m in _TOKEN.finditer(target) if m.group(3) in nums):
         lit(target[pos : m.start()])
         pos = m.end()
         close, kind, num = m.group(1), m.group(2), m.group(3)
@@ -956,10 +960,17 @@ def _rebuild(original: bytes, paragraph_texts: dict, locale=None) -> bytes:
         flat.append((s, e, rep, None, None))
     flat.sort(key=lambda t: t[0])
 
+    flat_starts = [t[0] for t in flat]
+
     def render(s, e):
         out, last = [], s
-        for fs, fe, rep, u, new in flat:
-            if fs < s or fe > e or fs < last:
+        # only the edits that START inside [s, e): a bisect, not a scan of every edit
+        # (the scan made a large stylesheet's build quadratic, #786)
+        for k in range(bisect_left(flat_starts, s), len(flat)):
+            fs, fe, rep, u, new = flat[k]
+            if fs >= e:
+                break
+            if fe > e or fs < last:
                 continue
             out.append(text[last:fs])
             out.append(rep if rep is not None else _rebuild_unit(u, new, lambda a, b: text[a:b]))
@@ -970,9 +981,14 @@ def _rebuild(original: bytes, paragraph_texts: dict, locale=None) -> bytes:
     top = []
     for u, new in text_edits:
         top.append((u.s, u.e, _rebuild_unit(u, new, render)))
-    spans = [(t[0], t[1]) for t in top]
+    spans = sorted((t[0], t[1]) for t in top)
+    span_starts = [sp[0] for sp in spans]
+    span_max_end: list[int] = []  # running max of the ends: a span at or before fs holds fe
+    for _s, e_ in spans:
+        span_max_end.append(e_ if not span_max_end else max(span_max_end[-1], e_))
     for fs, fe, rep, u, new in flat:
-        if any(s <= fs and fe <= e for s, e in spans):
+        k = bisect_right(span_starts, fs) - 1
+        if k >= 0 and span_max_end[k] >= fe:
             continue  # rendered inside a text unit's tokens
         top.append(
             (fs, fe, rep if rep is not None else _rebuild_unit(u, new, lambda a, b: text[a:b]))

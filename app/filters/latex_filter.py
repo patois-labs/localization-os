@@ -67,7 +67,8 @@ from app.filters.base import (
     read_text_upload,
     register,
 )
-from app.services.segment import _PLACEHOLDER_RE, ph_close, ph_open, ph_point, strip_placeholders
+from app.filters.token_lit import code_tokens
+from app.services.segment import ph_close, ph_open, ph_point, strip_placeholders
 
 _BOM = b"\xef\xbb\xbf"
 _MAX_DEPTH = 40
@@ -834,7 +835,7 @@ def _render(translation: str, imap: dict, tabular: bool) -> str:
     pos = 0
     opened: list[str] = []  # pair ids whose opening markup was written, innermost last
     words: list[int] = []  # pieces of point tokens that end in a control word (#696)
-    for m in _PLACEHOLDER_RE.finditer(t):
+    for m in code_tokens(t, imap):  # #814.1: a token naming no code of the unit is text
         out.append(_escape(t[pos : m.start()], tabular))
         pos = m.end()
         inner = m.group(0)[1:-1]

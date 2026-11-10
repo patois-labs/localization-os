@@ -310,7 +310,45 @@ def test_refusals():
     print("  [ftl] non-UTF-8, binary, nesting, segment and placeable caps refused OK")
 
 
+def test_multiline_indent_stable_811():
+    f = _filt()
+    src = b"multi =\n    Line one\n      indented more\n    last { $v }\n"
+    de = "Zeile eins\n  mehr\nletzte { $v }"
+    cur = src
+    for _ in range(3):
+        units = f.parse(cur).units
+        assert len(units) == 1
+        cur = f.build(cur, {"0": de})
+        assert [u.text for u in f.parse(cur).units] == [de], (cur, f.parse(cur).units[0].text)
+    assert cur == b"multi =\n    Zeile eins\n      mehr\n    letzte { $v }\n", cur
+    assert f.build(cur, {"0": de}) == cur
+    print("  [ftl] multi-line value does not drift per merge (#811) OK")
+
+
+def test_leading_dot_on_own_line_g13():
+    """LocOS: a value that starts on its own line was written with a raw leading `.`, which
+    re-reads as an attribute (the file then holds fewer messages). The first line is escaped
+    like every continuation line."""
+    f = _filt()
+    src = b'key04 =\n    {"."}Value\n\nkey05 = Value\n    {"."}Continued\n'
+    units = {u.p_index: u.text for u in f.parse(src).units}
+    assert units == {0: ".Value", 1: "Value\n.Continued"}, units
+    out = f.build(src, {"0": ".Wert", "1": "Wert\n.Weiter"})
+    assert out == b'key04 =\n    {"."}Wert\n\nkey05 = Wert\n    {"."}Weiter\n', out
+    # the translation re-reads as the same two units
+    assert {u.p_index: u.text for u in f.parse(out).units} == {0: ".Wert", 1: "Wert\n.Weiter"}
+    # [ and * are special at the start of a line too; a value on the message line is not
+    out = f.build(src, {"0": "[x] *y"})
+    assert b'key04 =\n    {"["}x] *y\n' in out, out
+    assert f.build(b"k = Value\n", {"0": ".Wert"}) == b"k = .Wert\n"
+    col0 = b'key20 =\n{"."}Value\n'
+    assert f.build(col0, {"0": ".Wert"}) == b'key20 =\n{"."}Wert\n'
+    print("  [ftl] a leading dot on a value's own first line is escaped (g13) OK")
+
+
 def main():
+    test_leading_dot_on_own_line_g13()
+    test_multiline_indent_stable_811()
     test_registration()
     test_units_and_identity()
     test_translated_round_trip()

@@ -185,8 +185,9 @@ def test_heredoc_nowdoc():
 def test_placeholder_drop_and_unknown_tokens():
     data = LARAVEL.encode()
     out = F.build(data, {"2": "Warte ⟦x1⟧ ⟦x9⟧ ⟦g1⟧Sekunden⟦/g1⟧"}).decode()
-    assert "'throttle' => 'Warte :seconds  Sekunden'," in out, out
-    print("  [php] unknown/paired tokens dropped, known restored OK")
+    # #814.1 (g12): x9 names no code: text; g1 names the point code with a pair: dropped
+    assert "'throttle' => 'Warte :seconds ⟦x9⟧ Sekunden'," in out, out
+    print("  [php] paired tokens dropped, unknown kept as text, known restored OK")
 
 
 def _refused(src: str, needle: str = ""):
@@ -225,6 +226,14 @@ def test_refusals():
     _refused("<?php return ['a' => fn() => 'x'];")
     _refused("<?php return ['a' => <<<EOT\nno end\n];", "heredoc")
     _refused("<?php return ['a' => \"\\xff\"];", "UTF-8")
+    # #783: PHP ends a // or # comment at a bare CR, and a heredoc line at a bare CR
+    _refused("<?php return [\n// x\r'a'=>system('id'),\n 'b' => 'c'];")
+    _refused("<?php return [\n# x\r'a'=>system('id'),\n 'b' => 'c'];")
+    _refused("<?php return ['a' => <<<EOT\nhello\rEOT . system('id') . <<<EOT\nx\nEOT];")
+    _refused("<?php return ['a' => \"$\U0001f600\"];", "interpolated")
+    _refused("<?php return ['a' => <<<EOT\nHi $\U0001f600\nEOT];", "interpolated")
+    assert _texts(b"<?php return [\r\n// ok\r\n'a' => 'b', // c\r\n];\r\n") == ["b"]
+    assert _texts(b"<?php return ['a' => <<<EOT\r\nline\r\nEOT];") == ["line"]
     print("  [php] refusals: calls, constants, interpolation, code, inline HTML, bad syntax OK")
 
 

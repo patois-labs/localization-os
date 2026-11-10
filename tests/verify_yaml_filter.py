@@ -502,7 +502,24 @@ def test_gate_fixes():
     print("  [gate] %{name} is one token; 3-letter non-Rails root keys are not locales OK")
 
 
+def test_blank_first_line_block_785():
+    import yaml
+
+    for style in ("|", ">"):
+        src = ("a: " + style + "\n  text\nb: 1\n").encode()
+        for tr in (" \n%", "  \n  x\ny", "\n\nx", "\nz"):
+            out = F.build(src, {"0": tr})
+            data = yaml.safe_load(out.decode("utf-8"))
+            assert data["b"] == 1 and isinstance(data["a"], str), (style, tr, out)
+            assert (
+                data["a"].strip() == tr.strip()
+                or data["a"].replace("\n", "").strip() == tr.replace("\n", "").strip()
+            ), (style, tr, out, data)
+    print("  [785] a translation starting with a blank line still parses OK")
+
+
 def main():
+    test_blank_first_line_block_785()
     test_gate_fixes()
     test_identity()
     test_walk_generic()

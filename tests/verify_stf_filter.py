@@ -185,11 +185,12 @@ def test_source_and_outdated_files():
 
 def test_escaping_new_text_and_tokens():
     data = BILINGUAL.encode("utf-8")
-    # A raw tab / newline in a translation must not split the row; unknown tokens dropped.
+    # A raw tab / newline in a translation must not split the row; a token that names no code
+    # of the unit is text (#814.1, g12).
     out = F.build(data, {"3": "Land\twirtschaft\r\nneu⟦x9⟧", "2": "⟦x2⟧ hallo ⟦x1⟧"})
     s = out.decode("utf-8")
     assert f"{T}Agriculture\n" not in s
-    assert f"PicklistValue.Account.Industry.Agriculture{T}Land\\twirtschaft\\nneu\n" in s, s
+    assert f"PicklistValue.Account.Industry.Agriculture{T}Land\\twirtschaft\\nneu⟦x9⟧\n" in s, s
     assert f"CustomLabel.Welcome{T}{{!$User.FirstName}} hallo {{0}}\n" in s, s
     assert len(s.split("\n")) == len(BILINGUAL.split("\n"))
     print("  [escapes] raw tab/newline escaped, tokens reordered and restored OK")
@@ -409,7 +410,45 @@ def test_gate_row_and_header_edges():
     print("  [gate] U+2028 / NEL / FF labels stay one row; tab-separated header is a header OK")
 
 
+def test_issue_804_speed_and_backslash():
+    import time
+
+    # 1. build of a ~2 MB Source file with every unit translated is linear
+    rows = "".join(f"CustomLabel.L{i}{T}Label number {i} text here\n" for i in range(40000))
+    big = ("Language code: en_US\nType: Source\n\n" + f"# KEY{T}LABEL\n" + rows).encode()
+    n = len(F.parse(big).units)
+    t0 = time.time()
+    out = F.build(big, {str(i): f"Etikett {i}" for i in range(n)})
+    assert time.time() - t0 < 2.0, time.time() - t0
+    assert out.count(b"Etikett") == n
+    # 2. a 20 000-column header over 10 000 rows parses fast
+    cols = f"# KEY{T}LABEL{T}TRANSLATION" + (T + "X") * 20000
+    body = "".join(f"K.{i}{T}Label {i}{T}Tr\n" for i in range(10000))
+    wide = (
+        "Language code: de\nType: Bilingual\n\n------------------TRANSLATED-------------------\n"
+        + cols
+        + "\n"
+        + body
+    ).encode()
+    t0 = time.time()
+    assert len(F.parse(wide).units) == 10000
+    assert time.time() - t0 < 1.0, time.time() - t0
+    # 3. a literal backslash in new text is written as \\ and reads back as one backslash
+    src = ("Type: Source\n" + f"# KEY{T}LABEL\n" + f"CustomLabel.P{T}Path\n").encode()
+    out = F.build(src, {"0": "C:\\new"})
+    assert out.endswith(f"CustomLabel.P{T}C:\\\\new\n".encode()), out
+    # the written `\\` is one point token (the escape), never `\n` + a newline
+    (u,) = F.parse(out).units
+    assert u.inline_map == {"1": {"point": "\\\\"}} and u.text.endswith("new"), (
+        u.text,
+        u.inline_map,
+    )
+    assert F.build(out, {"0": u.text}) == out
+    print("  [804] linear build, column indexes once, backslash escaped OK")
+
+
 def main():
+    test_issue_804_speed_and_backslash()
     test_gate_row_and_header_edges()
     test_registration()
     test_bilingual_units_and_identity()

@@ -126,9 +126,10 @@ def test_translated_round_trip():
     # untranslated paragraph and every definition stay byte for byte
     assert '<f"Arial"><z10>Leading tags stay outside<f$><z$>\r\n' in out
     assert out.startswith('<v19.00><e9>\r\n@Normal=[S"",""]<*L*h"Standard"f"Helvetica"z12>\r\n')
-    # unknown (x9) and duplicate (second x2) tokens dropped; missing x1 appended
+    # duplicate (second x2) tokens dropped; missing x1 appended; x9 names no code: text
+    # (#814.1, g12)
     assert (
-        '@$:<XI,"Entry","",,,,,"">Indiziert <A(3,"HYPB",)[0]>ohne Link Text.'
+        '@$:<XI,"Entry","",,,,,"">Indiziert <A(3,"HYPB",)[0]>ohne Link⟦x9⟧ Text.'
         '<A(3,"HYP\\"B",\\#002\\#000)[2]>\r\n' in out
     ), out
     # a newline in a translation is the New line tag; dropped tokens at the end

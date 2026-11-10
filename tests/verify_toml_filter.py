@@ -143,9 +143,10 @@ def test_translated_round_trip():
         "one = 'DE {{.Name}} has one cat.'",
     ):
         assert keep in text, (keep, text)
-    # a dropped or invented token never leaks; a missing action is dropped, not invented
+    # a pair token for an action is dropped; a token that names no code is text (#814.1, g12)
     out2 = _f().build(HUGO_B, {"2": "Lesezeit ⟦x9⟧ ⟦g1⟧Min⟦/g1⟧ ⟦x1⟧"})
-    assert _values(out2)["readingTime"]["other"] == "Lesezeit  Min {{ .Count }}"
+    got = _values(out2)["readingTime"]["other"]
+    assert got == "Lesezeit ⟦x9⟧ Min {{ .Count }}", got
     print("  [round trip] translations spliced, layout and tokens preserved OK")
 
 

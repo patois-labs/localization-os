@@ -28,7 +28,7 @@ import sys
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(_ROOT)
 sys.path.insert(0, _ROOT)
-from tests._bootstrap import init_env
+from tests._bootstrap import bilingua_switch_off, init_env
 
 init_env("loctms_bencoding_")
 
@@ -110,17 +110,30 @@ def _is_utf8(data: bytes) -> bool:
     return True
 
 
-def _ingest_export(s, source, name, data, legacy, expect):
+def _ingest_export(s, source, name, data, legacy, expect, python=True):
+    """python=True: the Python filter (its `text_code_page` stamp); False: the suite's switch
+    (Bilingua by default), where the behavior is the same and the stamp is Bilingua's own."""
     from app.services.export import build_translated_file
     from app.services.ingest import ingest_document
 
     p = _project(s, source)
-    doc = ingest_document(s, p, name, data, "segmented")
+    if python:
+        # Python filter path (documents imported before Bilingua, or no wheel)
+        with bilingua_switch_off():
+            doc = ingest_document(s, p, name, data, "segmented")
+    else:
+        doc = ingest_document(s, p, name, data, "segmented")
     got = _sources(s, doc.id)
     for want in expect:
         assert want in got, (name, ascii(got[:200]))
     assert not _warnings(doc), (name, _warnings(doc))
-    assert doc.skeleton.get("text_code_page") == legacy, (name, doc.skeleton.get("text_code_page"))
+    if python:
+        assert doc.skeleton.get("text_code_page") == legacy, (
+            name,
+            doc.skeleton.get("text_code_page"),
+        )
+    else:
+        assert doc.skeleton.get("text_code_page") in (None, legacy), doc.skeleton
     _translate_all(s, doc.id)
     out = build_translated_file(s, doc, "fr-FR")
     text = _decode_export(out, legacy)
@@ -140,24 +153,30 @@ def _ingest_export(s, source, name, data, legacy, expect):
 def test_greek_srt_cp1253():
     with Session(engine) as s:
         _ingest_export(s, "el-GR", "film.srt", SRT_EL, "cp1253", EL_LINES)
+        _ingest_export(s, "el-GR", "film.srt", SRT_EL, "cp1253", EL_LINES, python=False)
     print("  [el] Windows-1253 SRT in a Greek project: decoded, no warning, export OK")
 
 
 def test_czech_csv_cp1250():
     with Session(engine) as s:
-        _ingest_export(s, "cs-CZ", "strings.csv", CSV_CS, "cp1250", [CS_TEXT, "Ťukání"])
+        for py in (True, False):
+            _ingest_export(s, "cs-CZ", "strings.csv", CSV_CS, "cp1250", [CS_TEXT, "Ťukání"], py)
     print("  [cs] Windows-1250 CSV in a Czech project: decoded, no warning, export OK")
 
 
 def test_russian_ini_cp1251():
     with Session(engine) as s:
-        _ingest_export(s, "ru-RU", "app.ini", INI_RU, "cp1251", [RU_TEXT, "Сохранить"])
+        for py in (True, False):
+            _ingest_export(s, "ru-RU", "app.ini", INI_RU, "cp1251", [RU_TEXT, "Сохранить"], py)
     print("  [ru] Windows-1251 INI in a Russian project: decoded, no warning, export OK")
 
 
 def test_japanese_txt_shift_jis():
     with Session(engine) as s:
-        _ingest_export(s, "ja-JP", "notes.txt", TXT_JA, "cp932", [JA_TEXT, "テストのファイル"])
+        for py in (True, False):
+            _ingest_export(
+                s, "ja-JP", "notes.txt", TXT_JA, "cp932", [JA_TEXT, "テストのファイル"], py
+            )
     print("  [ja] Shift_JIS text in a Japanese project: decoded, no warning, export OK")
 
 
@@ -209,7 +228,9 @@ def test_existing_documents_unaffected():
 
     with Session(engine) as s:
         p = _project(s, "en-US")
-        doc = ingest_document(s, p, "old.srt", SRT_EL, "segmented")
+        # Python filter path (documents imported before Bilingua, or no wheel)
+        with bilingua_switch_off():
+            doc = ingest_document(s, p, "old.srt", SRT_EL, "segmented")
         mojibake = EL_LINES[0].encode("cp1253").decode("cp1252")
         assert mojibake in _sources(s, doc.id)
         # the project moves to Greek later: the old document keeps reading as it was
@@ -225,13 +246,115 @@ def test_existing_documents_unaffected():
         assert "text_code_page" not in s.get(Document, doc_id).skeleton
 
         # a document imported under the rule keeps its code page through a repair
-        g = ingest_document(s, _project(s, "el-GR"), "new.srt", SRT_EL, "segmented")
+        # Python filter path (documents imported before Bilingua, or no wheel)
+        with bilingua_switch_off():
+            g = ingest_document(s, _project(s, "el-GR"), "new.srt", SRT_EL, "segmented")
         gid = g.id
     assert reingest_document(gid) is True
     with Session(engine) as s:
         assert EL_LINES[0] in _sources(s, gid), ascii(_sources(s, gid))
         assert s.get(Document, gid).skeleton.get("text_code_page") == "cp1253"
+        # the same upload on the suite's switch (Bilingua by default) also keeps its code page
+        b = ingest_document(s, _project(s, "el-GR"), "newb.srt", SRT_EL, "segmented")
+        bid = b.id
+    assert reingest_document(bid) is True
+    with Session(engine) as s:
+        assert EL_LINES[0] in _sources(s, bid), ascii(_sources(s, bid))
     print("  [legacy] pre-rule document exports and repairs as before; repair keeps cp OK")
+
+
+_BOM = b"\xef\xbb\xbf"
+_BOM_CASES = (
+    (
+        "old.sbv",
+        _BOM
+        + "0:00:01.000,0:00:02.000\nCafé\n\n0:00:03.000,0:00:04.000\nSecond\n".encode("cp1252"),
+    ),
+    ("old.sub", _BOM + "{1}{25}Café\r\n{30}{60}Second\r\n".encode("cp1252")),
+    (
+        "old.ass",
+        _BOM
+        + (
+            "[Script Info]\nTitle: Café\n[Events]\n"
+            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+            "Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Second\n"
+        ).encode("cp1252"),
+    ),
+)
+
+
+def test_bom_before_legacy_existing_documents():
+    """#799.4 / #800.4 gate: an SBV / SUB / ASS document imported BEFORE the BOM fix (no
+    `text_bom` stamp, the old unit list) exports and repairs exactly as it did; a new upload
+    of the same bytes is read the new way and keeps its stamp through a repair."""
+    import app.filters.base as fbase
+    from app.services.export import build_translated_file
+    from app.services.ingest import ingest_document, reingest_document
+
+    for name, data in _BOM_CASES:
+        # the old document is made as it was: Python filter, switch off (W6 L3); the repair
+        # and export below run with the suite's switch values
+        with bilingua_switch_off():
+            filt = fbase.get_filter(name.rsplit(".", 1)[1])
+            tok = fbase._BOM_READ.set(1)  # the parser as it was before the fix
+            try:
+                old_units = [u.text for u in filt.parse(data).units]
+                expect_out = filt.build(data, {str(i): "X " + t for i, t in enumerate(old_units)})
+                with Session(engine) as s:
+                    doc = ingest_document(s, _project(s, "en-US"), name, data, "segmented")
+                    doc_id = doc.id
+            finally:
+                fbase._BOM_READ.reset(tok)
+        with Session(engine) as s:
+            doc = s.get(Document, doc_id)
+            assert "text_bom" not in doc.skeleton, (name, doc.skeleton)
+            assert "Caf" not in _sources(s, doc_id), (name, ascii(_sources(s, doc_id)))
+            before = _sources(s, doc_id)
+            _translate_all(s, doc_id)
+            out = build_translated_file(s, doc, "fr-FR")
+            assert out == expect_out, (name, out[:160], expect_out[:160])
+            # repair needs empty targets
+            for g in s.exec(select(Segment).where(Segment.document_id == doc_id)).all():
+                g.target_text = ""
+                g.status = "new"
+                s.add(g)
+            s.commit()
+        assert reingest_document(doc_id) is True, name
+        with Session(engine) as s:
+            assert _sources(s, doc_id) == before, (name, ascii(_sources(s, doc_id)))
+            assert "text_bom" not in s.get(Document, doc_id).skeleton, name
+
+        # a new upload of the same bytes: first cue / Title read, stamp kept by a repair
+        with Session(engine) as s:
+            # Python filter path (documents imported before Bilingua, or no wheel)
+            with bilingua_switch_off():
+                new = ingest_document(s, _project(s, "en-US"), name, data, "segmented")
+            new_id = new.id
+            assert new.skeleton.get("text_bom") == 2, (name, new.skeleton)
+            assert "Café" in _sources(s, new_id), (name, ascii(_sources(s, new_id)))
+            _translate_all(s, new_id)
+            fresh = build_translated_file(s, new, "fr-FR")
+            assert fresh.count(_BOM) == 1 and "X Café" in fresh.decode("utf-8-sig"), (name, fresh)
+            for g in s.exec(select(Segment).where(Segment.document_id == new_id)).all():
+                g.target_text = ""
+                g.status = "new"
+                s.add(g)
+            s.commit()
+        assert reingest_document(new_id) is True, name
+        with Session(engine) as s:
+            assert s.get(Document, new_id).skeleton.get("text_bom") == 2, name
+            assert "Café" in _sources(s, new_id), name
+    # the same bytes on the suite's switch (Bilingua by default): first cue read, one BOM kept
+    for name, data in _BOM_CASES:
+        with Session(engine) as s:
+            new = ingest_document(s, _project(s, "en-US"), name, data, "segmented")
+            assert "Café" in _sources(s, new.id), (name, ascii(_sources(s, new.id)))
+            _translate_all(s, new.id)
+            fresh = build_translated_file(s, new, "fr-FR")
+            assert fresh.count(_BOM) == 1 and "X Café" in fresh.decode("utf-8-sig"), (name, fresh)
+    print(
+        "  [bom 799.4/800.4] pre-fix SBV/SUB/ASS export + repair unchanged; new uploads stamped OK"
+    )
 
 
 def test_htmlhelp_and_properties():
@@ -446,7 +569,8 @@ def test_export_encoding_with_byte_faithful_exports():
     if not hasattr(fbase, "encode_like"):
         print("  [bytes] skipped: byte-faithful exports not on this tree")
         return
-    with Session(engine) as s:
+    # Python filter path (documents imported before Bilingua, or no wheel)
+    with Session(engine) as s, bilingua_switch_off():
         p = _project(s, "el-GR", ("fr-FR",))
         doc = ingest_document(s, p, "film.srt", SRT_EL, "segmented")
         assert doc.skeleton.get("text_code_page") == "cp1253"
@@ -477,6 +601,15 @@ def test_export_encoding_with_byte_faithful_exports():
                     assert len(named) == 1 and None not in named, (name, labels)
                     text = out.decode(named.pop())
                 assert prefix + EL_LINES[0] in text, (name, ascii(text[:200]))
+    # the same SRT on the suite's switch (Bilingua by default): the same bytes out
+    with Session(engine) as s:
+        doc = ingest_document(s, _project(s, "el-GR", ("fr-FR",)), "film.srt", SRT_EL, "segmented")
+        _translate_all(s, doc.id, prefix="Γεια ")
+        out = build_translated_file(s, doc, "fr-FR")
+        assert not _is_utf8(out) and "Γεια " + EL_LINES[0] in out.decode("cp1253"), out[:120]
+        _translate_all(s, doc.id, prefix="日本 ")
+        out = build_translated_file(s, doc, "fr-FR")
+        assert _is_utf8(out) and "日本 " in out.decode("utf-8") and b"?" not in out, out[:120]
     print("  [bytes] Greek SRT/HTML export: cp1253 when it fits, else UTF-8; labels agree OK")
 
 
@@ -515,6 +648,7 @@ def main():
         test_western_file_in_greek_project,
         test_greek_file_in_english_project_warns,
         test_existing_documents_unaffected,
+        test_bom_before_legacy_existing_documents,
         test_htmlhelp_and_properties,
         test_web_and_api,
         test_cli,

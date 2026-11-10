@@ -11,6 +11,7 @@ licensed under CC BY 4.0 (see the repository root).
 | `research/` | Background notes on CAT tools, vendor interoperability and quality-estimation research that informed the design. | Edit in place. |
 | `guides/` | Operator guides: moving an install to Postgres (`postgres-migration.md`), building the optional native module (`native-module.md`), a Jev-compatible judge server. | Edit in place. |
 | `releases/` | Release notes per version (`<version>.md`) and `README.md`. | One file per release; fix errors in place. |
+| `runbooks/` | Operations procedures: building the Bilingua wheel and image (`bilingua-wheel.md`). | Edit in place when a procedure changes. |
 | top-level `*.md` | Operator and user docs: `DEPLOY.md`, `BACKUP.md`, `SECRETS.md`, `CLI.md`, `LOCAL-INSTALL-SECURITY.md`, `governance.md` and others. | Edit in place. |
 
 Related, outside `docs/`:

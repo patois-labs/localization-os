@@ -365,7 +365,8 @@ def test_hostile():
     _refused(make_zip([*MEMBERS, ("../evil.htm", b"<p>x</p>")]), "unsafe path")
     _refused(make_zip([*MEMBERS, ("/abs/evil.htm", b"<p>x</p>")]), "unsafe path")
     _refused(make_zip([*MEMBERS, ("C:/evil.htm", b"<p>x</p>")]), "unsafe path")
-    _refused(make_zip([*MEMBERS, ("content/topic.htm", b"<p>x</p>")]), "same path twice")
+    # a case-only twin of Content/Topic.htm: the shared zip_guard refuses it first (#814.3)
+    _refused(make_zip([*MEMBERS, ("content/topic.htm", b"<p>x</p>")]), "differ only in case")
     # symlink member
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
@@ -548,6 +549,28 @@ def test_lazy_registration():
     print("  0) lazy registration: app.filters does not import the Flare filter until used")
 
 
+def test_unclosed_variables_linear():
+    """#806: N unclosed <MadCap:variable> start tags must not cost N x tokens."""
+    import time
+
+    from app.filters import flare_filter as m
+
+    n = 20000
+    topic = "<p>" + '<MadCap:variable name="x">' * n + "</p>"
+    t0 = time.time()
+    toks = m._topic_tokens(topic, None)
+    took = time.time() - t0
+    assert took < 2.0, took
+    assert "".join(toks) == topic
+    # a closed variable before unclosed ones still collapses to one markup token
+    toks = m._topic_tokens(
+        '<p><MadCap:variable name="a">v</MadCap:variable><MadCap:variable name="b">tail</p>', None
+    )
+    assert "".join(toks).count("MadCap:variable") == 3
+    assert any(t.startswith('<MadCap:variable name="a">v</MadCap') for t in toks)
+    print("  [variables] 20000 unclosed variable tags parse in linear time OK")
+
+
 def main() -> None:
     init_db()
     test_lazy_registration()
@@ -556,6 +579,7 @@ def main() -> None:
     test_translated_build()
     test_xhtml_safe_targets()
     test_hostile()
+    test_unclosed_variables_linear()
     test_web_and_api()
     test_cli()
     test_docs_surfaces()

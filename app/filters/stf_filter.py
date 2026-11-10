@@ -66,7 +66,8 @@ from app.filters.base import (
     read_text_upload,
     register,
 )
-from app.services.segment import _PLACEHOLDER_RE, ph_point
+from app.filters.token_lit import code_tokens
+from app.services.segment import ph_point
 
 _BOM = "\ufeff"
 _HEADER_RE = re.compile(r"^(Language code|Type|Translation type)[ \t]*:[ \t]*(.*?)[ \t]*$", re.I)
@@ -152,12 +153,18 @@ def _tokenize(cell: str) -> tuple[str, dict, bool]:
 
 
 def _escape(s: str) -> str:
-    return s.replace("\r\n", "\\n").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+    return (
+        s.replace("\\", "\\\\")
+        .replace("\r\n", "\\n")
+        .replace("\t", "\\t")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
 
 
 def _render(text: str, imap: dict) -> str:
     out, pos = [], 0
-    for m in _PLACEHOLDER_RE.finditer(text):
+    for m in code_tokens(text, imap):  # #814.1: a token naming no code of the unit is text
         out.append(_escape(text[pos : m.start()]))
         pos = m.end()
         inner = m.group(0)[1:-1]
@@ -165,7 +172,7 @@ def _render(text: str, imap: dict) -> str:
             info = imap.get(inner[1:])
             if info:
                 out.append(info["point"])
-        # unknown or paired tokens are dropped (same tolerance as the other filters)
+        # a paired token for a point code is dropped
     out.append(_escape(text[pos:]))
     return "".join(out)
 
@@ -186,6 +193,9 @@ class _Stf:
         pos = 1 if text.startswith(_BOM) else 0
         section = ""
         columns: list[str] | None = None
+        # LABEL and TRANSLATION column indexes, worked out once per column line (#804.2):
+        # a 20 000-column header over many rows must not be scanned per row.
+        col_src = col_dst = -1
         seen_data = False
         # Rows end at CR/LF only: str.splitlines() would also break a label at U+2028,
         # U+0085, form feed or vertical tab, splitting one row into two (gate fix).
@@ -199,11 +209,18 @@ class _Stf:
             if line.startswith("#"):
                 if _COLUMNS_RE.match(line):
                     columns = [c.strip().upper() for c in line[1:].split("\t")]
+                    col_src = col_dst = -1
+                    for ci, cname in enumerate(columns):
+                        if cname == "LABEL" and col_src < 0:
+                            col_src = ci
+                        if cname == "TRANSLATION" and col_dst < 0:
+                            col_dst = ci
                 continue
             m = _SECTION_RE.match(line)
             if m:
                 section = re.sub(r"\s+", " ", m.group(1).strip().lower())
                 columns = None
+                col_src = col_dst = -1
                 continue
             h = _HEADER_RE.match(line) if not seen_data else None
             if h:
@@ -220,9 +237,9 @@ class _Stf:
             seen_data = True
             cells = line.split("\t")
             src, dst = 1, 1
-            if columns and "TRANSLATION" in columns and section != "untranslated":
-                src = columns.index("LABEL") if "LABEL" in columns else 1
-                dst = columns.index("TRANSLATION")
+            if columns and col_dst >= 0 and section != "untranslated":
+                src = col_src if col_src >= 0 else 1
+                dst = col_dst
             elif section == "translated" and len(cells) >= 3:
                 src, dst = 1, 2
             if src >= len(cells) or not cells[0].strip():
@@ -312,9 +329,15 @@ class StfFilter(Filter):
         if not edits and enc == "utf-8":
             return bytes(original)
         text = stf.text
-        for a, b, val in sorted(edits, reverse=True):
-            text = text[:a] + val + text[b:]
-        return text.encode("utf-8")
+        # One pass (#804.1): slices are joined once, not copied per edited cell.
+        parts: list[str] = []
+        pos = 0
+        for a, b, val in sorted(edits):
+            parts.append(text[pos:a])
+            parts.append(val)
+            pos = b
+        parts.append(text[pos:])
+        return "".join(parts).encode("utf-8")
 
     def build(self, original: bytes, paragraph_texts: dict) -> bytes:
         return self._rebuild(original, paragraph_texts)

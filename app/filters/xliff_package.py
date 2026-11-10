@@ -71,8 +71,13 @@ def _is_xliff_member(info: zipfile.ZipInfo) -> bool:
 
 
 def _members(zf: zipfile.ZipFile, fmt: str) -> list[tuple[int, zipfile.ZipInfo]]:
+    from app.filters import zip_guard
+
     names = [i.filename for i in zf.infolist()]
-    if len(names) != len(set(names)):
+    # exact repeats, and names that differ only in ASCII case or slash direction (the
+    # members collide when the package is unpacked on Windows or macOS; Bilingua's
+    # xliffpkg scan refuses both, with ASCII case folding)
+    if len(names) != len({zip_guard.name_key(n) for n in names}):
         raise InputLimitError(f"This {_label(fmt)} has duplicate file names inside the archive.")
     found = [(i, info) for i, info in enumerate(zf.infolist()) if _is_xliff_member(info)]
     if not found:
@@ -103,6 +108,7 @@ def _slots(raw: bytes) -> list:
 
 def parse_package(data: bytes, fmt: str) -> ParseResult:
     from app.filters.cat_xliff import parse_units
+    from app.filters.xliff_filter import TOKENS_KEY, TOKENS_VERSION
 
     zf = open_zip(data, fmt)
     units: list = []
@@ -110,6 +116,7 @@ def parse_package(data: bytes, fmt: str) -> ParseResult:
     listing: list[dict] = []
     other_total = 0
     offset = 0
+    numbered = False
     with zf:
         found = _members(zf, fmt)
         xliff_idx = {i for i, _info in found}
@@ -133,6 +140,7 @@ def parse_package(data: bytes, fmt: str) -> ParseResult:
                 u.p_index = offset + pos[u.p_index]
                 units.append(u)
             check_segment_cap(len(units))
+            numbered = numbered or TOKENS_KEY in parsed.skeleton  # #794 gate
             for k, v in (parsed.skeleton.get("protected_units") or {}).items():
                 protected[k] = protected.get(k, 0) + v
             if len(listing) < MAX_LISTED:
@@ -147,6 +155,8 @@ def parse_package(data: bytes, fmt: str) -> ParseResult:
     }
     if protected:
         skeleton["protected_units"] = protected
+    if numbered:
+        skeleton[TOKENS_KEY] = TOKENS_VERSION
     return ParseResult(skeleton=skeleton, units=units)
 
 

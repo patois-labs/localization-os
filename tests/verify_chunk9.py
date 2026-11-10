@@ -212,12 +212,15 @@ def main() -> None:
     assert flat == "Cliquez Envoyer maintenant.", repr(flat)
     assert "⟦" not in flat and "⟧" not in flat, "literal token leaked into tagless target"
 
-    # (b) unknown token id in target -> dropped, surrounding text kept, no literal
+    # (b) unknown token id in target -> kept as literal TEXT (issue #814 item 1, 11-07:
+    #     nothing the translator typed is deleted; tag_damage flags it), never an element
     rb_unknown = filt.build(xlf2, {"0": "A ⟦g9⟧X⟦/g9⟧ B ⟦x5⟧."})
     tu2 = target_for(rb_unknown, "1")
-    ser_u = etree.tostring(tu2, encoding="unicode")
-    assert "⟦" not in ser_u, f"unknown token leaked literally: {ser_u}"
-    assert "".join(tu2.itertext()) == "A X B .", repr("".join(tu2.itertext()))
+    inline = ("g", "x", "bx", "ex", "ph")
+    made = [c for c in tu2.iter() if c is not tu2 and etree.QName(c).localname in inline]
+    shown = etree.tostring(tu2, encoding="unicode")
+    assert not made, "unknown token became an inline element: " + shown
+    assert "".join(tu2.itertext()) == "A ⟦g9⟧X⟦/g9⟧ B ⟦x5⟧.", repr("".join(tu2.itertext()))
 
     # (c) duplicate id emitted twice -> materialized at most once (no dup id attr)
     rb_dup = filt.build(xlf2, {"0": "⟦g1⟧A⟦/g1⟧ ⟦g1⟧B⟦/g1⟧ ⟦x2⟧⟦x2⟧"})

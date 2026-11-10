@@ -115,9 +115,9 @@ def test_tolerant_tokens():
     data = TT.encode()
     out = f.build(data, {"0": "A ⟦x9⟧B ⟦g2⟧C ⟦x1⟧⟦x1⟧D ⟦/g7⟧E"}).decode("utf-8")
     etree.fromstring(out.encode())
-    assert "⟦" not in out
-    assert 'A B <span tts:fontStyle="italic">C <br/>D E</span></p>' in out, out
-    print("  [tolerant] unknown/duplicate/stray dropped, unclosed span closed OK")
+    # #814.1 (g12): x9 and /g7 name no code of the unit: text; the repeated x1 is dropped
+    assert 'A ⟦x9⟧B <span tts:fontStyle="italic">C <br/>D ⟦/g7⟧E</span></p>' in out, out
+    print("  [tolerant] duplicate dropped, unknown kept as text, unclosed span closed OK")
 
 
 def test_localized_lang():
@@ -171,6 +171,50 @@ def _refused(data, exc=ValueError):
     except exc:
         return
     raise AssertionError(f"must be refused: {data[:80]!r}")
+
+
+def test_issue_801():
+    """#801: <br> with children, undeclared legacy bytes, xml:lang inside attribute values."""
+    from lxml import etree
+
+    from app.filters.base import UnsupportedEncodingError
+
+    f = get_filter("ttml")
+    head = '<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="en"><body><div>\n'
+    tail = "\n</div></body></tt>"
+    # 1. a <br> holding a child element stays whole and the export is well-formed
+    src = (head + "<p>a<br><metadata><x/></metadata></br>b</p>" + tail).encode()
+    pr = f.parse(src)
+    assert pr.units[0].text == "a⟦x1⟧b", pr.units[0].text
+    out = f.build(src, {"0": "X a⟦x1⟧b"})
+    etree.fromstring(out)
+    assert b"<p>X a<br><metadata><x/></metadata></br>b</p>" in out, out
+    # 2. bytes that are not UTF-8 need a legacy declaration
+    for decl in (b"", b'<?xml version="1.0" encoding="UTF-8"?>'):
+        bad = (
+            decl
+            + b'<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p>Caf\xe9</p></div></body></tt>'
+        )
+        try:
+            f.parse(bad)
+            raise AssertionError("undeclared Latin-1 must be refused")
+        except UnsupportedEncodingError as exc:
+            assert "does not declare its encoding" in str(exc), exc
+    ok = (
+        b'<?xml version="1.0" encoding="ISO-8859-1"?>'
+        b'<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p>Caf\xe9</p></div></body></tt>'
+    )
+    assert f.parse(ok).units[0].text == "Café"
+    # 3. xml:lang inside another attribute's value is not a language attribute
+    tag = (
+        b'<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="urn:m" xml:lang="en"><body><div>'
+        b"<p ttm:x=\" xml:lang='en'\">Hi</p></div></body></tt>"
+    )
+    out = f.build_localized(tag, {"0": "Salut"}, "fr")
+    assert b"ttm:x=\" xml:lang='en'\"" in out and b'xml:lang="fr"' in out, out
+    out = f.build_localized(tag, {}, "fr")
+    assert b"ttm:x=\" xml:lang='en'\"" in out, out
+    print("  [issue 801] br subtree, undeclared bytes refused, xml:lang only as an attribute OK")
 
 
 def test_hostile():
@@ -408,6 +452,7 @@ def main():
     test_localized_lang()
     test_prefixed_and_dfxp_namespace()
     test_encodings()
+    test_issue_801()
     test_hostile()
     test_comment_and_cdata_in_p()
     test_gate_caption_scope_space_and_head_lang()

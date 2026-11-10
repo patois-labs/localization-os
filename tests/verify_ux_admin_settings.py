@@ -11,8 +11,13 @@ Regenerate after an intentional form change (review the diff before committing):
 """
 
 import json
+import os
 import sys
 from pathlib import Path
+
+# The contract records the shipped defaults (`bilingua_formats` = all): a sweep's switch override
+# (LOC_TMS_BILINGUA_FORMATS) would show up in the rendered form value, so it is not inherited.
+os.environ.pop("LOC_TMS_BILINGUA_FORMATS", None)
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))

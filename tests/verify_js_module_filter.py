@@ -94,6 +94,23 @@ def _refused(src: str, needle: str):
     raise AssertionError(f"not refused: {src!r}")
 
 
+def test_slash_in_type_784():
+    _refused(
+        'type T = string\nx = /`/ + `\nexport default { a: "SELECT 1 FROM users" } //`\n',
+        "regular expression",
+    )
+    _refused(
+        'interface I { a: string }\nfoo = /`/ + `\nexport default { a: "rm -rf home" } //`\n',
+        "regular expression",
+    )
+    _refused(
+        'interface I extends A / B { a: string }\nexport default { a: "Hi" }\n', "in an interface"
+    )
+    _refused('export default { a: "Hi" as T / 2 }\n', "regular expression")
+    assert _texts(b'type P = \'a/b\' | "c/d"\nexport default { a: "Hi" }\n') == ["Hi"]
+    print("  [js] a slash in a skipped type refuses the file (#784) OK")
+
+
 def test_registered():
     exts = supported_exts()
     for ext in ("js", "mjs", "cjs", "ts", "mts", "cts"):
@@ -217,9 +234,10 @@ def test_placeholders_and_unknown_tokens():
     src = "export default { a: 'Hi {{name}}, %s and {count} <b>bold</b>' }"
     u = F.parse(src.encode()).units[0]
     assert u.text == "Hi ⟦p1⟧, ⟦x2⟧ and ⟦p3⟧ ⟦x4⟧bold⟦x5⟧", u.text  # #693
-    # a dropped token is dropped; an invented token is not written into the file
+    # a dropped token is dropped; a pair token for a point code is dropped; a token that names
+    # no code of the unit is text (#814.1, g12: kept, quality.tag_damage reports it)
     out = F.build(src.encode(), {"0": "Hallo ⟦x1⟧ ⟦x9⟧ ⟦g1⟧fett⟦/g1⟧"}).decode()
-    assert "a: 'Hallo {{name}}  fett'" in out, out
+    assert "a: 'Hallo {{name}} ⟦x9⟧ fett'" in out, out
     only = "export default { a: '{{count}}', b: '%s', c: '50% off', d: '---' }"
     assert _texts(only.encode()) == ["50% off"], _texts(only.encode())
     lit = "export default { a: 'Use ⟦x1⟧ literally' }"
@@ -484,6 +502,7 @@ def test_end_to_end_upload_export():
 
 if __name__ == "__main__":
     test_registered()
+    test_slash_in_type_784()
     test_parse_shapes()
     test_records()
     test_identity_round_trip()

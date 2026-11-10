@@ -40,15 +40,22 @@ from app.filters.base import (
     decode_text_lossless,
     encode_like,
     encode_text_lossless,
+    legacy_read,
+    note_new_read,
     note_source_encoding,
     read_text_upload,
     register,
     text_envelope,
 )
+from app.filters.token_lit import renumber_tokens, reserved_numbers, skip_map
 from app.services.segment import _PLACEHOLDER_RE, ph_close, ph_open, ph_point, strip_placeholders
 
 _TAG_NAME_RE = re.compile(r"<(/?)([a-zA-Z][^\t\n\f\r />]*)")
 _SKIP_CONTAINERS = ("script", "style")
+
+
+class _Ph(str):
+    """A placeholder token the walk wrote (text that merely looks like one is a plain str)."""
 
 
 class _TextToken(str):
@@ -374,13 +381,22 @@ def _iter_units(
             counter += 1
             run_id = counter
             inline_map[str(counter)] = {"point": str(tok)}
-            buf_parts.append(ph_point("x", counter))
+            buf_parts.append(_Ph(ph_point("x", counter)))
         buf_indices.append(ti)
 
     def flush():
         nonlocal buf_parts, buf_indices, inline_map, stack, counter, run_id
         run_id = 0
         if buf_indices:
+            # #814.1: the unit's own codes skip the numbers token look-alike text in it uses
+            reserved = reserved_numbers("".join(p for p in buf_parts if not isinstance(p, _Ph)))
+            moved = skip_map((int(k) for k in inline_map), reserved) if reserved else {}
+            if moved and not legacy_read():
+                note_new_read()
+                buf_parts = [
+                    _Ph(renumber_tokens(p, moved)) if isinstance(p, _Ph) else p for p in buf_parts
+                ]
+                inline_map = {str(moved[int(k)]): v for k, v in inline_map.items()}
             full = "".join(buf_parts)
             lead, core, trail = _split_ws(full)
             if core and _is_translatable(strip_placeholders(core)):
@@ -409,7 +425,7 @@ def _iter_units(
             run_id = 0  # its own point even inside a no-translate run (_fix_islands)
             counter += 1
             inline_map[str(counter)] = {"point": tok}
-            buf_parts.append(ph_point("x", counter))
+            buf_parts.append(_Ph(ph_point("x", counter)))
             buf_indices.append(ti)
             continue
         if _is_tag_token(tok):
@@ -432,23 +448,34 @@ def _iter_units(
                 if name in void_inline or self_closing:
                     counter += 1
                     inline_map[str(counter)] = {"point": tok}
-                    buf_parts.append(ph_point("x", counter))
+                    buf_parts.append(_Ph(ph_point("x", counter)))
                     buf_indices.append(ti)
                 elif closing:
-                    # Pop the nearest matching open; an orphan close is dropped.
+                    # Pop the nearest matching open.
                     for si in range(len(stack) - 1, -1, -1):
                         if stack[si][1] == name:
                             oid = stack[si][0]
                             del stack[si]
                             inline_map[str(oid)]["close"] = tok
-                            buf_parts.append(ph_close("g", oid))
+                            buf_parts.append(_Ph(ph_close("g", oid)))
                             buf_indices.append(ti)
                             break
+                    else:
+                        # #810.1: an orphan end tag (`</b>` with no `<b>` in the block) is a
+                        # point code, so a translated build writes it back instead of blanking
+                        # it with the rest of the span (Bilingua htmlcore does the same). A
+                        # document imported before this keeps dropping it (base.READ_GEN_KEY).
+                        if not legacy_read():
+                            note_new_read()
+                            counter += 1
+                            inline_map[str(counter)] = {"point": tok}
+                            buf_parts.append(_Ph(ph_point("x", counter)))
+                            buf_indices.append(ti)
                 else:
                     counter += 1
                     inline_map[str(counter)] = {"open": tok, "close": None}
                     stack.append((counter, name))
-                    buf_parts.append(ph_open("g", counter))
+                    buf_parts.append(_Ph(ph_open("g", counter)))
                     buf_indices.append(ti)
             else:
                 # Block-level / comment / doctype / unknown tag, or inside a skip
@@ -468,9 +495,9 @@ def _iter_units(
 
 def _rematerialize(text: str, inline_map: dict, protected: tuple = (), quotes: bool = True) -> str:
     """Replace placeholder tokens in translated ``text`` with their original inline
-    tags. Tolerant like docx/xliff: a token with no map entry (or a close with no
-    stored close tag) is DROPPED rather than left as literal ⟦…⟧ text, so a mock/LLM
-    that reorders or invents tokens can never leak bracket noise into the output.
+    tags. A close with no stored close tag is dropped. A token with no map
+    entry names no code of the unit, so it is TEXT and is kept (#814.1: source text such as
+    ``⟦x2⟧`` is no longer deleted; the tag-damage gate reports a model that invented one).
 
     ``quotes`` (default True, the safe choice) also escapes ``"`` and ``'``; a caller
     passes False only for a page where ``_raw_quotes_safe`` holds (#672)."""
@@ -483,13 +510,16 @@ def _rematerialize(text: str, inline_map: dict, protected: tuple = (), quotes: b
         if inner.startswith("/"):
             key = re.sub(r"^/[a-z]?", "", inner)
             info = inline_map.get(key)
-            if info and info.get("close"):
+            if info is None:  # #814.1: names no code of this unit: it is text
+                out.append(_escape_text(m.group(0), protected, quotes=quotes))
+            elif info.get("close"):
                 out.append(info["close"])
         else:
             is_point = inner[:1] == "x"
             key = re.sub(r"^[a-z]?", "", inner, count=1)
             info = inline_map.get(key)
-            if info is None:
+            if info is None:  # #814.1: names no code of this unit: it is text
+                out.append(_escape_text(m.group(0), protected, quotes=quotes))
                 continue
             if is_point:
                 out.append(info.get("point") or "")
@@ -581,6 +611,11 @@ def _raw_quotes_safe(tokens: list[str]) -> bool:
     text = "".join(tokens)
     pos = 0
     raw_body = False  # the text token right after <script>/<style> is opaque raw text
+    # #810.4: per raw-text element name, its pattern and where its next close was found. `pos`
+    # only grows, so a close found at or after it is still the first one for every later start
+    # tag of that name (and "none left" stays true): an unclosed `<title/>` repeated n times
+    # no longer rescans to the end of the page each time.
+    raw_close: dict[str, tuple] = {}
     for tok in tokens:
         pos += len(tok)
         if not tok:
@@ -610,8 +645,15 @@ def _raw_quotes_safe(tokens: list[str]) -> bool:
         if name in _RAW_TEXT_ELEMENTS:
             # the browser reads raw text up to the first `</name` + delimiter: that must
             # be where one of our own tokens starts, or the two scans have parted ways
-            m = re.compile(r"</" + re.escape(name) + r"[\t\n\f\r />]", re.I).search(text, pos)
-            if m and m.start() not in starts:
+            rx, at = raw_close.get(name) or (
+                re.compile(r"</" + re.escape(name) + r"[\t\n\f\r />]", re.I),
+                -2,
+            )
+            if at != -1 and at < pos:  # -2: not looked for yet; -1: there is none after `pos`
+                m = rx.search(text, pos)
+                at = m.start() if m else -1
+                raw_close[name] = (rx, at)
+            if at >= 0 and at not in starts:
                 return False
     return True
 
@@ -757,8 +799,12 @@ def _tokenize(text: str, template_pattern=None, budget: list[int] | None = None)
     and raw-text bodies are opaque text. Failed tags consume EOF as text rather than
     retrying at each nested <. Template spans in ordinary text remain in that text.
     """
+    # #810.2: an empty match (a pattern with only optional parts) starts no span; keeping it
+    # made the scan below stand still at that position for ever.
     templates = (
-        {m.start(): m.end() for m in template_pattern.finditer(text)} if template_pattern else {}
+        {m.start(): m.end() for m in template_pattern.finditer(text) if m.end() > m.start()}
+        if template_pattern
+        else {}
     )
     starts = sorted(templates)
     tokens = []
@@ -1124,7 +1170,7 @@ class HtmlFilter(Filter):
         if lenient:
             text, enc = bytes(data).decode("utf-8", "replace"), "utf-8"
         else:  # #509: declared charset or Windows-1252 converted, else refused
-            text, enc = read_text_upload(data, declared=True)
+            text, enc = read_text_upload(data, declared=True, rare=True)
         server = self._server_page(text)
         if server is not None:
             parsed = server.parse(data, provider, lenient=lenient, enforce_caps=enforce_caps)
@@ -1165,7 +1211,7 @@ class HtmlFilter(Filter):
         return ParseResult(skeleton=note_source_encoding(skeleton, enc), units=units)
 
     def build(self, original: bytes, paragraph_texts: dict) -> bytes:
-        text = decode_text_lossless(original, declared=True)
+        text = decode_text_lossless(original, declared=True, rare=True)
         server = self._server_page(text)
         if server is not None:
             return server.build(original, paragraph_texts)
@@ -1196,7 +1242,7 @@ class HtmlFilter(Filter):
         check_build(before, out)
         # B-bytes: a page uploaded in a declared legacy code page goes back in it (its
         # meta charset too) when every character fits; else UTF-8, as #509 wrote it.
-        return encode_like(out, text_envelope(original, declared=True))
+        return encode_like(out, text_envelope(original, declared=True, rare=True))
 
     def build_localized(
         self, original: bytes, paragraph_texts: dict, target_locale: str | None = None
@@ -1204,15 +1250,18 @@ class HtmlFilter(Filter):
         tag = a11y.target_tag(target_locale)
         if not tag:
             return self.build(original, paragraph_texts)
-        server = self._server_page(decode_text_lossless(original, declared=True))
+        server = self._server_page(decode_text_lossless(original, declared=True, rare=True))
         if server is not None:
             return server.build_localized(original, paragraph_texts, target_locale)
         # Declare on the ORIGINAL token stream before any translated text is written
         # (only attribute values change, so unit indices are unaffected), so a
         # translation can never be mistaken for a tag.
-        tokens = _tokenize(decode_text_lossless(original, declared=True), self.template_pattern)
+        tokens = _tokenize(
+            decode_text_lossless(original, declared=True, rare=True), self.template_pattern
+        )
         _declare_language(tokens, tag, a11y.target_direction(target_locale))
         built = self.build(encode_text_lossless("".join(tokens)), paragraph_texts)
         return encode_like(
-            decode_text_lossless(built, declared=True), text_envelope(original, declared=True)
+            decode_text_lossless(built, declared=True, rare=True),
+            text_envelope(original, declared=True, rare=True),
         )

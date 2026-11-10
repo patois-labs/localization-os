@@ -820,11 +820,78 @@ def _in_document_code_page(fn):
     @functools.wraps(fn)
     def wrapped(session, doc, *args, **kwargs):
         from app.filters.base import document_code_page
+        from app.filters.xliff_filter import document_tokens, skeleton_tokens
 
-        with document_code_page(getattr(doc, "skeleton", None)):
+        skeleton = getattr(doc, "skeleton", None)
+        try:
+            # #794 gate: XLIFF code numbers are re-derived from the original at export, so a
+            # document imported before #794 (no xliff_tokens stamp) keeps its old numbering.
+            skeleton_tokens(skeleton)
+        except ValueError as exc:
+            raise ExportUnreadableBlob(str(exc), doc_id=doc.id, fmt=doc.fmt) from exc
+        with document_tokens(skeleton), document_code_page(skeleton):
             return fn(session, doc, *args, **kwargs)
 
     return wrapped
+
+
+def _build_with_adapter(filt, original: bytes, mapping: dict, locale: str, fallback_keys, doc):
+    """The deliverable of a Bilingua document. No Python stamp keyword reaches the adapter
+    (walk, HH decode, dialect, column plan, md walk): it replays the options stored in its own
+    stamp. Every failure it can have is a clean refusal the user can act on (re-import), never
+    a 500: an input limit stays the 413 it is, a parse/parser-version/changed-original error
+    and a missing module become ExportUnreadableBlob, and so does anything else the engine
+    raises (a native panic included), logged without the file's content."""
+    from app.filters.base import InputLimitError
+    from app.filters.bilingua_adapter import (
+        BilinguaParseError,
+        BilinguaUnavailable,
+        BilinguaWriteRefused,
+    )
+
+    try:
+        return filt.build_localized(original, mapping, locale, fallback_keys=fallback_keys)
+    except InputLimitError:
+        raise  # a size/limit refusal (#224, 413) is not an unreadable blob
+    except (BilinguaParseError, BilinguaUnavailable) as exc:
+        raise ExportUnreadableBlob(str(exc), doc_id=doc.id, fmt=doc.fmt) from exc
+    except BilinguaWriteRefused as exc:
+        # T5: a translation the file cannot hold (`unwritable`, naming the segment) or a
+        # target the engine refused (logged by the adapter). The adapter's own sentence says
+        # which; the generic "re-import" text below would send the user the wrong way.
+        raise ExportUnreadableBlob(str(exc), doc_id=doc.id, fmt=doc.fmt) from exc
+    except Exception as exc:
+        _LOG.warning(
+            "bilingua export failed for document %s %s: %s",
+            doc.id,
+            locale,
+            type(exc).__name__,
+            exc_info=True,
+        )
+        raise ExportUnreadableBlob(
+            "The translated file could not be rebuilt. Re-import the file, or contact support "
+            "with the document ID.",
+            doc_id=doc.id,
+            fmt=doc.fmt,
+        ) from exc
+    except BaseException as exc:
+        if type(exc).__name__ == "PanicException":  # a Rust panic in the wheel (pyo3)
+            _LOG.error("bilingua panic on export of document %s %s", doc.id, locale)
+            raise ExportUnreadableBlob(
+                "The translated file could not be rebuilt. Re-import the file, or contact "
+                "support with the document ID.",
+                doc_id=doc.id,
+                fmt=doc.fmt,
+            ) from exc
+        raise
+
+
+def _hh_decode(doc) -> int:
+    """#796/#797: the HTML Help decode version the document was imported with (a document
+    stored before the fix has no stamp and is read exactly as it always was: version 1)."""
+    from app.filters.htmlhelp_filter import HH_DECODE_KEY, decode_version
+
+    return decode_version((getattr(doc, "skeleton", None) or {}).get(HH_DECODE_KEY))
 
 
 @admitted_work(operation="export")
@@ -930,15 +997,38 @@ def build_translated_file(
         raise ExportMissingBlob(_missing, doc_id=doc.id, fmt=doc.fmt) from exc
     except InvalidToken as exc:
         raise ExportUnreadableBlob(_corrupt, doc_id=doc.id, fmt=doc.fmt) from exc
-    filt = get_filter(doc.fmt)
+    from app.filters.bilingua_adapter import (
+        BilinguaFilter,
+        BilinguaParseError,
+        BilinguaUnavailable,
+    )
+
+    try:
+        filt = get_filter(doc.fmt, skeleton=getattr(doc, "skeleton", None))
+    except BilinguaUnavailable as exc:
+        # a document made by the Bilingua parser on an install without the module: a clean
+        # refusal (not a 500); the parser mismatch case is mapped below, at build time
+        raise ExportUnreadableBlob(str(exc), doc_id=doc.id, fmt=doc.fmt) from exc
     _refuse_other_file_target(doc, original, locale)
-    if filt.fmt == "html":
+    # A document the Bilingua adapter made is rebuilt by it and by nothing else: the Python
+    # stamps and checks below (HTML extraction drift, walk versions, HH decode, column plan,
+    # dialect) describe Python filters and must not run for it. Its own stamp check, inside the
+    # adapter's build, is the drift gate.
+    adapter = isinstance(filt, BilinguaFilter)
+    if adapter:
+        pass
+    elif filt.fmt == "html":
         # Old HTML extraction split quoted attributes at a raw greater-than sign.
         # Stored paragraph indices from that scanner must never address the new units.
         # #509: a converted (Windows-1252 or declared charset) upload is re-read the way
         # it was imported; anything else the way pre-#509 imports were (never refused).
         converted = bool((doc.skeleton or {}).get("source_encoding"))
-        fresh = filt.parse(original, lenient=not converted, enforce_caps=False).skeleton["units"]
+        try:
+            fresh = filt.parse(original, lenient=not converted, enforce_caps=False).skeleton[
+                "units"
+            ]
+        except BilinguaParseError as exc:
+            raise ExportUnreadableBlob(str(exc), doc_id=doc.id, fmt=doc.fmt) from exc
         stored = (doc.skeleton or {}).get("units", [])
         old_units = [(u["p_index"], u["text"]) for u in stored]
         new_units = [(u["p_index"], u["text"]) for u in fresh]
@@ -956,6 +1046,27 @@ def build_translated_file(
         # B-bytes (2026-10-11, decision 1): an export with no translated change comes
         # back exactly as uploaded, byte for byte.
         return bytes(original)
+    if adapter and filt.fmt == "mo" and as_fmt == "po":
+        # FINAL2: a compiled catalog delivered as its PO source is written by LocOS's MO->PO
+        # writer for a Bilingua document too (Bilingua writes .mo only); its units and p_index
+        # are LocOS's (diff: every MO file equal), so the mapping addresses the same messages
+        import hashlib
+
+        from app.filters.bilingua_adapter import SKELETON_KEY
+        from app.filters.mo_filter import build_po
+
+        stamp = (getattr(doc, "skeleton", None) or {}).get(SKELETON_KEY) or {}
+        want = stamp.get("original_sha256")
+        if want and hashlib.sha256(bytes(original)).hexdigest() != want:
+            raise ExportUnreadableBlob(
+                "The stored original is not the file this document was imported from; "
+                "re-import the file.",
+                doc_id=doc.id,
+                fmt=doc.fmt,
+            )
+        return build_po(original, mapping, locale, fallback_keys=fallback_keys)
+    if adapter:
+        return _build_with_adapter(filt, original, mapping, locale, fallback_keys, doc)
     from app.filters.base import InputLimitError
     from app.filters.xml_text import XmlTargetError
 
@@ -984,8 +1095,14 @@ def build_translated_file(
             # project's language), never a fresh Windows-1252 guess.
             cp = (getattr(doc, "skeleton", None) or {}).get("hhp_code_page")
             return filt.build_localized(
-                original, mapping, locale, hhp_code_page=cp if isinstance(cp, int) else None
+                original,
+                mapping,
+                locale,
+                hhp_code_page=cp if isinstance(cp, int) else None,
+                hh_decode=_hh_decode(doc),
             )
+        if filt.fmt == "hhp":
+            return filt.build_localized(original, mapping, locale, hh_decode=_hh_decode(doc))
         if filt.fmt == "docx":
             # #349/#355: rebuild under the table walk the project was imported with. A
             # skeleton without the docx_walk stamp was numbered by the pre-#349 walk.
@@ -1056,6 +1173,10 @@ def build_translated_file(
         raise ExportUnreadableBlob(str(exc), doc_id=doc.id, fmt=doc.fmt) from exc
     except InputLimitError:
         raise  # a size/limit refusal (#224, 413) is not an unreadable blob
+    except BilinguaParseError as exc:
+        # BilinguaParserMismatch (the stored parser stamp cannot be rebuilt by this install),
+        # a changed original, or a file Bilingua cannot write: re-import, never a 500
+        raise ExportUnreadableBlob(str(exc), doc_id=doc.id, fmt=doc.fmt) from exc
     except ValueError as exc:
         if filt.fmt not in (
             "docx",

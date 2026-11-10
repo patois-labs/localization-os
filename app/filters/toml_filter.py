@@ -440,8 +440,10 @@ def _tokenize(value: str, delims: tuple[str, str]) -> tuple[str, dict, str]:
 
 def _detokenize(text: str, imap: dict) -> str:
     def sub(m):
+        if m.group(3) not in imap:
+            return m.group(0)  # #814.1: names no code of the unit: it is text
         if m.group(1) or m.group(2) != "x":
-            return ""  # paired or foreign tokens are dropped (html/docx/xliff tolerance)
+            return ""  # a paired or foreign token for a code is dropped
         info = imap.get(m.group(3))
         return info["point"] if info else ""
 

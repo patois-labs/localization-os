@@ -224,13 +224,48 @@ def _prep(text: str, cct: str) -> str:
     return "".join(out)
 
 
-def unsupported_chars(text: str, cct: str) -> list[str]:
-    plain = _TOKEN_RE.sub("", _prep(text, cct)).replace("\n", "")
-    seen: list[str] = []
-    for c in plain:
-        if _encode_char(c, cct) is None and c not in seen:
-            seen.append(c)
-    return seen
+def unsupported_chars(text: str, cct: str, known=None) -> list[str]:
+    """The characters of `text` table `cct` cannot hold. `known`: the token numbers of the
+    subtitle's codes; a token naming none of them is text (#814.1), and its brackets are
+    characters no EBU table holds. None: every token is a code."""
+    prepped = _prep(text, cct)
+    if known is None:
+        plain = _TOKEN_RE.sub("", prepped)
+    else:
+        plain = _TOKEN_RE.sub(lambda m: "" if int(m.group(1)) in known else m.group(0), prepped)
+    plain = plain.replace("\n", "")
+    seen: set[str] = set()
+    bad: list[str] = []
+    for c in _clusters(plain):
+        if c not in seen and _encode_char(c, cct) is None:
+            seen.add(c)
+            bad.append(c)
+    return bad
+
+
+def _clusters(s: str) -> list[str]:
+    """Characters of s; a base character followed by one floating-diacritic mark is one cluster.
+
+    Table 00 holds any mark before any ASCII letter (C1h 'x' is x + U+0300 with no precomposed
+    form), so the pair is one atom that is encoded as the two bytes (#798.3).
+    """
+    out: list[str] = []
+    for c in s:
+        if out and c in _MARK_BYTE and len(out[-1]) == 1 and out[-1] not in _MARK_BYTE:
+            out[-1] += c
+        else:
+            out.append(c)
+    return out
+
+
+def _byte_ok(b: int, cct: str) -> bool:
+    """A raw byte (a control code, a byte the old table has no character for) may move to table
+    cct only when that table reads it the same way: 00-9F (controls, ASCII, 7F) mean the same
+    in every table; an upper-half byte moves only when the new table has no character for it
+    (#798.2)."""
+    if b < 0xA0:
+        return True
+    return b not in _TABLES[cct] and not (cct == "00" and b in _DIACRITIC)
 
 
 # --- TF decoding ----------------------------------------------------------------------
@@ -399,17 +434,17 @@ def _units(raw, cct, groups):
 
 def _atoms(line: str, tokens: dict):
     out, pos = [], 0
-    for m in _TOKEN_RE.finditer(line):
-        out.extend(("c", c) for c in line[pos : m.start()])
-        if int(m.group(1)) in tokens:
-            out.append(("t", tokens[int(m.group(1))]))
+    # #814.1: a token that names no code of the subtitle is text
+    for m in (m for m in _TOKEN_RE.finditer(line) if int(m.group(1)) in tokens):
+        out.extend(("c", c) for c in _clusters(line[pos : m.start()]))
+        out.append(("t", tokens[int(m.group(1))]))
         pos = m.end()
-    out.extend(("c", c) for c in line[pos:])
+    out.extend(("c", c) for c in _clusters(line[pos:]))
     return out
 
 
-def _width(atoms) -> int:
-    n, prev_space = 0, False
+def _width(atoms, prev_space: bool = False) -> int:
+    n = 0
     for kind, v in atoms:
         if kind == "c":
             n += 1
@@ -433,15 +468,19 @@ def _encode_atoms(atoms, cct: str) -> bytes:
     return bytes(out)
 
 
-def _wrap(words, width, measure):
-    lines, cur = [], ""
-    for w in words:
-        cand = f"{cur} {w}" if cur else w
-        if not cur or measure(cand) <= width:
-            cur = cand
+def _wrap(words, width, w0, w1):
+    """Greedy wrap. w0[i] is the width of word i alone, w1[i] its width after a joining space
+    (a spacing code right after the space takes no cell of its own); the row width grows
+    incrementally, so a wrap is linear in the words (#798.5)."""
+    lines, cur, cw = [], "", 0
+    for i, w in enumerate(words):
+        if not cur:
+            cur, cw = w, w0[i]
+        elif cw + 1 + w1[i] <= width:
+            cur, cw = f"{cur} {w}", cw + 1 + w1[i]
         else:
             lines.append(cur)
-            cur = w
+            cur, cw = w, w0[i]
     if cur:
         lines.append(cur)
     return lines
@@ -462,12 +501,13 @@ def _layout(text: str, n_rows: int, max_rows: int, mnc: int, tokens: dict):
         # gate (train-9): cannot fit whatever the breaks (a row is at least the sum of its
         # words); refuse now instead of re-wrapping a huge text once per width (13 s at MNC 99)
         return None
+    w1 = [_width(_atoms(w, tokens), True) for w in words]
     target = max(1, min(n_rows, max_rows))
     for width in range(1, mnc + 1):
-        rows = _wrap(words, width, measure)
+        rows = _wrap(words, width, widths, w1)
         if len(rows) <= target:
             return rows
-    rows = _wrap(words, mnc, measure)
+    rows = _wrap(words, mnc, widths, w1)
     return rows if len(rows) <= max_rows else None
 
 
@@ -475,13 +515,37 @@ def _double_height(row: _TextRow) -> bool:
     return 0x0D in row.prefix or 0x0F in row.prefix
 
 
+def _frame_bytes(sub: _Subtitle):
+    """Raw bytes around the text rows that are copied as they are."""
+    yield sub.head
+    yield sub.tail
+    yield from sub.seps
+    for r in sub.rows:
+        yield r.prefix
+        yield r.suffix
+
+
+def _frame_moves(sub: _Subtitle, cct: str) -> bool:
+    return all(_byte_ok(b, cct) for chunk in _frame_bytes(sub) for b in chunk)
+
+
+def _sub_moves(sub: _Subtitle, text: str, cct: str) -> bool:
+    """Every byte the rewritten subtitle keeps raw (frame, and the codes `text` uses) means
+    the same in table cct (#798.2)."""
+    if not _frame_moves(sub, cct):
+        return False
+    _r, tokens = sub.texts()
+    used = {int(m.group(1)) for m in _TOKEN_RE.finditer(text)}
+    return all(_byte_ok(v, cct) for n, v in tokens.items() if n in used)
+
+
 def _encode_subtitle(sub: _Subtitle, text: str, cct: str, mnc: int, *, keep_rows: bool):
     """(TF bytes, row delta, None) or (None, 0, reason)."""
     text = _prep(text, cct)
-    bad = unsupported_chars(text, cct)
+    _r, tokens = sub.texts()
+    bad = unsupported_chars(text, cct, tokens)
     if bad:
         return None, 0, "characters the code table cannot encode: " + " ".join(map(repr, bad[:8]))
-    _r, tokens = sub.texts()
     n = len(sub.rows)
     if keep_rows:  # re-encoding an untouched subtitle in another table
         rows = text.split("\n")
@@ -505,6 +569,17 @@ def _encode_subtitle(sub: _Subtitle, text: str, cct: str, mnc: int, *, keep_rows
     out += sub.tail
     step = 2 if _double_height(sub.rows[0]) else 1
     return bytes(out), (m - n) * step, None
+
+
+def _others(groups, cct: str):
+    """(group, _Subtitle, text) for the groups that are not units: comments and text-less."""
+    out = []
+    for g in groups:
+        sub = _Subtitle(g.tf, cct)
+        text = sub.text()
+        if g.comment or not text.strip():
+            out.append((g, sub, text))
+    return out
 
 
 def _blocks_for(tf: bytes, headers: list[bytes], cct: str) -> list[bytes]:
@@ -585,30 +660,97 @@ class StlFilter(Filter):
                 changed[k] = new
         # The declared table first; another one only when it cannot encode a translation.
         problems: list[str] = []
+        named: set[int] = set()  # subtitle indexes already in problems (a set, not a scan)
         chosen = None
+
         # untouched subtitles must survive a switch too (#679: only the untouched ones; a
         # translated subtitle's old text is replaced, so its characters do not matter)
-        usable = [cct] + [
-            c
-            for c in _CODECS
-            if c != cct
-            and not any(
-                unsupported_chars(t, c) for k, (_g, _s, t) in enumerate(units) if k not in changed
+        # Comment subtitles and text-less subtitles are not units, but their bytes are in the
+        # old table too: they move with the file or the switch is refused (#798.1).
+        # (Same rule and messages as Bilingua's bilingua-stl write.rs `rebuild`.)
+        # the token numbers of each translated subtitle's codes (#814.1: any other token is text)
+        known = {k: set(units[k][1].texts()[1]) for k in changed}
+
+        def fits(c: str) -> bool:
+            return all(not unsupported_chars(t, c, known[k]) for k, t in changed.items())
+
+        def units_cover(c: str) -> bool:  # the untouched units have characters in table c
+            return all(
+                k in changed or not unsupported_chars(t, c) for k, (_g, _s, t) in enumerate(units)
             )
-        ]
-        for cand in usable:
-            if all(not unsupported_chars(t, cand) for t in changed.values()):
-                chosen = cand
-                break
+
+        others = [] if fits(cct) else _others(groups, cct)
+
+        def others_lacking(c: str) -> list[str]:
+            return [
+                f"comment subtitle at block {g.blocks[0] + 1}"
+                for g, _s, t in others
+                if unsupported_chars(t, c)
+            ]
+
+        def unmovable(c: str) -> list[str]:  # subtitles with bytes table c reads differently
+            out = [
+                f"subtitle {k + 1}"
+                for k, (_g, s, t) in enumerate(units)
+                if not _sub_moves(s, changed.get(k, t), c)
+            ]
+            out += [
+                f"comment subtitle at block {g.blocks[0] + 1}"
+                for g, s, t in others
+                if not _sub_moves(s, t, c)
+            ]
+            return out
+
+        refusing = False
+        if fits(cct):
+            chosen = cct
+        else:
+            usable = [cct] + [
+                c
+                for c in _CODECS
+                if c != cct and units_cover(c) and not others_lacking(c) and not unmovable(c)
+            ]
+            chosen = next((c for c in usable if fits(c)), None)
         if chosen is None:
+            refusing = True
+            # a table holds the translation and the untouched units, but a comment cannot
+            # move there or the file has bytes it would turn into other characters (#798)
+            need = next((c for c in _CODECS if c != cct and units_cover(c) and fits(c)), None)
+            if need is not None:
+
+                def shown(v: list[str]) -> str:
+                    more = f" (and {len(v) - 10} more)" if len(v) > 10 else ""
+                    return ", ".join(v[:10]) + more
+
+                why = []
+                if unmovable(need):
+                    why.append(
+                        "these subtitles hold bytes with no equivalent in that table (they "
+                        f"would read as other characters): {shown(unmovable(need))}"
+                    )
+                if others_lacking(need):
+                    why.append(
+                        "these comment subtitles hold characters that table does not have: "
+                        + shown(others_lacking(need))
+                    )
+                raise CaptionTargetError(
+                    f"The EBU STL file was not exported: the translation needs code table "
+                    f"{need}, but {'; and '.join(why)}. Remove those bytes or characters, or "
+                    f"keep the translation in code table {cct}."
+                )
             # name the characters that block the closest table, not every letter the
             # declared table lacks (#679: the error blamed all Cyrillic, the cause was « »)
+            usable = [cct] + [c for c in _CODECS if c != cct and units_cover(c)]
             best = min(
-                usable, key=lambda c: sum(len(unsupported_chars(t, c)) for t in changed.values())
+                usable,
+                key=lambda c: sum(
+                    len(unsupported_chars(t, c, known[k])) for k, t in changed.items()
+                ),
             )
             for k, t in changed.items():
-                bad = unsupported_chars(t, best)
+                bad = unsupported_chars(t, best, known[k])
                 if bad:
+                    named.add(k)
                     problems.append(
                         f"subtitle {k + 1}: characters no EBU STL code table (00-04) can hold "
                         "together with the rest of the file: " + " ".join(map(repr, bad[:8]))
@@ -623,10 +765,21 @@ class StlFilter(Filter):
             else:
                 continue
             if tf is None:
-                if not any(p.startswith(f"subtitle {k + 1}:") for p in problems):
+                if k not in named:
+                    named.add(k)
                     problems.append(f"subtitle {k + 1}: {why}")
                 continue
             new_tf[g.blocks[0]] = (g, tf, dvp)
+        if chosen != cct and not refusing:
+            # every subtitle can move here: chosen is another table only when unmovable() is empty
+            for g, sub, text in others:
+                if not sub.rows:
+                    continue  # only control codes: the bytes stay as they are
+                tf, dvp, why = _encode_subtitle(sub, text, chosen, mnc, keep_rows=True)
+                if tf is None:
+                    problems.append(f"comment subtitle at block {g.blocks[0] + 1}: {why}")
+                    continue
+                new_tf[g.blocks[0]] = (g, tf, 0)
         if problems:
             more = f" (and {len(problems) - 10} more)" if len(problems) > 10 else ""
             raise CaptionTargetError(

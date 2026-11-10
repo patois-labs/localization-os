@@ -34,6 +34,7 @@ from app.filters.base import (
     note_source_encoding,
     read_text_upload,
 )
+from app.filters.xml_guard import check_tag_budget
 from app.services.segment import ph_close, ph_open, ph_point
 
 
@@ -117,6 +118,7 @@ def parse_tree(text: str, what: str, *, capped: bool = True):
             f"{what} declares a DTD internal subset; refused (resource files never need one, "
             "and it is an entity-expansion / XXE vector)."
         )
+    check_tag_budget(text, what=what)  # #792
     parser = etree.XMLParser(
         resolve_entities=False,
         no_network=True,
@@ -194,6 +196,17 @@ def element_spans(text: str) -> list[Span]:
 _ATTR_TOKEN = re.compile(r"""(\s+)([^\s=/>]+)(\s*=\s*)(["'])(.*?)\4""", re.DOTALL)
 
 
+def with_newlines(s: str, nl: str) -> str:
+    """Every line break of `s` (CRLF, CR or LF) as `nl`."""
+    return s.replace("\r\n", "\n").replace("\r", "\n").replace("\n", nl)
+
+
+def file_newline(text: str) -> str:
+    """The first line break the file uses ("" when it has none)."""
+    m = re.search(r"\r\n|\r|\n", text)
+    return m.group(0) if m else ""
+
+
 class Splicer:
     """Collects non-overlapping text-range edits on the original and applies them."""
 
@@ -208,6 +221,8 @@ class Splicer:
         self._els = els
         self.span = {id(e): s for e, s in zip(els, spans, strict=True)}
         self.edits: list[tuple[int, int, str]] = []
+        self.first_newline = file_newline(text)
+        self.all_crlf = text.count("\r\n") > 0 and text.count("\n") == text.count("\r\n")
 
     def of(self, el) -> Span:
         return self.span[id(el)]
@@ -252,14 +267,18 @@ class Splicer:
         self.edits.append((start, end, ""))
 
     def result(self) -> str:
-        out = self.text
-        last = None
-        for start, end, s in sorted(self.edits, key=lambda e: (e[0], e[1]), reverse=True):
-            if last is not None and end > last:
+        """Apply every edit in ONE pass (a slice per edit used to copy the whole document
+        per edit: quadratic, #786 and #812). Overlapping edits are refused."""
+        parts: list[str] = []
+        pos = 0
+        for start, end, s in sorted(self.edits, key=lambda e: (e[0], e[1])):
+            if start < pos:
                 raise ValueError("overlapping edits")  # a filter bug, never user data
-            out = out[:start] + s + out[end:]
-            last = start
-        return out
+            parts.append(self.text[pos:start])
+            parts.append(s)
+            pos = end
+        parts.append(self.text[pos:])
+        return "".join(parts)
 
 
 def text_escape(s: str) -> str:
@@ -437,18 +456,43 @@ class XmlResourceFilter(Filter):
     def inner_for(self, slot: Slot, new: str, sp: Splicer) -> str:
         """The new inner XML for a content slot carrying translation `new`."""
         raw, inline_map = self.source_text(slot)
-        lead, _core, trail = split_ws(self.display(slot, raw))
+        lead, core, trail = split_ws(self.display(slot, raw))
         cdata = has_cdata(sp.text, sp.of(slot.src))
-        return render_inner(
-            slot.dst, lead + new + trail, inline_map, self.escape(slot), self.is_point, cdata
-        )
+        nl = ""
+        if new != core:  # an unchanged value keeps its bytes
+            nl = self.newline_for(sp)
+        body = lead + new + trail
+        if nl:
+            body = with_newlines(body, nl)
+        return render_inner(slot.dst, body, inline_map, self.escape(slot), self.is_point, cdata)
+
+    # #813.6: how a translation's line breaks follow the file. "" = leave as they are;
+    # "all" = CRLF when every line break of the file is CRLF (resx); "first" = the file's
+    # first line break (wxl element text; attribute values keep &#10;).
+    newline_rule = ""
+
+    def newline_for(self, sp: Splicer) -> str:
+        if self.newline_rule == "all":
+            return "\r\n" if sp.all_crlf else ""
+        if self.newline_rule == "first":
+            return sp.first_newline
+        return ""
 
     def write(self, slot: Slot, new: str, sp: Splicer) -> None:
         if slot.dst_attr:
+            from app.filters.xml_text import xml_target_text
+
             raw, _ = self.source_text(slot)
             lead, _core, trail = split_ws(self.display(slot, raw))
-            sp.set_attr(slot.dst, slot.dst_attr, lead + new + trail)
+            # #813.5: an attribute value drops XML-illegal characters (a NUL) like element text
+            sp.set_attr(slot.dst, slot.dst_attr, xml_target_text(lead + new + trail))
             return
+        if slot.dst is slot.src:
+            # g13: a value written back unchanged keeps its bytes (its CRLF, CDATA, escapes);
+            # it used to be re-rendered with bare LF while a changed one got the file's CRLF.
+            raw, _ = self.source_text(slot)
+            if new == split_ws(self.display(slot, raw))[1]:
+                return
         sp.replace_inner(slot.dst, self.inner_for(slot, new, sp))
 
     def _build(self, original: bytes, paragraph_texts: dict, locale: str | None = None) -> bytes:

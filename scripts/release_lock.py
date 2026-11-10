@@ -115,6 +115,11 @@ def marker_errors(paths):
         "pywin32": 'sys_platform == "win32"',
         "tzdata": 'sys_platform == "win32"',
         "uvloop": 'sys_platform != "win32"',
+        # only the x86_64 Linux and Windows x64 wheels are published (ADR 0111, 2026-11-09)
+        "bilingua": (
+            '(sys_platform == "linux" and platform_machine == "x86_64") or '
+            '(sys_platform == "win32" and platform_machine == "AMD64")'
+        ),
     }
     errors = []
     for path in paths:
@@ -233,6 +238,13 @@ DOCKER_PROFILE_INSTALLS = (
     "&& pip install --require-hashes --no-cache-dir --no-deps --no-build-isolation "
     "-r requirements-sqlcipher.lock ;; "
     "*) echo \"WITH_SQLCIPHER must be 0 or 1, got '$WITH_SQLCIPHER'\" >&2; exit 1 ;; esac",
+    # Bilingua build stage (ADR 0111): the only pip install there is maturin from its own lock.
+    'RUN if [ "$WITH_BILINGUA" = 1 ]; then apt-get update '
+    "&& apt-get install -y --no-install-recommends gcc libc6-dev "
+    "&& rm -rf /var/lib/apt/lists/* "
+    "&& python3 -m venv /opt/maturin "
+    "&& /opt/maturin/bin/pip install --require-hashes --no-cache-dir --no-deps "
+    "--only-binary maturin -r /bilingua-tools/requirements-maturin.lock; fi",
 )
 
 

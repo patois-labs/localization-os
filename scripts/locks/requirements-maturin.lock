@@ -1,0 +1,4 @@
+# Bilingua wheel build only (Dockerfile bilingua stage, ADR 0111); its own lock so no other build installs maturin.
+# maturin 1.15.0. Hashes = PyPI's JSON listing of the two Linux wheels (x86_64, aarch64), 2026-11-07;
+# re-check with: pip download maturin==1.15.0 --no-deps --only-binary :all: --platform manylinux_2_12_x86_64 --python-version 3.13 -d /tmp/m && pip hash /tmp/m/maturin-*.whl
+maturin==1.15.0 --hash=sha256:0ebf9767892725083138e671c34482c660317a2f3d6a29fc0e0f34e9d8c99136 --hash=sha256:653020a63525bb224e5ab0adf02e17a2e08bc86dbea7fc1399c9a56d7529b99e

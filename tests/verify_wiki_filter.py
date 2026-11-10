@@ -308,8 +308,8 @@ def test_translated():
     assert "[[capital city|La capitale]] de [[France]] est '''Paris'''. Fin\n<!--" in out2, out2
     assert '| style="color:red" | Rouge {{!}} vif || Plain cell' in out2
     assert p0.text.startswith("⟦g1⟧")
-    out3 = f.build(MW, {"1": "x ⟦x9⟧ y"}).decode()  # unknown token dropped
-    assert "== x  y ==" in out3 and "⟦" not in out3
+    out3 = f.build(MW, {"1": "x ⟦x9⟧ y"}).decode()  # names no code: text (#814.1, g12)
+    assert "== x ⟦x9⟧ y ==" in out3, out3
     d = _df()
     dunits = d.parse(DW).units
     dout = d.build(DW, {str(u.p_index): "FR " + u.text for u in dunits}).decode()
@@ -400,7 +400,7 @@ def test_gate_inert_markup():
     assert dout == (
         "====== Head ======\n<nowiki>></nowiki> <nowiki>**</nowiki>x<nowiki>**</nowiki> "
         "<nowiki>{{</nowiki>a.png<nowiki>}}</nowiki> <nowiki><</nowiki>html>h"
-        "<nowiki><</nowiki>/html> <nowiki>~~</nowiki>NOTOC<nowiki>~~</nowiki> https://x.y\n"
+        "<nowiki><</nowiki>/html> <nowiki>~~</nowiki>NOTOC<nowiki>~~</nowiki> <nowiki>https://</nowiki>x.y\n"
     ), dout
     old = config.WIKI_TEMPLATE_PARAMS
     try:
@@ -582,6 +582,260 @@ def test_surfaces():
     print("  [surfaces] API upload, CLI translate, download for both dialects OK")
 
 
+X1, G1, G1C = "\u27e6x1\u27e7", "\u27e6g1\u27e7", "\u27e6/g1\u27e7"
+
+
+def _tokens(units):
+    """The markup of every token of the units, without the <nowiki> wrappers our own escapes add."""
+    import re
+
+    out = []
+    for u in units:
+        for v in u.inline_map.values():
+            for part in v if isinstance(v, list) else [v]:
+                # the separator escapes a translation needs ({{!}}, {{=}}) are inert too
+                if not re.fullmatch(r"<nowiki>.*</nowiki>|<nowiki/>|\{\{!\}\}|\{\{=\}\}", part):
+                    out.append(part)
+    return sorted(out)
+
+
+def test_802_translations_cannot_create_structure():
+    """#802 (Bilingua's bilingua-wiki rules): each translation builds to text that parses back to
+    the same units and the same tokens, with no new link, template, cell or heading."""
+    from app import config
+
+    f, d = _wf(), _df()
+    old = config.WIKI_TEMPLATE_PARAMS
+    config.WIKI_TEMPLATE_PARAMS = "Quote:text,Note:text"
+    try:
+        cases = [
+            # (id, filter, source, {unit: translation}, expected build)
+            (
+                1,
+                f,
+                "A {{tpl}} b.\n",
+                {"0": "A {" + X1 + "} b."},
+                "A <nowiki>{</nowiki>{{tpl}}<nowiki>}</nowiki> b.\n",
+            ),
+            (
+                2,
+                f,
+                "An ''it'' word.\n",
+                {"0": "An " + G1 + "it" + G1C + "' word."},
+                "An ''it''<nowiki>'</nowiki> word.\n",
+            ),
+            (
+                3,
+                f,
+                "See https://example.com/a now.\n",
+                {"0": "See [" + X1 + " evil label] now."},
+                "See <nowiki>[</nowiki>https://example.com/a evil label] now.\n",
+            ),
+            (4, f, "{|\n|cell one\n|}\n", {"0": "}x"}, "{|\n|<nowiki>}</nowiki>x\n|}\n"),
+            (5, f, "{|\n|cell one\n|}\n", {"0": "+x"}, "{|\n|<nowiki>+</nowiki>x\n|}\n"),
+            (
+                6,
+                f,
+                "{|\n|a\nmore words\n|}\n",
+                {"1": "|new cell"},
+                "{|\n|a\n<nowiki>|</nowiki>new cell\n|}\n",
+            ),
+            (
+                7,
+                f,
+                "{|\n! Head one !! Head two\n|}\n",
+                {"0": "A !! B"},
+                "{|\n! A <nowiki>!!</nowiki> B !! Head two\n|}\n",
+            ),
+            (
+                8,
+                f,
+                "; Term : definition\n",
+                {"0": "Ter:m"},
+                "; Ter<nowiki>:</nowiki>m : definition\n",
+            ),
+            (9, d, "^ H ^\n| a cell |\n", {"1": ":::"}, "^ H ^\n| %%:::%% |\n"),
+            (
+                10,
+                d,
+                "See https://example.com/a now.\n",
+                {"0": X1 + "/evil now"},
+                "https://example.com/a<nowiki></nowiki>/evil now\n",
+            ),
+            (
+                11,
+                d,
+                "An //it// word.\n",
+                {"0": "An x/" + G1 + "it" + G1C + " word."},
+                "An x<nowiki>/</nowiki>//it// word.\n",
+            ),
+            (12, f, "{|\n| a cell\n|}\n", {"0": "{|x"}, "{|\n| <nowiki>{|</nowiki>x\n|}\n"),
+            (
+                13,
+                f,
+                "{{Quote|text=Quoted words}}\n",
+                {"0": "=x"},
+                "{{Quote|text=<nowiki>=</nowiki>x}}\n",
+            ),
+            (
+                14,
+                f,
+                "A [https://x.org label] b.\n",
+                {"0": "A " + G1 + "a]b" + G1C + " b."},
+                "A [https://x.org a<nowiki>]</nowiki>b] b.\n",
+            ),
+            # gate: rows 15 to 18 of the issue
+            (
+                15,
+                f,
+                "A [[File:a.png|thumb|A caption]] b.\n",
+                {"0": "A " + G1 + "a|b" + G1C + " b."},
+                "A [[File:a.png|thumb|a<nowiki>|</nowiki>b]] b.\n",
+            ),
+            (
+                16,
+                d,
+                "A {{m.png|a caption}} b.\n",
+                {"0": "A " + G1 + "a{b}c" + G1C + " b."},
+                "A {{m.png|a<nowiki>{</nowiki>b<nowiki>}</nowiki>c}} b.\n",
+            ),
+            (
+                17,
+                f,
+                "Words {{Note|text=Remember this}} here.\n",
+                {"0": "Words " + X1 + "a=b|c⟦x2⟧ here."},
+                "Words {{Note|text=a{{=}}b{{!}}c}} here.\n",
+            ),
+            (
+                18,
+                f,
+                "{{Quote\n|text=Quoted words\n}}\n",
+                {"0": "a{b}c"},
+                "{{Quote\n|text=a<nowiki>{</nowiki>b<nowiki>}</nowiki>c\n}}\n",
+            ),
+            (
+                19,
+                f,
+                "{|\n! Head one !! Head two\n|}\n",
+                {"0": "Hi!"},
+                "{|\n! Hi<nowiki>!</nowiki> !! Head two\n|}\n",
+            ),
+            (20, f, ";Term\n", {"0": "a:b"}, ";a<nowiki>:</nowiki>b\n"),
+            (21, f, "; term : def\n", {"0": "a[b"}, "; a<nowiki>[</nowiki>b : def\n"),
+            (
+                22,
+                f,
+                "Plain words here.\n",
+                {"0": "x __notoc__ y"},
+                "x <nowiki>__</nowiki>notoc__ y\n",
+            ),
+            (
+                23,
+                f,
+                "Plain words here.\n",
+                {"0": "see http://a.b/c or mailto:x@y.z"},
+                "see <nowiki>http://</nowiki>a.b/c or <nowiki>mailto:</nowiki>x@y.z\n",
+            ),
+            (
+                24,
+                d,
+                "Plain words here.\n",
+                {"0": "see http://a.b/c or www.foo.org"},
+                "see <nowiki>http://</nowiki>a.b/c or <nowiki>www.</nowiki>foo.org\n",
+            ),
+        ]
+        for n, flt, src, tr, want in cases:
+            sb = src.encode()
+            out = flt.build(sb, tr).decode()
+            assert out == want, (n, out, want)
+            before = flt.parse(sb).units
+            after = flt.parse(out.encode()).units
+            if n != 9:  # a ":::" cell is kept literal, so it is no longer a translatable cell
+                assert len(after) == len(before), (n, len(before), len(after))
+            assert not (set(_tokens(after)) - set(_tokens(before))), (
+                n,
+                _tokens(before),
+                _tokens(after),
+            )
+    finally:
+        config.WIKI_TEMPLATE_PARAMS = old
+    print("  [802] 23 cases: translations cannot add structure, links or cells OK")
+
+
+def test_802_ascii_tag_names_and_linear_scans():
+    import random
+    import time
+
+    from app.filters import wiki_filter as W
+
+    f, d = _wf(), _df()
+
+    def units(flt, src):
+        return [(u.text, u.inline_map) for u in flt.parse(src.encode()).units]
+
+    # U+0131 / U+017F / U+212A fold onto ASCII letters under re.IGNORECASE: they are not tag,
+    # namespace or switch names (gate: exact units, so the test fails on the old patterns)
+    assert units(f, "A <now\u0131ki>[[x]]</now\u0131ki> b.\n") == [
+        ("A <now\u0131ki>\u27e6x1\u27e7</now\u0131ki> b.", {"1": "[[x]]"})
+    ]
+    assert units(f, "A <\u017fource>{{t}}</\u017fource> b.\n") == [
+        ("A <\u017fource>\u27e6x1\u27e7</\u017fource> b.", {"1": "{{t}}"})
+    ]
+    assert units(f, "See [[F\u0131le:x.png|thumb|a caption here]].\n") == [
+        (
+            "See \u27e6g1\u27e7thumb|a caption here\u27e6/g1\u27e7.",
+            {"1": ["[[F\u0131le:x.png|", "]]"]},
+        )
+    ]
+    assert units(f, "A __TOC__ and __\u212aEY__ b.\n") == [
+        ("A \u27e6x1\u27e7 and __\u212aEY__ b.", {"1": "__TOC__"})
+    ]
+    # the DokuWiki opener prefilter changes no match (gate: a blanked `[` once let a bare URL
+    # run on into `[[`)
+    assert units(d, "See https://x.org/a[[b c here.\n") == [
+        ("See \u27e6x1\u27e7[[b c here.", {"1": "https://x.org/a"})
+    ]
+    rnd = random.Random(802)
+    alphabet = [
+        "[[",
+        "]]",
+        "((",
+        "))",
+        "[",
+        "]",
+        "(",
+        ")",
+        "a",
+        "b ",
+        "\n",
+        "|",
+        "**",
+        "//",
+        "https://x.y",
+        '"',
+        "<b>",
+    ]
+    try:
+        for _ in range(3000):
+            s = "Wd " + "".join(rnd.choice(alphabet) for _ in range(rnd.randint(1, 30))) + " end\n"
+            W._PREFILTER = True
+            on = units(d, s)
+            W._PREFILTER = False
+            off = units(d, s)
+            assert on == off, (s, on, off)
+    finally:
+        W._PREFILTER = True
+    # long lines of unclosed openers: one pass, not 2000 steps per character (the old patterns
+    # take about 2.5 s per line here; the bound fails them, the one-pass scan takes milliseconds)
+    for flt, bad in ((d, "[[a" * 30000), (d, "((a" * 30000), (f, "[http://a b " * 8000)):
+        page = ((bad + "\n\n") * 3 + "Words here.\n").encode()
+        t0 = time.time()
+        flt.parse(page)
+        took = time.time() - t0
+        assert took < 2.0, (bad[:6], took)
+    print("  [802] ASCII-only tag names; prefilter exact; unclosed openers scan in linear time OK")
+
+
 def main():
     test_registry()
     test_identity()
@@ -592,6 +846,8 @@ def main():
     test_translated()
     test_templates()
     test_gate_inert_markup()
+    test_802_translations_cannot_create_structure()
+    test_802_ascii_tag_names_and_linear_scans()
     test_cjk_bare_url_699()
     test_encodings()
     test_caps()

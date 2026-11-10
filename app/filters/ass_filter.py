@@ -42,11 +42,12 @@ from app.filters.base import (
     TextUnit,
     check_segment_cap,
     check_unit_texts,
-    decode_text_lossless,
+    decode_text_bom,
     encode_text_lossless,
     note_source_encoding,
-    read_text_upload,
+    read_text_bom,
     register,
+    stamp_text_bom,
 )
 
 _BOM = b"\xef\xbb\xbf"
@@ -219,41 +220,79 @@ def _core_bounds(pieces, pinned: set[int]) -> tuple[int, int]:
     return lo, hi
 
 
-def _detokenize(translated: str, tokens: dict[str, str]) -> str:
+def _safe_text(t: str) -> str:
+    """Text typed by a translator (or MT) can never become a control code (#800.1): a typed
+    ``{`` would open an override block and a backslash that forms ``\\N``, ``\\n``, ``\\h``,
+    ``\\{`` or ``\\}`` (or ends the text run, so it would pair with the token or the suffix
+    after it) are written as their full-width look-alikes (U+FF5B, U+FF3C): libass and
+    VSFilter have no working escape for a brace. A real line break becomes ``\\N``."""
+    n = len(t)
+    out: list[str] = []
+    for i, c in enumerate(t):
+        if c == "{":
+            out.append("\uff5b")
+        elif c == "\\" and (i + 1 == n or t[i + 1] in "Nnh{}"):
+            out.append("\uff3c")
+        else:
+            out.append(c)
+    return "".join(out).replace("\r\n", "\\N").replace("\r", "\\N").replace("\n", "\\N")
+
+
+def _detokenize(translated: str, tokens: dict[str, str], *, escape: bool = True) -> str:
     """Put each token back as its source block. Pairs are written balanced: a close
     with no open (or crossing another) is dropped, an open left unclosed is closed at
     the end of the line, a pair MT emptied is dropped. A line break typed into the
     translation becomes ``\\N`` (a raw newline would end the Dialogue line); a marker
-    that names no source token is dropped (the export tag guard reports such damage)."""
+    that names no source token is kept as text (#800.2: source text that looks like a
+    marker is the translator's own; the export tag guard reports real damage). Typed text
+    is made inert by ``_safe_text`` (#800.1); ``escape=False`` is for a header."""
     out: list[str] = []
+    buf: list[str] = []  # the current run of typed text, escaped when a code or the end comes
+
+    def flush():
+        if buf:
+            text = "".join(buf)
+            out.append(_safe_text(text) if escape else text)
+            buf.clear()
+
     stack: list[tuple[str, int]] = []  # (open token name, len(out) after the open)
     used: set[str] = set()
 
+    # A run of typed text is escaped as a whole when a code is written after it (or at the
+    # end), so text either side of a dropped marker is one run, as in Bilingua's render_event.
     def close(name: str, mark: int):
-        if all(not piece for piece in out[mark:]):
+        if not any(buf) and all(not piece for piece in out[mark:]):
             del out[mark - 1 :]  # nothing between: no switch around nothing
         else:
+            flush()
             out.append(tokens["/" + name])
 
     pos = 0
     for m in _ANY_MARKER_RE.finditer(translated):
-        out.append(translated[pos : m.start()])
+        buf.append(translated[pos : m.start()])
         pos = m.end()
         name = m.group(0)[1:-1]
+        if name not in tokens:
+            buf.append(m.group(0))  # not a token of this line: literal text
+            continue
         if name.startswith("/"):
             if stack and stack[-1][0] == name[1:]:
                 close(*stack.pop())
             continue
-        if name in tokens and name not in used:
+        if name not in used:
             used.add(name)
+            flush()
             out.append(tokens[name])
             if name[0] == "g":
                 stack.append((name, len(out)))
-    out.append(translated[pos:])
+    buf.append(translated[pos:])
+    flush()
     while stack:
         close(*stack.pop())
     s = "".join(out)
-    return s.replace("\r\n", "\\N").replace("\r", "\\N").replace("\n", "\\N")
+    if not escape:
+        s = s.replace("\r\n", "\\N").replace("\r", "\\N").replace("\n", "\\N")
+    return s
 
 
 def _walk(text: str):
@@ -280,7 +319,7 @@ def _walk(text: str):
         if section == "script info":
             m = _TITLE_RE.match(body)
             if m and m.group(2).strip() and m.group(2).strip().lower() != "<untitled>":
-                yield "unit", (m.group(1), ("", m.group(2), m.group(3), []), eol, line)
+                yield "unit", (m.group(1), ("", m.group(2), m.group(3), []), eol, line, True)
                 continue
         elif section == "events":
             fm = _FORMAT_RE.match(body)
@@ -300,7 +339,7 @@ def _walk(text: str):
                     tk = None if _in_drawing_mode(field) else _tokenize(field)
                     if tk is not None:
                         head = em.group(1) + rest[: len(rest) - len(field)]
-                        yield "unit", (head, tk, eol, line)
+                        yield "unit", (head, tk, eol, line, False)
                         continue
         yield "raw", line
 
@@ -335,13 +374,16 @@ def _stamp_language(lines: list[str], target_locale) -> list[str]:
             continue
         out.append(line)
     if not found and two and info_at >= 0:
-        eol = _split_eol(out[info_at - 1])[1] or "\n"
+        eol = _split_eol(out[info_at - 1])[1]
+        if not eol:  # [Script Info] is the last line, with no line end (#800.3)
+            out[info_at - 1] += "\n"
+            eol = "\n"
         out.insert(info_at, f"Language: {two}{eol}")
     return out
 
 
 def _decode(data: bytes) -> str:
-    return decode_text_lossless(data, sig=True)
+    return decode_text_bom(data)
 
 
 @register
@@ -350,7 +392,7 @@ class AssFilter(Filter):
     exts = ("ssa",)
 
     def parse(self, data: bytes, provider: str | None = None) -> ParseResult:
-        _text, enc = read_text_upload(data, sig=True)  # #509 decode + #571 line budget
+        _text, enc = read_text_bom(data)  # #509 decode + #571 line budget
         units: list[TextUnit] = []
         for kind, item in _walk(_decode(data)):
             if kind != "unit":
@@ -363,6 +405,7 @@ class AssFilter(Filter):
             "format": "ass",
             "units": [{"p_index": u.p_index, "text": u.text, "style": ""} for u in units],
         }
+        stamp_text_bom(skeleton, data)  # #800.4: a BOM before non-UTF-8 bytes is read as a mark
         return ParseResult(skeleton=note_source_encoding(skeleton, enc), units=units)
 
     def build(self, original: bytes, paragraph_texts: dict) -> bytes:
@@ -380,15 +423,15 @@ class AssFilter(Filter):
             if kind == "raw":
                 out.append(item)
                 continue
-            head, (prefix, core, suffix, tokens), eol, line = item
+            head, (prefix, core, suffix, tokens), eol, line, is_title = item
             translated = paragraph_texts.get(str(k))
             k += 1
             if translated is None or str(translated) == core:
                 out.append(line)  # untouched: the source line byte for byte
                 continue
-            new_core = _detokenize(str(translated), tokens)
-            if not tokens and head.lower().startswith("title"):
-                new_core = new_core.replace("\\N", " ")  # a header is one line of text
+            new_core = _detokenize(str(translated), tokens, escape=not is_title)
+            if is_title:  # every Title spelling (Turkish i included; #800.5): one line of text
+                new_core = new_core.replace("\\N", " ")
             out.append(head + prefix + new_core + suffix + eol)
         if target_locale:
             out = _stamp_language(out, target_locale)

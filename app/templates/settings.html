@@ -191,6 +191,35 @@
   </details>
 </section>
 
+<section class="card" data-card="parsing" id="settings-parsing">
+  <h2>File parsing (Bilingua)</h2>
+  <p class="muted">Which engine reads <strong>new uploads</strong>. <code>all</code> (the default) has
+    the Bilingua engine read every format it parses; an empty list keeps the built-in filter for every
+    format. A format listed under <em>Bilingua formats</em> is read by the
+    Bilingua engine from the next upload on; documents already imported keep the engine that read
+    them, and emptying the list stops new Bilingua imports at once. <em>Shadow formats</em> are
+    also read by Bilingua in the background so the two can be compared; only counts and hashes are
+    logged, never file content, and nothing stored changes. Format names are comma separated,
+    for example <code>md,json,po</code>.</p>
+  <p class="muted" data-bilingua-module>Bilingua module on this server:
+    <strong>{{ bilingua_module or "not installed (every format uses the built-in filters)" }}</strong>.</p>
+  {% if parsing_host_only %}
+  <p class="muted">Bilingua formats: <strong>{{ values.bilingua_formats or "none" }}</strong>.
+    Shadow formats: <strong>{{ values.bilingua_shadow_formats or "none" }}</strong>.
+    This choice applies to every organization on this install, so only the host operator can
+    change it (<code>config set</code> on the host).</p>
+  {% else %}
+  <form method="post" action="/settings/bilingua" class="form">
+    {% include "_csrf.html" %}
+    <label>Bilingua formats
+      <input type="text" name="bilingua_formats" value="{{ values.bilingua_formats }}" maxlength="200" placeholder="none" /></label>
+    <label>Shadow formats
+      <input type="text" name="bilingua_shadow_formats" value="{{ values.bilingua_shadow_formats }}" maxlength="200" placeholder="none" /></label>
+    <button type="submit">Save parsing settings</button>
+  </form>
+  {% endif %}
+</section>
+
 <section class="card" data-card="retention" id="settings-retention">
   <h2>Data retention</h2>
   <p class="muted">Automatically delete aged uploads, documents, and finished jobs after a

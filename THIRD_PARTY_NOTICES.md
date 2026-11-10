@@ -467,6 +467,11 @@ component keeps its own license:
   (`/opt/venv/lib/python*/site-packages/psycopg*/`). The default `pip install -r requirements.txt`
   install does not include it. The optional `ldap3` driver (LGPL-3.0) is likewise installed only
   with the `WITH_LDAP` build argument.
+- **Bilingua (Apache-2.0)**: on x86_64 the image installs the published `bilingua` wheel from
+  `requirements.lock`. Built with `WITH_BILINGUA=1`, the image instead carries a wheel built in
+  the image from Bilingua's source, with its statically linked Rust crates under their own
+  permissive licences (MIT, Apache-2.0, BSD-3-Clause, Unicode-3.0, Zlib), listed in the
+  Bilingua repository's `Cargo.lock`.
 - **Python packages**: everything in `requirements.lock` keeps its own license; the default
   install is checked by `tests/verify_licenses.py`.
 - **Tailscale binaries**: see the previous section.

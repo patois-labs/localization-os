@@ -161,7 +161,10 @@ No settings key or migration is added.
   door and the web Security page refuse them to an org admin
   (`app/services/settings.py::security_setting_keys` unions them in), so only the host operator
   writes them. Besides the shared connector token and the global spend brake it now carries the
-  custom SRX ruleset (`srx_enabled`, `srx_file`, #424), the install-wide egress targets and shared
+  custom SRX ruleset (`srx_enabled`, `srx_file`, #424), the Bilingua parsing-engine lists
+  (`bilingua_formats`, `bilingua_shadow_formats`, with env overrides `LOC_TMS_BILINGUA_FORMATS` and
+  `LOC_TMS_BILINGUA_SHADOW_FORMATS`; every door refuses an unknown name or more than `_FORMAT_LIST_MAX` = 256
+  names, never cutting the list), the install-wide egress targets and shared
   credentials (`smtp_port`/`smtp_tls`/`smtp_user`/`smtp_password`/`smtp_from`,
   `oauth_airtable_*`, `oauth_atlassian_*`, #426), plus `enabled_locales` (#479). A
   strict no-op with the gate off. Enforced by `verify_multiorg_install_wide_files`.

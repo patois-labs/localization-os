@@ -162,6 +162,66 @@ RUN if [ "$WITH_NATIVE" = 1 ]; then \
     fi
 
 # ---------------------------------------------------------------------------
+# Bilingua (ADR 0111): the Rust parsing engine behind the per-format setting `bilingua_formats`
+# (default `all` since 2026-11-09). The normal image gets it from requirements.lock: the
+# published bilingua==0.9.1 manylinux x86_64 wheel, hash-pinned like every other package, so
+# nothing here is needed. This stage is the from-source alternative: with WITH_BILINGUA=0 (the
+# default) it only makes an empty /out. With WITH_BILINGUA=1 it builds the `bilingua` abi3 wheel
+# (one wheel for Python 3.11+) from SOURCE, unpacks it into /out/site (over the locked wheel) and
+# runs scripts/bilingua_stage.py smoke
+# (imports, the `locos` profile exists, an untouched md/json/po merge returns the original bytes).
+# The source comes from exactly ONE of (both set, or neither, fails the build):
+#   A. a build context:  docker build --build-arg WITH_BILINGUA=1 --build-context bilingua-src=../bilingua .
+#      (the folder holds the workspace Cargo.toml and Cargo.lock)
+#   B. a pinned tarball: --build-arg BILINGUA_SRC_URL=https://github.com/patois-labs/bilingua/archive/refs/tags/v0.9.1.tar.gz
+#                        --build-arg BILINGUA_SRC_SHA256=<64 hex>   (checked before unpacking)
+# BILINGUA_MANIFEST is the path of the bilingua-py Cargo.toml inside that source. maturin is
+# installed from its own hash lock, scripts/locks/requirements-maturin.lock (no other build reads it).
+# cargo fetches only what the source's Cargo.lock pins (--locked). Source A is trusted as the
+# operator gives it: build only from a reviewed checkout at a known commit. Nothing but the
+# unpacked wheel (its RECORD hashes checked first) reaches the runtime image.
+# Runbook: docs/runbooks/bilingua-wheel.md.
+# ---------------------------------------------------------------------------
+FROM scratch AS bilingua-src
+
+FROM ${PYTHON_BASE} AS bilingua
+ARG WITH_BILINGUA=0
+ARG BILINGUA_SRC_URL=""
+ARG BILINGUA_SRC_SHA256=""
+ARG BILINGUA_MANIFEST=bilingua-py/Cargo.toml
+ARG BILINGUA_LOCOS_PROFILE=""
+RUN mkdir -p /out/site && case "$WITH_BILINGUA" in \
+        0|1) ;; \
+        *) echo "WITH_BILINGUA must be 0 or 1, got '$WITH_BILINGUA'" >&2; exit 1 ;; \
+    esac
+COPY --from=rust /usr/local/cargo /usr/local/cargo
+COPY --from=rust /usr/local/rustup /usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo \
+    RUSTUP_HOME=/usr/local/rustup \
+    PATH="/usr/local/cargo/bin:$PATH"
+COPY --from=bilingua-src / /bilingua-ctx/
+COPY scripts/locks/requirements-maturin.lock scripts/bilingua_stage.py /bilingua-tools/
+# Toolchain step: gcc for the linker, maturin from its hash lock (the only pip install in this stage).
+RUN if [ "$WITH_BILINGUA" = 1 ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends gcc libc6-dev \
+        && rm -rf /var/lib/apt/lists/* \
+        && python3 -m venv /opt/maturin \
+        && /opt/maturin/bin/pip install --require-hashes --no-cache-dir --no-deps --only-binary maturin -r /bilingua-tools/requirements-maturin.lock; \
+    fi
+# Build step. The wheel is built here from the fetched source, so it has no published hash: it is
+# unpacked (a wheel is a zip) instead of pip-installed, which keeps every pip install in the image hashed.
+RUN if [ "$WITH_BILINGUA" = 1 ]; then \
+        python3 /bilingua-tools/bilingua_stage.py fetch --dest /bilingua-src --from-dir /bilingua-ctx \
+            --url "$BILINGUA_SRC_URL" --sha256 "$BILINGUA_SRC_SHA256" \
+        && /opt/maturin/bin/maturin build --release --locked --compatibility linux \
+            -i /usr/local/bin/python3 -m "/bilingua-src/$BILINGUA_MANIFEST" -o /bilingua-wheels \
+        && python3 /bilingua-tools/bilingua_stage.py unpack --wheels /bilingua-wheels --dest /out/site \
+        && PYTHONPATH=/out/site python3 /bilingua-tools/bilingua_stage.py smoke \
+            ${BILINGUA_LOCOS_PROFILE:+--expect-profile $BILINGUA_LOCOS_PROFILE}; \
+    fi
+
+# ---------------------------------------------------------------------------
 # Tailscale binaries (OPT-IN private egress to a model server on your own network).
 # We COPY the static `tailscale` + `tailscaled` binaries out of the official
 # image into our runtime below. They ship in EVERY build but do NOTHING unless
@@ -236,6 +296,12 @@ COPY --from=builder /opt/venv /opt/venv
 ARG WITH_NATIVE=1
 COPY --from=native /out/ /opt/venv/lib/python3.13/site-packages/
 RUN if [ "$WITH_NATIVE" = 1 ]; then /opt/venv/bin/python -c "import locos_native"; fi
+# Bilingua (ADR 0111): the locked wheel is already in the venv on x86_64; this copy is empty unless
+# built with WITH_BILINGUA=1 (see the bilingua stage). The import check fails the build if the
+# engine is missing where the lock installs it (x86_64) or where a source build put it.
+ARG WITH_BILINGUA=0
+COPY --from=bilingua /out/site/ /opt/venv/lib/python3.13/site-packages/
+RUN if [ "$WITH_BILINGUA" = 1 ] || [ "$(uname -m)" = x86_64 ]; then /opt/venv/bin/python -c "import bilingua; print('bilingua', bilingua.__version__)"; fi
 
 # The running image never installs packages (the locks were installed in the builder), so
 # pip is removed from both the base's system Python and the copied venv. pip 26.2.1, the

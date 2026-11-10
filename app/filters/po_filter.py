@@ -253,21 +253,53 @@ def _utf8_charset(msgstr: str) -> str:
     return msgstr[: m.start()] + new + msgstr[m.end() :]
 
 
+def _strip_outer_parens(expr: str) -> str:
+    """Strip every pair of outer parentheses that wraps the whole expression, in one pass
+    (#813 item 3).
+
+    Same result as stripping one pair at a time while the depth, counted from the first one,
+    does not come back to zero before the last character; that loop rescanned the rest at
+    every layer (quadratic). Layer t is stripped when the depth over the characters
+    t..len-2-t never falls to t: a suffix minimum on the left of the middle and a prefix
+    minimum on its right give that in O(n).
+    """
+    n = len(expr)
+    if n < 2 or expr[0] != "(" or expr[-1] != ")":
+        return expr
+    depth = []
+    d = 0
+    for ch in expr:
+        if ch == "(":
+            d += 1
+        elif ch == ")":
+            d -= 1
+        depth.append(d)
+    mid = (n - 2) // 2
+    big = n + 1
+    left = [big] * (mid + 1)
+    m = big
+    for t in range(mid, -1, -1):
+        m = min(m, depth[t])
+        left[t] = m
+    right = [big] * n
+    m = big
+    for j in range(mid, n):
+        m = min(m, depth[j])
+        right[j] = m
+    t = 0
+    while 2 * t + 2 <= n and expr[t] == "(" and expr[n - 1 - t] == ")":
+        if min(left[t], right[n - 2 - t]) <= t:
+            break
+        t += 1
+    return expr[t : n - t]
+
+
 def _rule_key(field: str) -> tuple[str, str]:
     """(nplurals, plural expression) of a Plural-Forms line; spacing, outer parens ignored."""
     body = re.sub(r"\s+", "", field.split(":", 1)[-1])
     parts = dict(p.split("=", 1) for p in body.split(";") if "=" in p)
     expr = parts.get("plural", "")
-    while expr.startswith("(") and expr.endswith(")"):
-        depth = 0
-        for i, ch in enumerate(expr):
-            depth += {"(": 1, ")": -1}.get(ch, 0)
-            if depth == 0 and i < len(expr) - 1:
-                break
-        else:
-            expr = expr[1:-1]
-            continue
-        break
+    expr = _strip_outer_parens(expr)
     return parts.get("nplurals", ""), expr
 
 

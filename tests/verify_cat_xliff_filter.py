@@ -26,7 +26,7 @@ import sys
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(_ROOT)
 sys.path.insert(0, _ROOT)
-from tests._bootstrap import init_env
+from tests._bootstrap import bilingua_switch_off, init_env
 
 init_env("loctms_catxliff_")
 
@@ -160,12 +160,13 @@ def test_sdlxliff_partial_and_mismatch():
 
 
 def test_sdlxliff_inline_damage_is_safe():
-    # unknown / duplicated tokens are dropped, an unclosed pair is closed: still well-formed
+    # a duplicated token is dropped, an unclosed pair is closed: still well-formed; a token
+    # that names no code of the unit (g7) is text and stays (#814.1)
     out = get_filter("sdlxliff").build(SDL, {str(SEG_BASE + 0): "⟦g1⟧A ⟦g7⟧B⟦/g7⟧ ⟦g1⟧C"})
     tu1 = _tu(out, "a1b2c3d4-0001")
-    assert b'<mrk mtype="seg" mid="1"><g id="pt1">A B C</g></mrk>' in tu1, tu1
-    assert "⟦".encode() not in out
-    print("  [sdlxliff] damaged inline tokens never leak or break the XML OK")
+    assert "A ⟦g7⟧B⟦/g7⟧ C</g></mrk>".encode() in tu1, tu1
+    assert tu1.count(b'<g id="pt1">A ') == 1, tu1
+    print("  [sdlxliff] damaged inline tokens never break the XML OK")
 
 
 def test_encodings():
@@ -382,7 +383,111 @@ def test_export_end_to_end():
     print("  [export] ingest -> partial translation -> export keeps the vendor file OK")
 
 
+def test_comment_in_source_794():
+    """#794: a comment / PI inside a <source> is not text: dropped, tail kept, no code
+    number (it used to become a g pair whose content was the comment text)."""
+    raw = (
+        b'<?xml version="1.0" encoding="UTF-8"?><xliff version="1.2" '
+        b'xmlns="urn:oasis:names:tc:xliff:document:1.2"><file original="a" source-language="en" '
+        b'datatype="plaintext"><body><trans-unit id="1"><source>Open <!-- SECRET --> the '
+        b"<?pi x?>file<b>now</b>.</source></trans-unit></body></file></xliff>"
+    )
+    for fmt in ("txlf", "xlf"):
+        f = get_filter(fmt)
+        u = f.parse(raw).units[0]
+        assert "SECRET" not in u.text and "pi" not in u.text, u.text
+        assert u.text == "Open  the file⟦g1⟧now⟦/g1⟧.", u.text
+        out = f.build(raw, {str(u.p_index): u.text.replace("Open", "Ouvrir")})
+        assert b"SECRET" not in out.split(b"<target")[-1], out
+        assert b"Ouvrir  the file<b>now</b>." in out, out
+    print("  [794] comments and PIs in a source are dropped, tail text kept OK")
+
+
+_C794 = (
+    b'<?xml version="1.0" encoding="UTF-8"?><xliff version="1.2" '
+    b'xmlns="urn:oasis:names:tc:xliff:document:1.2"><file original="a" source-language="en" '
+    b'datatype="plaintext"><body><trans-unit id="1"><source>Open <!-- SECRET --> the '
+    b'file<b>now</b>.</source></trans-unit><trans-unit id="2"><source>Plain <b>bold</b>'
+    b"</source></trans-unit></body></file></xliff>"
+)
+# What a project imported before #794 stored for unit 1: the comment took code number 1.
+_OLD794 = "Open ⟦g1⟧ SECRET ⟦/g1⟧ the file⟦g2⟧now⟦/g2⟧."
+
+
+def test_comment_numbering_versioned_794():
+    """#794 gate: build() re-derives code numbers from the original, so a document stored
+    before #794 (no xliff_tokens stamp) must export with its OLD numbering, or its stored
+    translations' codes land on the wrong elements. New documents with a comment are
+    stamped; a document without one needs no stamp (both numberings agree)."""
+    from app.filters.xliff_filter import TOKENS_KEY, document_tokens
+
+    for fmt in ("txlf", "xlf"):
+        f = get_filter(fmt)
+        parsed = f.parse(_C794)
+        assert parsed.skeleton.get(TOKENS_KEY) == 2, parsed.skeleton
+        assert TOKENS_KEY not in f.parse(_C794.replace(b"<!-- SECRET -->", b"")).skeleton
+        with document_tokens({}):  # an old project's skeleton: no stamp
+            assert f.parse(_C794).units[0].text == _OLD794, fmt
+            out = f.build(_C794, {"0": "Ouvrir ⟦g1⟧ SECRET ⟦/g1⟧ le fichier⟦g2⟧maintenant⟦/g2⟧."})
+        tgt = out.split(b"<target")[1]
+        assert b"<b>maintenant</b>" in tgt, (fmt, out)
+        with document_tokens({TOKENS_KEY: 2}):
+            out = f.build(_C794, {"0": "Ouvrir  le fichier⟦g1⟧maintenant⟦/g1⟧."})
+        assert b"Ouvrir  le fichier<b>maintenant</b>." in out, (fmt, out)
+        try:
+            with document_tokens({TOKENS_KEY: 9}):
+                pass
+            raise AssertionError("an unknown numbering stamp must be refused")
+        except ValueError:
+            pass
+    print("  [794 gate] pre-#794 documents keep their code numbering at export OK")
+
+
+def test_comment_numbering_export_794():
+    """#794 gate, end to end: an old project (stamp removed from its skeleton, segments in
+    the old numbering) exports its codes on the right elements; a new one is stamped."""
+    from sqlmodel import Session, select
+
+    from app.db import engine, init_db
+    from app.models import Document, Project, Segment, TargetLocale
+    from app.services.export import build_translated_file
+    from app.services.ingest import ingest_document
+
+    init_db()
+    with Session(engine) as s:
+        p = Project(name="c794", org_id=1, source_locale="en-US", default_provider="mock")
+        s.add(p)
+        s.commit()
+        s.refresh(p)
+        s.add(TargetLocale(project_id=p.id, locale="fr-FR"))
+        s.commit()
+        # Python filter path (documents imported before Bilingua, or no wheel)
+        with bilingua_switch_off():
+            doc = ingest_document(s, p, "c794.txlf", _C794, "segmented")
+        assert (doc.skeleton or {}).get("xliff_tokens") == 2, doc.skeleton
+        skel = dict(doc.skeleton)
+        skel.pop("xliff_tokens")  # as a project imported before #794 has it
+        doc.skeleton = skel
+        s.add(doc)
+        segs = s.exec(
+            select(Segment).where(Segment.document_id == doc.id).order_by(Segment.order_index)
+        ).all()
+        assert segs[0].source_text == "Open  the file⟦g1⟧now⟦/g1⟧.", segs[0].source_text
+        segs[0].source_text = _OLD794  # the old import stored the old numbering
+        segs[0].target_text = "Ouvrir ⟦g1⟧ SECRET ⟦/g1⟧ le fichier⟦g2⟧maintenant⟦/g2⟧."
+        segs[0].status = "translated"
+        s.add(segs[0])
+        s.commit()
+        out = build_translated_file(s, s.get(Document, doc.id), "fr-FR")
+    assert b"<target" in out, out
+    assert b"<b>maintenant</b>" in out.split(b"<target")[1], out
+    print("  [794 gate] export of a pre-#794 project keeps codes on their elements OK")
+
+
 def main():
+    test_comment_in_source_794()
+    test_comment_numbering_versioned_794()
+    test_comment_numbering_export_794()
     test_registration()
     test_identity_round_trip()
     test_sdlxliff_segments_and_status()

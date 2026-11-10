@@ -47,6 +47,7 @@ Help:Templates, Help:Magic_words; https://www.dokuwiki.org/wiki:syntax.
 """
 
 import re
+from bisect import bisect_left
 
 from app.filters.base import (
     Filter,
@@ -61,7 +62,8 @@ from app.filters.base import (
     read_text_upload,
     register,
 )
-from app.services.segment import _PLACEHOLDER_RE, ph_close, ph_open, ph_point, strip_placeholders
+from app.filters.token_lit import code_tokens
+from app.services.segment import ph_close, ph_open, ph_point, strip_placeholders
 
 _BOM = b"\xef\xbb\xbf"
 _MASK = "\x00"
@@ -69,22 +71,6 @@ _LINE_RE = re.compile(r"([^\r\n]*)(\r\n|\r|\n|$)")
 _SOFT_BREAK = re.compile(r"[ \t]*(?:\r\n|\r|\n)[ \t]*")
 _MAX_TOKENS = 1000
 _MAX_DEPTH = 8
-# Markup a translation must not be able to create (gate fix): every source construct is
-# already a token, so wiki syntax inside the translated WORDS is new and is written inert,
-# wrapped in <nowiki> (MediaWiki and DokuWiki both honour it). `<` before a letter, `/` or
-# `!` also stops a translator from opening a raw HTML / <html> / <nowiki> block.
-_LIVE_MARKUP = {
-    "mw": re.compile(
-        r"\[\[|\]\]|\{\{|\}\}|\{\||\|\}|'{2,}|~{3,}|__[A-Z0-9_]+__|<(?=[A-Za-z/!])"
-        r"|\[(?=https?:|ftp:|mailto:|//)"
-    ),
-    "dw": re.compile(
-        r"\[\[|\]\]|\{\{|\}\}|\(\(|\)\)|\*\*|(?<!:)//|__|''|~~|%%|\\\\|<(?=[A-Za-z/!])"
-    ),
-}
-# Characters that open a block construct at the start of a line (list, heading, quote,
-# table, indent, redirect, rule).
-_LINE_START = {"mw": "*#:;=-{ ", "dw": "*->^|= "}
 
 
 def _lines(text: str):
@@ -123,6 +109,47 @@ def _masked(text: str, regions: list[tuple[int, int]]) -> str:
     return "".join(out)
 
 
+class _Mask(str):
+    """The masked text; `.search` is the text the inline regexes scan (see `_dw_search_mask`)."""
+
+    search: str
+
+
+_PREFILTER = True  # tests switch it off to prove the prefilter changes nothing
+
+
+def _dw_search_mask(mask: str) -> str:
+    """#802 (slow far-closer scans): the DokuWiki ``[[..]]`` and ``((..))`` patterns look up to 2000
+    characters ahead for their closer, so a long line of openers with no closer costs about 2000
+    steps per character. An opener that cannot match (no closer within 2000 characters on its
+    line) is blanked in the copy the regexes scan, found in one pass with the sorted closer and
+    line-break positions. Offsets are unchanged; the matches are exactly the ones the pattern
+    would have found."""
+    if not _PREFILTER or ("[[" not in mask and "((" not in mask):
+        return mask
+    brk = [m.start() for m in re.finditer(r"[\r\n]", mask)]
+    out = list(mask)
+    # the blank must read like the character it replaces in every other pattern: the bare URL
+    # class stops at `[` (so `"`, which it also excludes) and runs on through `(` (so \x01)
+    for opener, closer, least, blank in (("[[", "]]", 0, '"'), ("((", "))", 1, "\x01")):
+        if opener not in mask:
+            continue
+        cl = [m.start() for m in re.finditer("(?=" + re.escape(closer) + ")", mask)]
+        valid: set[int] = set()
+        for m in re.finditer("(?=" + re.escape(opener) + ")", mask):
+            a = m.start() + 2
+            j = bisect_left(cl, a + least)
+            k = cl[j] if j < len(cl) else -1
+            bi = bisect_left(brk, a)
+            if k < 0 or k - a > 2000 or (bi < len(brk) and brk[bi] < k):
+                # an overlapping opener one place to the left uses this character as its second one
+                if (a - 3) not in valid:
+                    out[a - 2] = blank
+            else:
+                valid.add(a - 2)
+    return "".join(out)
+
+
 def _merge(a: list, b: list) -> list:
     """Sorted, with any region nested inside another (a comment inside a template)
     dropped: the outer region already protects it."""
@@ -139,11 +166,13 @@ _MW_VERBATIM = (
     "nowiki|pre|code|syntaxhighlight|source|math|chem|ce|score|timeline|graph|templatedata"
     "|mapframe|maplink|hiero|gallery|imagemap|inputbox|categorytree|charinsert|html"
 )
-_MW_PHASE1 = re.compile(r"<!--|<(" + _MW_VERBATIM + r")\b[^<>]{0,2000}?(/?)>", re.IGNORECASE)
+_MW_PHASE1 = re.compile(
+    r"<!--|<(" + _MW_VERBATIM + r")\b[^<>]{0,2000}?(/?)>", re.IGNORECASE | re.ASCII
+)
 _MW_CLOSE_CACHE: dict[str, re.Pattern] = {}
 _MW_PHASE3 = re.compile(
     r"__[A-Z][A-Z0-9_]{1,40}__|~{3,5}|\[\[[ \t]*Category[ \t]*:[^\[\]\r\n\x00]{0,1000}\]\]",
-    re.IGNORECASE,
+    re.IGNORECASE | re.ASCII,
 )
 _MW_INLINE = re.compile(
     r"(?P<rg>\x00+)"
@@ -157,20 +186,20 @@ _MW_INLINE = re.compile(
     r"|(?P<tag></?[A-Za-z][A-Za-z0-9]{0,40}(?:[\s/][^<>\r\n]{0,1000})?>)"
     r"|(?P<ent>&(?:#\d{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]{1,30});)"
 )
-_FILE_NS = re.compile(r"[ \t]*(?:file|image|media)[ \t]*:", re.IGNORECASE)
+_FILE_NS = re.compile(r"[ \t]*(?:file|image|media)[ \t]*:", re.IGNORECASE | re.ASCII)
 _FILE_OPTION = re.compile(
     r"(?:thumb|thumbnail|frame|framed|frameless|border|left|right|center|centre|none"
     r"|upright|baseline|sub|super|top|text-top|middle|bottom|text-bottom|loop|muted"
     r"|\d*(?:x\d+)?[ \t]*px"
     r"|(?:upright|link|alt|page|class|lang|start|end|thumbtime|thumb)[ \t]*=.*)",
-    re.IGNORECASE | re.DOTALL,
+    re.IGNORECASE | re.DOTALL | re.ASCII,
 )
 
 
 def _mw_close_re(name: str) -> re.Pattern:
     key = name.lower()
     if key not in _MW_CLOSE_CACHE:
-        _MW_CLOSE_CACHE[key] = re.compile(r"</" + key + r"\s*>", re.IGNORECASE)
+        _MW_CLOSE_CACHE[key] = re.compile(r"</" + key + r"\s*>", re.IGNORECASE | re.ASCII)
     return _MW_CLOSE_CACHE[key]
 
 
@@ -451,7 +480,7 @@ def _has_alpha(s: str) -> bool:
 
 
 def _tokenize(tok: _Tok, a: int, b: int, depth: int = 0) -> str:
-    T, M = tok.text, tok.mask
+    T = tok.text
     rx = _MW_INLINE if tok.dialect == "mw" else _DW_INLINE
     out: list[str] = []
     pos = a
@@ -459,7 +488,7 @@ def _tokenize(tok: _Tok, a: int, b: int, depth: int = 0) -> str:
         if tok.n >= _MAX_TOKENS:
             out.append(tok.point(T[pos:b]))  # the rest stays as it is
             return "".join(out)
-        m = rx.search(M, pos, b)
+        m = rx.search(tok.mask.search, pos, b)
         if not m:
             break
         out.append(_plain(T[pos : m.start()]))
@@ -563,19 +592,205 @@ def _pair_trim(tok: _Tok, s: int, a: int, b: int, e: int, depth: int) -> str:
 
 
 # --------------------------------------------------------------------------- rendering
+#
+# #802: the translated words must never create wiki structure. Every source construct is
+# already a token, so wiki syntax in the WORDS is new and is written inert, wrapped in
+# <nowiki> (MediaWiki and DokuWiki both honour it). The rules match Bilingua's
+# bilingua-wiki/src/render.rs so the two engines agree: markup that would form across a
+# token edge (`{` before a template, `'` after an italic close, `[` before a bare URL) is
+# broken with <nowiki>; the line-start set covers table lines (`| ! } +`); a header cell
+# escapes `!!`; a `; term` escapes `:` `[` `]`; a DokuWiki cell that reads `:::` is kept
+# literal; a DokuWiki bare URL is ended before words that would extend it; the cell and
+# template escapes (`{{!}}`, `{{=}}`, `%%|%%`) are applied only outside the <nowiki>
+# wrappers (inside them the separator is already inert); bare URLs in the words are inert.
+
+_LINE_START = {"mw": "*#:;=-{ |!}+", "dw": "*->^|= "}
+
+# MediaWiki's default $wgUrlProtocols: a bare URL with one of these becomes a free external link.
+_MW_PROTOCOLS = (
+    "bitcoin:", "ftp://", "ftps://", "geo:", "git://", "gopher://", "http://", "https://",
+    "irc://", "ircs://", "magnet:", "mailto:", "matrix:", "mms://", "news:", "nntp://",
+    "redis://", "sftp://", "sip:", "sips:", "sms:", "ssh://", "svn://", "tel:", "telnet://",
+    "urn:", "worldwind://", "xmpp:",
+)  # fmt: skip
+# DokuWiki's default schemes (conf/scheme.conf) and its www. / ftp. short forms.
+_DW_PROTOCOLS = (
+    "http://", "https://", "telnet://", "gopher://", "wais://", "ftp://", "ed2k://", "irc://",
+    "ldap://", "news:", "www.", "ftp.",
+)  # fmt: skip
+_PROTO_FIRST = {
+    "mw": frozenset(p[0] for p in _MW_PROTOCOLS),
+    "dw": frozenset(p[0] for p in _DW_PROTOCOLS),
+}
+_LIVE_LITS_MW = ("[[", "]]", "{{", "}}", "{|", "|}")
+_LIVE_LITS_DW = ("[[", "]]", "{{", "}}", "((", "))", "**", "//", "__", "''", "~~", "%%", "\\\\")
+_URL_NEXT_STOP = '[]<>"|'
 
 
-def _render(translation: str, imap: dict, cell: str | None, dialect: str = "mw") -> str:
-    """Write a translated unit back: tokens to their markup, a line break folded to a
-    space, a table separator in the translated words escaped, and any wiki markup the
-    translated words would create written inert (gate fix)."""
-    t = translation.strip()
+def _free_link(s: str, i: int, dialect: str) -> tuple[int, int] | None:
+    """A protocol followed by a URL character: the translated words would become a link; the
+    protocol is written inert, which breaks it."""
+    protocols = _MW_PROTOCOLS if dialect == "mw" else _DW_PROTOCOLS
+    if s[i].lower() not in _PROTO_FIRST[dialect]:
+        return None
+    for p in protocols:
+        e = i + len(p)
+        seg = s[i:e]
+        if len(s) > e and seg.isascii() and seg.lower() == p:
+            nxt = s[e]
+            if not nxt.isspace() and nxt not in _URL_NEXT_STOP:
+                return len(p), len(p) + 1
+            return None
+    return None
+
+
+def _live(s: str, i: int, dialect: str) -> tuple[int, int] | None:
+    """(length of the live-markup match at i, how far the pattern looks) or None."""
+    c = s[i]
+    two = s[i : i + 2]
+    if dialect == "mw":
+        if two in _LIVE_LITS_MW:
+            return 2, 2
+        if c == "'" and two == "''":
+            n = 2
+            while i + n < len(s) and s[i + n] == "'":
+                n += 1
+            return n, n
+        if c == "~":
+            n = 1
+            while i + n < len(s) and s[i + n] == "~":
+                n += 1
+            return (n, n) if n >= 3 else None
+        if c == "_" and two == "__":
+            # `__WORD__` is case-insensitive in MediaWiki (`__notoc__` works): any `__` before an
+            # ASCII letter or digit is written inert, which breaks every switch and needs no scan
+            # for the closer
+            nxt = s[i + 2 : i + 3]
+            return (2, 3) if nxt and nxt.isascii() and nxt.isalnum() else None
+        if c == "<":
+            nxt = s[i + 1 : i + 2]
+            return (1, 2) if nxt and nxt.isascii() and (nxt.isalpha() or nxt in "/!") else None
+        if c == "[":
+            for p in ("http:", "https:", "ftp:", "mailto:", "//"):
+                if s.startswith(p, i + 1):
+                    return 1, 1 + len(p)
+            return None
+        if c.isascii() and c.isalpha():
+            return _free_link(s, i, "mw")
+        return None
+    if two in _LIVE_LITS_DW:
+        return 2, 2
+    if c == "<":
+        nxt = s[i + 1 : i + 2]
+        return (1, 2) if nxt and nxt.isascii() and (nxt.isalpha() or nxt in "/!") else None
+    if c.isascii() and c.isalpha():
+        return _free_link(s, i, "dw")
+    return None
+
+
+def _crosses(left: str, right: str, dialect: str) -> bool:
+    """Whether live markup would form across the edge between `left` and `right` (it starts in
+    `left` and reaches into `right`). Only the few characters next to the edge can take part."""
+    if not left or not right:
+        return False
+    tail = left[-48:]
+    w = tail + right[:48]
+    lt = len(tail)
+    for j in range(lt):
+        r = _live(w, j, dialect)
+        if r is not None and j + r[1] > lt:
+            return True
+    return False
+
+
+def _wrap(s: str) -> str:
+    return "<nowiki>" + s + "</nowiki>"
+
+
+def _escape_char(c: str, cell: str | None, kind: str | None, dialect: str) -> str:
+    if cell in ("tpl", "mw") and c == "|":
+        return "{{!}}"
+    if cell == "tpl":
+        if c == "=":
+            return "{{=}}"
+        if c in "{}":  # a single brace would pair with the template's own braces on re-read
+            return _wrap(c)
+    if cell == "dw":
+        if c == "|":
+            return "%%|%%"
+        if c == "^":
+            return "%%^%%"
+    # a colon would end the term early; an open bracket would hide the colon that ends it
+    if dialect == "mw" and kind == "term" and c in ":[]":
+        return _wrap(c)
+    return c
+
+
+def _text_part(
+    s: str,
+    cell: str | None,
+    kind: str | None,
+    dialect: str,
+    at_start: bool,
+    edge_start: bool,
+    edge_end: bool,
+    enders: str,
+) -> str:
+    """The plain translated words of one piece, with any wiki markup they would create written
+    inert. `edge_start` / `edge_end` ask for the first / last character to be written inert
+    (markup would form across the token next to it); `enders` are the characters that would
+    end the label this piece sits in."""
+    s = _SOFT_BREAK.sub(" ", s)
+    n = len(s)
+    last = n - 1
+    starts = _LINE_START[dialect]
     out: list[str] = []
-    urls: list[int] = []  # pieces holding a bare MediaWiki URL (#699)
-    breaks: list[int] = []  # DokuWiki forced line breaks (#701)
+    i = 0
+    while i < n:
+        c = s[i]
+        if (i == 0 and edge_start) or (i == last and edge_end):
+            out.append(_wrap(c))
+            i += 1
+            continue
+        end = last if edge_end else n
+        r = _live(s, i, dialect)
+        if r is not None:
+            k = min(r[0], end - i)  # a match that runs into the last character is cut there
+            if k > 0:
+                out.append(_wrap(s[i : i + k]))
+                i += k
+                continue
+        if i == 0 and at_start and c in starts:
+            out.append(_wrap(c))
+            i += 1
+            continue
+        if c in enders:
+            out.append(_wrap(c))
+            i += 1
+            continue
+        if dialect == "mw" and kind == "header-cell" and s.startswith("!!", i):
+            out.append(_wrap("!!"))
+            i += 2
+            continue
+        out.append(_escape_char(c, cell, kind, dialect))
+        i += 1
+    return "".join(out)
+
+
+def _render(
+    translation: str, imap: dict, cell: str | None, dialect: str = "mw", kind: str | None = None
+) -> str:
+    """Write a translated unit back: tokens to their markup, a line break folded to a space, a
+    table separator in the translated words escaped, and any wiki markup the translated words
+    would create written inert (see the section comment). `kind` is the slot's kind
+    (`term`, `header-cell`, ...)."""
+    dw = dialect == "dw"
+    t = translation.strip()
+    # text and code pieces in order; a text piece always sits between two codes (maybe empty)
+    segs: list[tuple[str, str]] = []
     pos = 0
-    for m in _PLACEHOLDER_RE.finditer(t):
-        out.append(_text_part(t[pos : m.start()], cell, dialect, not out))
+    for m in code_tokens(t, imap):  # #814.1: a token naming no code of the unit is text
+        segs.append(("t", t[pos : m.start()]))
         pos = m.end()
         inner = m.group(0)[1:-1]
         closing = inner.startswith("/")
@@ -583,19 +798,91 @@ def _render(translation: str, imap: dict, cell: str | None, dialect: str = "mw")
         if val is None:
             continue  # unknown token: dropped
         if isinstance(val, list):
-            out.append(val[1] if closing else val[0])
+            segs.append(("close", val[1]) if closing else ("open", val[0]))
         elif not closing:
-            if dialect == "mw" and _MW_BARE_URL.fullmatch(val):
-                urls.append(len(out))
-            if dialect == "dw" and val == _DW_BREAK:
-                breaks.append(len(out))
-            out.append(val)
-    out.append(_text_part(t[pos:], cell, dialect, not out))
+            segs.append(("code", val))
+    segs.append(("t", t[pos:]))
+
+    def near(j: int, back: bool) -> str | None:
+        """The code markup next to text piece j (codes with empty markup are skipped)."""
+        k = j
+        while True:
+            k = k - 1 if back else k + 1
+            if k < 0 or k >= len(segs):
+                return None
+            kd, v = segs[k]
+            if kd == "t":
+                if v:
+                    return None
+                continue
+            if v:
+                return v
+
+    out: list[str] = []
+    urls: list[int] = []  # pieces holding a bare URL
+    breaks: list[int] = []  # DokuWiki forced line breaks (#701)
+    open_: list[str] = []  # the labels open around the current piece (their opening markup)
+    in_tpl = False
+    for j, (kd, v) in enumerate(segs):
+        if kd == "t":
+            folded = _SOFT_BREAK.sub(" ", v)
+            # the skeleton after a header cell can be `!!`: a last `!` would make it `!!!`
+            header_end = j + 1 == len(segs) and kind == "header-cell" and folded.endswith("!")
+            left, right = near(j, True), near(j, False)
+            enders = ""
+            for o in open_:
+                if o.startswith("[[") and not dw:
+                    enders += "|"
+                elif o.startswith("[") and not o.startswith("[["):
+                    enders += "]"
+                elif o.startswith("{{") and dw:
+                    enders += "{}"
+            # an allow-listed template parameter translated in place sits between
+            # `{{Name|key=` and `}}`
+            c = "tpl" if in_tpl and not dw else cell
+            out.append(
+                _text_part(
+                    v,
+                    c,
+                    kind,
+                    dialect,
+                    not out,
+                    left is not None and _crosses(left, folded, dialect),
+                    header_end or (right is not None and _crosses(folded, right, dialect)),
+                    enders,
+                )
+            )
+            continue
+        if kd == "open":
+            open_.append(v)
+        elif kd == "close":
+            if open_:
+                open_.pop()
+        elif v.startswith("{{") and not v.endswith("}}"):
+            in_tpl = True
+        elif v.endswith("}}") and not v.startswith("{{"):
+            in_tpl = False
+        if _MW_BARE_URL.fullmatch(v):
+            urls.append(len(out))
+        if dw and v == _DW_BREAK:
+            breaks.append(len(out))
+        out.append(v)
     for i in breaks:  # #701
-        nxt = "".join(out[i + 1 :])[:1]
+        nxt = _first_char_after(out, i)
         if nxt and not nxt.isspace():
             out[i] += " "
-    return _separate_urls(out, urls)
+    if dw:
+        for i in urls:  # DokuWiki twin of #699: end the URL before words that would extend it
+            nxt = _first_char_after(out, i)
+            if nxt and not (nxt.isspace() or nxt in '[]<>"|\x00'):
+                out[i] += "<nowiki></nowiki>"
+    else:
+        _separate_urls(out, urls)
+    joined = "".join(out)
+    # a DokuWiki cell that reads `:::` would join the cell above
+    if cell == "dw" and joined.strip() == ":::":
+        return "%%:::%%"
+    return joined
 
 
 # #701: a DokuWiki forced line break is two backslashes followed by whitespace or the end of
@@ -610,42 +897,42 @@ _DW_BREAK = "\\\\"
 # Japanese translation writes the token straight before the next words, which became part
 # of the link. <nowiki/> renders nothing and ends the URL.
 _MW_BARE_URL = re.compile(r"(?:https?|ftps?)://[^\s\[\]<>\"\x00]+")
-_MW_URL_RUN = re.compile(r"[^\s\[\]<>\"\x00-\x20\x7f\ufffd]*")
+_URL_TRIM = ",;.:!?)"
 
 
-def _separate_urls(out: list[str], urls: list[int]) -> str:
-    if not urls:
-        return "".join(out)
+def _first_char_after(out: list[str], i: int) -> str:
+    for k in range(i + 1, len(out)):
+        if out[k]:
+            return out[k][0]
+    return ""
+
+
+def _url_continues(out: list[str], i: int) -> bool:
+    """Whether the text after piece i starts with the run of a MediaWiki URL (anything before
+    the first space, bracket, quote or control character, once trailing ,;.:!?) are dropped)."""
+    for k in range(i + 1, len(out)):
+        for ch in out[k]:
+            if ch.isspace() or ch in '[]<>"\x7f\ufffd' or ord(ch) <= 0x20:
+                return False
+            if ch not in _URL_TRIM:
+                return True
+    return False
+
+
+def _separate_urls(out: list[str], urls: list[int]) -> None:
     for i in urls:
-        rest = "".join(out[i + 1 :])
-        run = _MW_URL_RUN.match(rest).group(0).rstrip(",;.:!?)")
-        if run:
+        if _url_continues(out, i):
             out[i] += "<nowiki/>"
         # The real preceding character (an empty piece may sit between), and any word
         # character: with PCRE UCP a CJK letter before "https" is not a \b boundary
         # either, and <nowiki/> (a \x7f strip marker) is harmless when it is (gate).
-        before = "".join(out[:i])[-1:]
+        before = ""
+        for k in range(i - 1, -1, -1):
+            if out[k]:
+                before = out[k][-1]
+                break
         if before.isalnum() or before == "_":
             out[i] = "<nowiki/>" + out[i]
-    return "".join(out)
-
-
-def _inert(s: str, dialect: str, at_start: bool) -> str:
-    s = _LIVE_MARKUP[dialect].sub(lambda m: "<nowiki>" + m.group(0) + "</nowiki>", s)
-    if at_start and s[:1] and s[0] in _LINE_START[dialect]:
-        s = "<nowiki>" + s[0] + "</nowiki>" + s[1:]
-    return s
-
-
-def _text_part(s: str, cell: str | None, dialect: str = "mw", at_start: bool = False) -> str:
-    s = _inert(_SOFT_BREAK.sub(" ", s), dialect, at_start)
-    if cell == "tpl":  # a template parameter value that is its own unit
-        s = s.replace("|", "{{!}}").replace("=", "{{=}}")
-    elif cell == "mw":
-        s = s.replace("|", "{{!}}")
-    elif cell == "dw":
-        s = s.replace("|", "%%|%%").replace("^", "%%^%%")
-    return s
 
 
 # --------------------------------------------------------------------------- block walk
@@ -663,14 +950,14 @@ class _Walk:
         self.slots: list[dict] = []
         self.para: dict | None = None
 
-    def add(self, start: int, end: int, cell: str | None = None) -> None:
+    def add(self, start: int, end: int, cell: str | None = None, kind: str | None = None) -> None:
         T = self.text
         while start < end and T[start].isspace():
             start += 1
         while end > start and T[end - 1].isspace():
             end -= 1
         if start < end:
-            self.slots.append({"start": start, "end": end, "cell": cell})
+            self.slots.append({"start": start, "end": end, "cell": cell, "kind": kind})
             check_segment_cap(len(self.slots))
 
     def flush(self) -> None:
@@ -758,7 +1045,7 @@ def _mw_slots(text: str, mask: str, starts: dict, holes: list, links: dict) -> l
         if not stripped.replace(_MASK, "").strip():
             w.flush()  # template, comment or verbatim block only
             continue
-        if re.match(r"[ \t]*#[ \t]*redirect\b", body, re.IGNORECASE):
+        if re.match(r"[ \t]*#[ \t]*redirect\b", body, re.IGNORECASE | re.ASCII):
             w.flush()
             continue
         lead = body[: len(body) - len(body.lstrip(" \t:"))]
@@ -792,9 +1079,12 @@ def _mw_slots(text: str, mask: str, starts: dict, holes: list, links: dict) -> l
             if ";" in body[:p]:
                 colon = _term_colon(mask, s + p, e)
                 if colon is not None:
-                    w.add(s + p, colon)
+                    w.add(s + p, colon, kind="term")
                     w.add(colon + 1, e)
                     continue
+                # a term with no definition: a ":" in its translation would start one
+                w.add(s + p, e, kind="term")
+                continue
             w.add(s + p, e)
             continue
         if body[:1] in (" ", "\t"):
@@ -824,10 +1114,12 @@ def _mw_cells(w: _Walk, s: int, head: str) -> None:
     mask = w.mask
     if head.startswith("|-"):
         return
+    kind = None
     if head.startswith("|+"):
         a, seps = s + 2, ("\x01",)  # a caption is one cell
     elif head.startswith("!"):
         a, seps = s + 1, ("!!", "||")
+        kind = "header-cell"
     else:
         a, seps = s + 1, ("||",)
     b = s + len(head)
@@ -835,7 +1127,7 @@ def _mw_cells(w: _Walk, s: int, head: str) -> None:
         bar = _split_top(mask, cs, ce, ("|",))
         if len(bar) > 1:  # attrs | content
             cs = bar[1][0]
-        w.add(cs, ce, "mw")
+        w.add(cs, ce, "mw", kind)
 
 
 def _dw_slots(text: str, mask: str, starts: dict, holes: list, links: dict) -> list[dict]:
@@ -890,7 +1182,8 @@ def _dw_slots(text: str, mask: str, starts: dict, holes: list, links: dict) -> l
 def _units(text: str, dialect: str) -> list[tuple[dict, str, dict]]:
     check_wiki_budget(text)
     regions, holes = _mw_regions(text) if dialect == "mw" else _dw_regions(text)
-    mask = _masked(text, regions)
+    mask = _Mask(_masked(text, regions))
+    mask.search = _dw_search_mask(mask) if dialect == "dw" else mask
     starts = dict(regions)
     links = _link_match(mask) if dialect == "mw" else {}
     slots = (_mw_slots if dialect == "mw" else _dw_slots)(text, mask, starts, sorted(holes), links)
@@ -937,7 +1230,7 @@ class _WikiFilter(Filter):
             if new is None or new == unit:
                 out.append(text[slot["start"] : slot["end"]])
             else:
-                out.append(_render(new, imap, slot["cell"], self.dialect))
+                out.append(_render(new, imap, slot["cell"], self.dialect, slot.get("kind")))
             pos = slot["end"]
         out.append(text[pos:])
         body = encode_text_lossless("".join(out))

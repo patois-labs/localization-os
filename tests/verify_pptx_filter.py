@@ -34,7 +34,7 @@ import zipfile
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(_ROOT)
 sys.path.insert(0, _ROOT)
-from tests._bootstrap import init_env
+from tests._bootstrap import bilingua_switch_off, init_env
 
 init_env("loctms_pptx_")
 
@@ -496,7 +496,9 @@ def test_k_ingest_export():
         s.commit()
         cases = [("deck.pptm", make_pptx("pptm", vba=True)), ("memo.docm", make_word("docm"))]
         for name, data in cases:
-            doc = ingest_document(s, p, name, data, TransMode.SEGMENTED)
+            # Python filter path (documents imported before Bilingua, or no wheel)
+            with bilingua_switch_off():
+                doc = ingest_document(s, p, name, data, TransMode.SEGMENTED)
             s.commit()
             s.refresh(doc)
             assert doc.fmt == name.rsplit(".", 1)[1], doc.fmt

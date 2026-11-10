@@ -66,6 +66,7 @@ from app.filters.base import (
     read_text_upload,
     register,
 )
+from app.filters.token_lit import code_tokens
 from app.services.segment import _PLACEHOLDER_RE, is_point_kind, ph_free, ph_point
 
 _MAX_DEPTH = 32
@@ -469,7 +470,7 @@ class _Parser:
         self._name()
         while not self._is(self._peek(), "punct", "{"):
             t = self._next()
-            if t.kind not in ("ident", "punct") or t.raw in ("=", ";"):
+            if t.kind not in ("ident", "punct") or t.raw in ("=", ";", "/"):
                 _refuse(self.text, t.start, f"unexpected {t.raw[:20]!r} in an interface")
         self._skip_type(stops="")
 
@@ -484,6 +485,14 @@ class _Parser:
             if t is None:
                 return
             punct = t.kind == "punct"
+            if punct and t.raw == "/":
+                # #784: no TypeScript type holds a `/`; the lexer reads no regexes, so after one
+                # (e.g. /`/) the tokens may no longer match the real file. Fail closed.
+                _refuse(
+                    self.text,
+                    t.start,
+                    "a `/` (a regular expression or division) where only a TypeScript type may be",
+                )
             if depth == 0:
                 if punct and t.raw in (*stops, ",", ";", ")", "]", "}", ">"):
                     if not moved and t.raw not in stops:
@@ -790,7 +799,7 @@ def _escape(s: str, quote: str, multiline: bool) -> str:
 
 def _render(text: str, imap: dict, quote: str, multiline: bool) -> str:
     out, pos = [], 0
-    for m in _PLACEHOLDER_RE.finditer(text):
+    for m in code_tokens(text, imap):  # #814.1: a token naming no code of the unit is text
         out.append(text[pos : m.start()])
         pos = m.end()
         inner = m.group(0)[1:-1]
@@ -798,7 +807,7 @@ def _render(text: str, imap: dict, quote: str, multiline: bool) -> str:
             info = imap.get(inner[1:])
             if info:
                 out.append(info["point"])
-        # unknown or paired tokens are dropped (same tolerance as the php/rc filters)
+        # a paired token for a point code is dropped
     out.append(text[pos:])
     return _escape("".join(out), quote, multiline)
 

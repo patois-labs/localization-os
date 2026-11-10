@@ -23,6 +23,8 @@ from tests._bootstrap import init_env
 
 init_env("loctms_scc_")
 
+import contextlib
+
 from app import config
 from app.filters import get_filter, supported_exts
 from app.filters.base import InputLimitError
@@ -162,6 +164,40 @@ def test_refusals():
     print("  [refuse] non-608 characters and overflow refuse with a list OK")
 
 
+def test_issue_803():
+    """#803: a moved or dropped inline code that switches the data channel is refused, a
+    literal token text is refused, and the character scan is linear."""
+    import time
+
+    f = _f()
+    data = (
+        b"Scenarist_SCC V1.0\r\n\r\n"
+        b"00:00:01:00\t9420 9420 9470 9470 c1c2 1920 9120 c3c4\r\n"
+        b"00:00:02:00\tc5c6 e5e6\r\n"
+    )
+    texts = [u.text for u in f.parse(data).units]
+    assert texts == ["AB ⟦x1⟧ ⟦x2⟧CD", "EFef"], texts
+    for tr in ("AB ⟦x2⟧ CD ⟦x1⟧", "AB ⟦x1⟧ CD"):
+        try:
+            f.build(data, {"0": tr})
+            raise AssertionError(f"{tr!r} must be refused: caption 2 would be lost")
+        except CaptionTargetError as exc:
+            assert "caption 2 at 00:00:02:00" in str(exc), exc
+    assert f.build(data, {"0": texts[0].replace("AB", "XY")})  # codes kept in place: fine
+    # a literal token the caption does not have
+    try:
+        f.build(data, {"0": "AB ⟦x1⟧ ⟦x2⟧CD ⟦x9⟧"})
+        raise AssertionError("an unknown code must be refused")
+    except CaptionTargetError as exc:
+        assert "⟦x9⟧" in str(exc), exc
+    # 100 000 distinct unsupported characters: stops after eight, fast
+    t0 = time.time()
+    with contextlib.suppress(CaptionTargetError):
+        f.build(data, {"1": "".join(chr(0x4E00 + i) for i in range(20000))})
+    assert time.time() - t0 < 2, time.time() - t0
+    print("  [issue 803] channel loss refused, unknown code refused, fast char scan OK")
+
+
 def test_hostile():
     f = _f()
     bad = [
@@ -214,6 +250,7 @@ def main():
     test_translate()
     test_layout()
     test_refusals()
+    test_issue_803()
     test_hostile()
     test_pipeline()
     print("SCC FILTER OK")

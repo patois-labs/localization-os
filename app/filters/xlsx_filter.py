@@ -30,6 +30,7 @@ back Strict, as Word and PowerPoint files do.
 """
 
 import io
+import logging
 
 from app.filters import ooxml_strict, xlsx_guard
 from app.filters.base import (
@@ -40,6 +41,8 @@ from app.filters.base import (
     check_segment_cap,
     register,
 )
+
+log = logging.getLogger(__name__)
 
 XLSX_WALK_VERSION = 2
 _KNOWN_WALKS = (1, 2)
@@ -77,6 +80,49 @@ def _is_formula(value) -> bool:
     return isinstance(value, str) and value.startswith("=")
 
 
+def _without_core_dates(package: bytes) -> bytes | None:
+    """The package with dcterms:created / dcterms:modified removed from docProps/core.xml,
+    or None when there is no such part or it holds neither element."""
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(package)) as zf:
+            core = next(
+                (i for i in zf.infolist() if i.filename.lower() == "docprops/core.xml"), None
+            )
+            if core is None:
+                return None
+            xml = zf.read(core)
+            from lxml import etree
+
+            root = etree.fromstring(
+                xml, etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=False)
+            )
+            dropped = 0
+            for el in list(root):
+                if etree.QName(el).localname in ("created", "modified"):
+                    root.remove(el)
+                    dropped += 1
+            if not dropped:
+                return None
+            out = io.BytesIO()
+            with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as oz:
+                for info in zf.infolist():
+                    if info.is_dir():
+                        continue
+                    body = (
+                        etree.tostring(
+                            root, xml_declaration=True, encoding="UTF-8", standalone=True
+                        )
+                        if info is core
+                        else zf.read(info)
+                    )
+                    oz.writestr(info.filename, body)
+            return out.getvalue()
+    except Exception:
+        return None
+
+
 def _open(data: bytes):
     """(workbook, normalized package bytes, strict). #669: a Strict Open XML workbook is
     read through its Transitional names; strict is (original, normalized) so a rebuild
@@ -84,10 +130,25 @@ def _open(data: bytes):
     xlsx_guard.check(data)
     normalized, is_strict = ooxml_strict.to_transitional(data, "XLSX file")
     try:
-        wb = load_workbook(io.BytesIO(normalized), data_only=False)
+        try:
+            wb = load_workbook(io.BytesIO(normalized), data_only=False)
+        except Exception as first:
+            # #814.5: a non-ISO date in docProps/core.xml (some third-party writers) fails
+            # openpyxl although the sheets are fine. Read the workbook without those dates;
+            # the export patches the ORIGINAL package, so the file itself is not changed.
+            without_dates = _without_core_dates(normalized)
+            if without_dates is None:
+                raise
+            try:
+                wb = load_workbook(io.BytesIO(without_dates), data_only=False)
+            except Exception:
+                raise first from None
+            log.warning("XLSX core properties have an unreadable date; ignored (%s)", first)
     except Exception as exc:
         # Well-formed XML can still fail openpyxl's typed OOXML conversion.
         # Uploads and stored-file exports share this user-safe error boundary.
+        # #814.6: keep the user-safe text, log what openpyxl actually said.
+        log.warning("XLSX could not be opened by openpyxl: %s: %s", type(exc).__name__, exc)
         raise InputLimitError(
             "This XLSX file has invalid spreadsheet XML. Save it again in Excel."
         ) from exc

@@ -7,6 +7,7 @@
 # The list is exactly what the image needs to build and run:
 #   * the application package, its migrations and runtime assets (fonts for images);
 #   * the entrypoint, pyproject.toml (release fallback version) and the dependency locks;
+#   * scripts/bilingua_stage.py (the Bilingua stage fetch + smoke, ADR 0111);
 #   * scripts/saml_smoke.py (the SAML build smoke) and scripts/convert_db_encryption.py
 #     (imported by `loc-tms db encrypt|decrypt`) and scripts/sqlite_to_postgres.py (imported by
 #     `loc-tms db copy-to-postgres`);
@@ -30,9 +31,11 @@
 !requirements-saml.lock
 !scripts/locks/requirements-saml-lxml.lock
 !scripts/locks/requirements-build.lock
+!scripts/locks/requirements-maturin.lock
 !requirements-ldap.lock
 !requirements-sqlcipher.lock
 !scripts/saml_smoke.py
+!scripts/bilingua_stage.py
 !scripts/convert_db_encryption.py
 !scripts/sqlite_to_postgres.py
 !native/locos_native/Cargo.toml

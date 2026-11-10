@@ -181,6 +181,7 @@ _GROUPS = {
         "app_base_url",
     ],
     "segmentation": ["srx_enabled", "srx_file"],
+    "parsing": ["bilingua_formats", "bilingua_shadow_formats"],
     "tm": ["tm_lock_ice", "tm_hundreds_enter_lqa"],
     "retention": ["retention_enabled", "retention_days", "notify_on_job_finish"],
     "vendor_studio": ["vendor_studio_url", "vendor_studio_sso_secret"],

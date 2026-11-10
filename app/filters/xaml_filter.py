@@ -50,6 +50,7 @@ from app.filters.base import (
     note_source_encoding,
     register,
 )
+from app.filters.xml_guard import check_tag_budget
 from app.filters.xml_text import xml_target_text
 
 _XAML_NS = (
@@ -128,6 +129,7 @@ def _check_xml(raw: bytes) -> None:
         raise XamlParseError(
             "This XAML file declares a DOCTYPE / DTD; refused (XAML never needs one)."
         )
+    check_tag_budget(raw, what="This XAML file")  # #792
     parser = etree.XMLParser(
         resolve_entities=False,
         no_network=True,
@@ -282,7 +284,9 @@ def _walk(text: str, with_attrs: bool) -> list[_Span]:
 
 def _escape_text(s: str, crlf: bool) -> str:
     s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    return s.replace("\n", "\r\n") if crlf else s
+    if crlf:  # every break of the translation, not only a bare LF (#813.6)
+        s = s.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n")
+    return s
 
 
 def _escape_attr(s: str, quote: str) -> str:
@@ -337,6 +341,9 @@ class XamlFilter(Filter):
         text, codec, bom = _load(original, capped=False)
         spans = _walk(text, _view_attrs_enabled())
         out, last, changed = [], 0, False
+        # #813.6: a CRLF file (its first line break is CRLF) gets CRLF for a translation's breaks
+        first_lf = text.find("\n")
+        file_crlf = first_lf > 0 and text[first_lf - 1] == "\r"
         # Unit order is resources-then-attributes; splice in file order.
         for i, sp in sorted(enumerate(spans), key=lambda p: p[1].start):
             new = paragraph_texts.get(str(i))
@@ -345,7 +352,7 @@ class XamlFilter(Filter):
             new = xml_target_text(new)
             out.append(text[last : sp.start])
             if sp.kind == "text":
-                out.append(_escape_text(new, sp.crlf))
+                out.append(_escape_text(new, sp.crlf or file_crlf))
             else:
                 if not sp.escaped and new.lstrip().startswith("{"):
                     new = "{}" + new  # never let a translation turn into a markup extension

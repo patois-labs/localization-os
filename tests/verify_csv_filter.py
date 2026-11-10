@@ -27,7 +27,7 @@ import tempfile
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(_ROOT)
 sys.path.insert(0, _ROOT)
-from tests._bootstrap import init_env
+from tests._bootstrap import bilingua_switch_off, init_env
 
 init_env("loctms_csv_filter_")
 
@@ -373,7 +373,9 @@ def test_ingest_export_reingest():
     pid = _project("csv-e2e")
     with Session(engine) as s:
         p = s.get(Project, pid)
-        doc = ingest.ingest_document(s, p, "strings.csv", E2E, "segmented")
+        # Python filter path (documents imported before Bilingua, or no wheel)
+        with bilingua_switch_off():
+            doc = ingest.ingest_document(s, p, "strings.csv", E2E, "segmented")
         did = doc.id
         segs = s.exec(select(Segment).where(Segment.document_id == did)).all()
         de = sorted([x for x in segs if x.target_locale == "de-DE"], key=lambda x: x.order_index)
@@ -418,11 +420,13 @@ def test_surfaces_api_and_cli():
         data={"project_id": str(pid), "columns": "source=Nope"},
     )
     assert res.status_code == 422 and "Nope" in res.json()["error"], (res.status_code, res.text)
-    res = client.post(
-        "/api/documents",
-        files={"file": ("ui.csv", data, "text/csv")},
-        data={"project_id": str(pid), "columns": "source=English,target.de=German"},
-    )
+    # Python filter path (documents imported before Bilingua, or no wheel)
+    with bilingua_switch_off():
+        res = client.post(
+            "/api/documents",
+            files={"file": ("ui.csv", data, "text/csv")},
+            data={"project_id": str(pid), "columns": "source=English,target.de=German"},
+        )
     assert res.status_code == 200, res.text
     with Session(engine) as s:
         doc = s.get(Document, res.json()["document_id"])

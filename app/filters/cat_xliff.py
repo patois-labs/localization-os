@@ -312,7 +312,7 @@ def tokenize(el, text_tags: bool) -> tuple[str, dict, list]:
 
     text, inline_map = _tokenize_source(el)
     if text_tags:
-        text, lits = _text_tags(text, len(inline_map))
+        text, lits = _text_tags(text, max((int(k) for k in inline_map), default=0))
         inline_map.update(lits)
     return text, inline_map
 
@@ -320,14 +320,19 @@ def tokenize(el, text_tags: bool) -> tuple[str, dict, list]:
 def _inline_elements(el) -> list:
     """The inline elements of `el` in the SAME order _tokenize_source numbers them (a
     pre-order walk that does not descend into point elements)."""
-    from app.filters.xliff_filter import _POINT
+    from app.filters.xliff_filter import _POINT, TOKENS_LEGACY, tokens_version
 
     out: list = []
+    legacy = tokens_version() == TOKENS_LEGACY  # #794 gate: a pre-#794 document's numbering
 
     def visit(e):
-        for c in e:  # comments/PIs count too: _tokenize_source numbers every child
+        for c in e:  # comments/PIs are dropped by _tokenize_source (#794): no number
+            if not isinstance(c.tag, str):
+                if legacy:
+                    out.append(c)
+                continue
             out.append(c)
-            if isinstance(c.tag, str) and _local(c) not in _POINT:
+            if _local(c) not in _POINT:
                 visit(c)
 
     visit(el)
@@ -436,7 +441,7 @@ def _decode(raw: bytes) -> tuple[str, str, bytes]:
 
 
 def parse_units(data: bytes, fmt: str, *, require_ns: str | None = None) -> ParseResult:
-    from app.filters.xliff_filter import _copy_work, _parse_xml
+    from app.filters.xliff_filter import _copy_work, _parse_xml, has_comment_or_pi, stamp_tokens
 
     raw = bytes(data)
     _decode(raw)  # refuse an encoding the build could not write back
@@ -446,10 +451,12 @@ def parse_units(data: bytes, fmt: str, *, require_ns: str | None = None) -> Pars
     units: list[TextUnit] = []
     skipped: dict[str, int] = {}
     budget = 10 * config.MAX_DOCUMENT_SEGMENTS
+    numbered = False
     for slot in walk(root):
         if slot.skip:
             skipped[slot.skip] = skipped.get(slot.skip, 0) + 1
             continue
+        numbered |= has_comment_or_pi(slot.src)  # #794 gate: stamp the numbering
         budget -= _copy_work(slot.src, budget)
         if budget < 0:
             raise InputLimitError(
@@ -469,7 +476,7 @@ def parse_units(data: bytes, fmt: str, *, require_ns: str | None = None) -> Pars
     }
     if skipped:
         skeleton["protected_units"] = skipped
-    return ParseResult(skeleton=skeleton, units=units)
+    return ParseResult(skeleton=stamp_tokens(skeleton, numbered), units=units)
 
 
 class CatXliffFormatError(ValueError):
@@ -511,9 +518,10 @@ class _Edits:
 
 def _render(text: str, lits: dict) -> str:
     """Tokenized translation -> XML content using the source's own tag bytes.
-    lits[n] = point literal or (open, close). Unknown or repeated tokens are dropped and
-    stray closes ignored (same rules as xliff_filter._rebuild_target); anything left open
-    is closed so the result is always well-formed."""
+    lits[n] = point literal or (open, close). A repeated token is dropped, one that names no
+    code of the unit is kept as text (#814.1), and stray closes ignored (same rules as
+    xliff_filter._rebuild_target); anything left open is closed so the result is always
+    well-formed."""
     from app.services.segment import _PLACEHOLDER_RE
 
     out: list[str] = []
@@ -526,6 +534,9 @@ def _render(text: str, lits: dict) -> str:
         inner = m.group(0)[1:-1]
         if inner.startswith("/"):
             key = re.sub(r"^/[a-z]?", "", inner)
+            if key not in lits:
+                out.append(_esc_text(m.group(0)))  # #814.1: names no code of the unit: text
+                continue
             if stack and stack[-1][0] == key:
                 _k, close = stack.pop()
                 if close is not None:
@@ -534,7 +545,10 @@ def _render(text: str, lits: dict) -> str:
         key = re.sub(r"^[a-z]?", "", inner, count=1)
         lit = lits.get(key)
         is_point = is_point_kind(inner[:1])  # ⟦pN⟧: an <x id>/<ph id> (#693)
-        if lit is None or key in used:
+        if lit is None:
+            out.append(_esc_text(m.group(0)))  # #814.1: names no code of the unit: text
+            continue
+        if key in used:
             if not is_point:
                 stack.append((key, None))
             continue
@@ -556,10 +570,10 @@ def _render(text: str, lits: dict) -> str:
 
 def _literals(src_el, text_tags: bool, text: str, spans: dict) -> dict:
     """Token number -> the source's own markup bytes for that inline element."""
-    from app.filters.xliff_filter import _POINT
+    from app.filters.xliff_filter import _POINT, element_numbers
 
     lits: dict = {}
-    for n, el in enumerate(_inline_elements(src_el), 1):
+    for n, el in zip(element_numbers(src_el), _inline_elements(src_el), strict=True):
         sp = spans.get(el) if isinstance(el.tag, str) else None
         if sp is None:
             lits[str(n)] = ""  # a comment or PI inside the source is not carried over

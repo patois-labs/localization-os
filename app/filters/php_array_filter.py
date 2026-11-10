@@ -47,7 +47,8 @@ from app.filters.base import (
     read_text_upload,
     register,
 )
-from app.services.segment import _PLACEHOLDER_RE, is_point_kind, ph_free, ph_point
+from app.filters.token_lit import code_tokens
+from app.services.segment import is_point_kind, ph_free, ph_point
 
 _MAX_DEPTH = 32
 
@@ -59,7 +60,7 @@ _HEREDOC_RE = re.compile(
 _TOKEN_RE = re.compile(
     r"""
     (?P<ws>\s+)
-  | (?P<comment>/\*.*?\*/|(?://|\#(?!\[))[^\n?]*(?:\?(?!>)[^\n?]*)*)
+  | (?P<comment>/\*.*?\*/|(?://|\#(?!\[))[^\r\n?]*(?:\?(?!>)[^\r\n?]*)*)
   | (?P<sq>'(?:[^'\\]|\\.)*')
   | (?P<dq>"(?:[^"\\]|\\.)*")
   | (?P<num>0[xX][0-9a-fA-F_]+|\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?)
@@ -83,6 +84,7 @@ _PH_SRC_RE = re.compile(
     r"|\|"
 )
 
+_BARE_CR = re.compile(r"\r(?!\n)")
 _FREE_PH = re.compile(r":[A-Za-z_]|%\d+\$")
 
 _SIMPLE_ESC = {
@@ -98,7 +100,7 @@ _SIMPLE_ESC = {
 _DQ_ESC_RE = re.compile(
     r"\\(?:([ntrvef\\$\"])|([0-7]{1,3})|x([0-9A-Fa-f]{1,2})|u\{([0-9A-Fa-f]+)\})"
 )
-_INTERP_RE = re.compile(r"\$[A-Za-z_\x80-￿{]|\{\$")
+_INTERP_RE = re.compile(r"\$[A-Za-z_{\x80-\U0010ffff]|\{\$")
 
 
 class _Refuse(InputLimitError):
@@ -177,6 +179,9 @@ def _heredoc(text: str, m: re.Match) -> _Tok:
         _refuse(text, m.start(), "a heredoc with no closing label")
     indent = c.group(1)
     body = text[body_start : c.start()]
+    if _BARE_CR.search(body):
+        # PHP also ends a body line at a bare CR and accepts the closing label after it (#783)
+        _refuse(text, m.start(), "a heredoc with a bare CR line break")
     if body.endswith("\r\n"):
         body = body[:-2]
     elif body.endswith("\n"):
@@ -464,7 +469,7 @@ def _escape(s: str, quote: str) -> str:
 
 def _render(text: str, imap: dict, quote: str) -> str:
     out, pos = [], 0
-    for m in _PLACEHOLDER_RE.finditer(text):
+    for m in code_tokens(text, imap):  # #814.1: a token naming no code of the unit is text
         out.append(text[pos : m.start()])
         pos = m.end()
         inner = m.group(0)[1:-1]
@@ -472,7 +477,7 @@ def _render(text: str, imap: dict, quote: str) -> str:
             info = imap.get(inner[1:])
             if info:
                 out.append(info["point"])
-        # unknown or paired tokens are dropped (same tolerance as rc/xliff)
+        # a paired token for a point code is dropped
     out.append(text[pos:])
     return _escape("".join(out), '"' if quote == '"' else "'")
 

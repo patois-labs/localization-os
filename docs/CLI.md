@@ -388,7 +388,7 @@ on the operator sitting at the machine.
 | `config get <key>` | Print one setting. Secret keys show `(set)`/`(unset)`, **never** plaintext. |
 | `config set <key> <value> [--yes]` | Set one setting (validated against known keys; unknown -> exit 2). Secret keys are stored masked; security-sensitive keys confirm first. `--yes` skips confirmation for security-sensitive settings. Changing `audit_enabled` or `audit_fail_open` is always written to the audit log, even when it turns logging off. |
 | `config show` | Read configured private egress policy with source and validity. Supports `--remote`. |
-| `config list [--group G]` | List settings, grouped, secrets masked. Groups: capacity, general, providers, spend, security, identity, connectors, smtp, segmentation, semantic, tm, retention, vendor_studio, features. |
+| `config list [--group G]` | List settings, grouped, secrets masked. Groups: capacity, general, providers, spend, security, identity, connectors, smtp, segmentation, parsing, tm, retention, vendor_studio, features. |
 | `config apply <file.toml> [--yes]` | Apply many settings from TOML atomically. All keys validated first (unknown -> reject the whole file). `--dry-run` shows the diff without writing. `--yes` skips confirmation for security-sensitive settings. |
 | `config export-env` | Print a `.env` scaffold of the install-time env vars (secrets as `<secret>` placeholders). |
 | `config features` | List the toggleable features + their on/off state (the CLI twin of the Settings → Features card). **Remote-capable** (GET `/api/admin/features`). The `notes` column flags a feature you cannot flip here: `moved` (its switch lives on `/settings/enterprise`) or `host-only` (its key is install-locked, so only the host may set it). |

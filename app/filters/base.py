@@ -14,6 +14,7 @@ Documented in: docs/architecture/translation-pipeline.md
 import contextlib
 import contextvars
 import functools
+import os
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -111,16 +112,65 @@ _DECLARED_NAMES = [
 ]
 
 
+# WHATWG labels Python's codec registry does not know (#810.3). Windows-874 also stands for
+# ISO-8859-11 / TIS-620 there; ISO-8859-8-I (logical order) and ISO-8859-8-E decode to the
+# same characters as ISO-8859-8, in the order of the bytes: nothing is reordered.
+_LABEL_ALIASES = {
+    "windows-874": "cp874",
+    "dos-874": "cp874",
+    "iso-8859-11": "cp874",
+    "iso8859-11": "cp874",
+    "tis-620": "cp874",
+    "x-mac-cyrillic": "mac-cyrillic",
+    "x-mac-ukrainian": "mac-cyrillic",
+    "mac": "macintosh",
+    "x-mac-roman": "macintosh",
+    "csmacintosh": "macintosh",
+    "iso-8859-8-i": "iso-8859-8",
+    "iso-8859-8-e": "iso-8859-8",
+    "iso_8859-8-i": "iso-8859-8",
+    "iso_8859-8-e": "iso-8859-8",
+    "csiso88598i": "iso-8859-8",
+    "csiso88598e": "iso-8859-8",
+    "logical": "iso-8859-8",
+    "visual": "iso-8859-8",
+}
+
+
 def _codec_name(label: str) -> str | None:
     import codecs
 
     try:
         return codecs.lookup(label).name
     except LookupError:
-        return None
+        alias = _LABEL_ALIASES.get(label.strip().lower())
+        if alias is None:
+            return None
+        try:
+            return codecs.lookup(alias).name
+        except LookupError:
+            return None
 
 
 _DECLARED_OK = {n for n in (_codec_name(x) for x in _DECLARED_NAMES) if n}
+# #810.3 (11-07): the rarer charsets a page may declare. Read in HTML when every byte decodes,
+# else the file is read the way it always was (never refused for it). Versioned: a stored
+# document imported before this keeps reading them as before (READ_GEN_KEY below).
+_RARE_NAMES = [
+    "iso8859-3",
+    "iso8859-4",
+    "iso8859-6",
+    "iso8859-8",
+    "iso8859-10",
+    "iso8859-13",
+    "iso8859-14",
+    "iso8859-16",
+    "cp874",
+    "cp866",
+    "macintosh",
+    "mac-cyrillic",
+]
+_RARE_OK = {n for n in (_codec_name(x) for x in _RARE_NAMES) if n}
 _DECL_RE = re.compile(
     r"""(<\?xml[^>]{0,200}?\bencoding\s*=\s*["']\s*|<meta\b[^>]{0,400}?\bcharset\s*=\s*["']?\s*"""
     r"""|Content-Type:[^"\n]{0,100}?\bcharset\s*=\s*)([A-Za-z0-9_.:-]{1,40})""",
@@ -130,10 +180,12 @@ _DECL_RE = re.compile(
 _BINARY_CONTROLS = bytes(sorted(set(range(0x20)) - {0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x1A, 0x1B}))
 
 
-def _declared_codec(data: bytes) -> str | None:
+def _declared_codec(data: bytes, rare: bool = False) -> str | None:
     m = _DECL_RE.search(data[:4096].decode("ascii", "replace"))
     name = _codec_name(m.group(2)) if m else None
-    return name if name in _DECLARED_OK else None
+    if name in _DECLARED_OK or (rare and name in _RARE_OK):
+        return name
+    return None
 
 
 def _looks_binary(data: bytes) -> bool:
@@ -159,14 +211,18 @@ def check_line_budget(text: str) -> None:
         )
 
 
-def read_text_upload(data: bytes, *, sig: bool = False, declared: bool = False) -> tuple[str, str]:
+def read_text_upload(
+    data: bytes, *, sig: bool = False, declared: bool = False, rare: bool = False
+) -> tuple[str, str]:
     """`_read_text_upload` plus the #571 line budget (every line-based filter reads here)."""
-    text, enc = _read_text_upload(data, sig=sig, declared=declared)
+    text, enc = _read_text_upload(data, sig=sig, declared=declared, rare=rare)
     check_line_budget(text)
     return text, enc
 
 
-def _read_text_upload(data: bytes, *, sig: bool = False, declared: bool = False) -> tuple[str, str]:
+def _read_text_upload(
+    data: bytes, *, sig: bool = False, declared: bool = False, rare: bool = False
+) -> tuple[str, str]:
     """Decode an uploaded text-like file: returns (text, encoding), encoding one of
     "utf-8", "utf-16", a declared legacy codec name, or "cp1252" (#509).
 
@@ -190,12 +246,20 @@ def _read_text_upload(data: bytes, *, sig: bool = False, declared: bool = False)
         except UnicodeDecodeError:
             text = None
     if text is None and declared:
-        codec = _declared_codec(data)
+        rare = rare and not legacy_read()
+        codec = _declared_codec(data, rare)
         if codec and codec not in ("utf-8", "utf-16", "iso8859-1", "cp1252"):
             try:
                 text, enc = data.decode(codec), codec
             except UnicodeDecodeError:
                 text = None
+                if codec == "iso8859-8":
+                    # a page labelled ISO-8859-8 that holds Windows-1255 vowel points: that
+                    # code page holds all of ISO-8859-8 at the same bytes, and the label stays
+                    with contextlib.suppress(UnicodeDecodeError):
+                        text, enc = data.decode("cp1255"), "cp1255"
+            if text is not None and codec in _RARE_OK:
+                note_new_read()
     if text is None:
         if _looks_binary(data):
             raise UnsupportedEncodingError(
@@ -237,6 +301,7 @@ class CodePageHint:
     locale: str = ""  # the project's source locale ("" when not known)
     forced: bool = False  # export / repair: decode exactly with `codec`, no guessing
     used: str | None = None  # the code page the last undeclared legacy decode used
+    new_read: bool = False  # a parse used a 11-07 reading rule (see READ_GEN_KEY)
     warnings: list = field(default_factory=list)
 
 
@@ -265,13 +330,136 @@ def source_code_page(
         _CODE_PAGE_HINT.reset(token)
 
 
+# BOM read version (#799.4, #800.4). A UTF-8 byte order mark followed by bytes that are not
+# UTF-8 used to be decoded WITH the mark's three bytes as Windows-1252 letters (`ï»¿`), so the
+# first cue / section header of the file was lost and a rebuild wrote the mark twice. Version 2
+# reads the mark as a mark and the rest in the code page. The new read moves the unit ids of the
+# file (a first cue / Title unit appears), so a document imported before it (no stamp on its
+# skeleton) keeps reading the old way on repair and export; a new upload is read the new way and
+# the parse stamps `text_bom: 2` (only when the file is in that case, so no other skeleton moves).
+TEXT_BOM_KEY = "text_bom"
+TEXT_BOM_VERSION = 2
+_BOM_READ: contextvars.ContextVar = contextvars.ContextVar(
+    "text_bom_read", default=TEXT_BOM_VERSION
+)
+_UTF8_BOM = b"\xef\xbb\xbf"
+
+
+def bom_before_legacy(data: bytes) -> bool:
+    """True for a UTF-8 BOM followed by bytes that are not UTF-8 when the active BOM read
+    version is 2 (a new upload, or a document stamped with it)."""
+    raw = bytes(data)
+    if _BOM_READ.get() < 2 or not raw.startswith(_UTF8_BOM):
+        return False
+    try:
+        raw[3:].decode("utf-8")
+    except UnicodeDecodeError:
+        return True
+    return False
+
+
+def stamp_text_bom(skeleton: dict, data: bytes) -> dict:
+    """Parse side: record BOM read version 2 on a file the new read changed."""
+    if bom_before_legacy(data):
+        skeleton[TEXT_BOM_KEY] = TEXT_BOM_VERSION
+    return skeleton
+
+
+def read_text_bom(data: bytes) -> tuple[str, str]:
+    """`read_text_upload(data, sig=True)` for the subtitle filters, with the BOM read version."""
+    raw = bytes(data)
+    if bom_before_legacy(raw):
+        return read_text_upload(raw[3:], sig=True)
+    return read_text_upload(raw, sig=True)
+
+
+def decode_text_bom(data: bytes) -> str:
+    """`decode_text_lossless(data, sig=True)` with the BOM read version."""
+    raw = bytes(data)
+    if bom_before_legacy(raw):
+        return decode_text_lossless(raw[3:], sig=True)
+    return decode_text_lossless(raw, sig=True)
+
+
+@contextlib.contextmanager
+def _bom_read_version(skeleton):
+    token = _BOM_READ.set(1 if skeleton.get(TEXT_BOM_KEY) != TEXT_BOM_VERSION else 2)
+    try:
+        yield
+    finally:
+        _BOM_READ.reset(token)
+
+
+# 11-07 reading rules (issues 810 and 814): a few fixes change how a stored upload is READ,
+# so a project already holding its units would see them move. A parse that actually used one
+# of them (the orphan HTML end tag kept as a code, a rarer declared charset such as
+# ISO-8859-8, real codes numbered around token look-alike text in the source) stamps
+# `read_gen` on the skeleton at import; a stored document with a skeleton and NO stamp is
+# re-read by the old rules at export and re-import (`legacy_read()`), which give the same
+# result for every file the new rules do not touch. Parsing outside an import or export
+# (tests, tools) always uses the new rules.
+READ_GEN_KEY = "read_gen"
+READ_GEN = 1
+_LEGACY_READ: contextvars.ContextVar = contextvars.ContextVar("legacy_read", default=False)
+
+
+def legacy_read() -> bool:
+    """True while a stored document imported before the 11-07 reading rules is re-read."""
+    return _LEGACY_READ.get()
+
+
+def note_new_read() -> None:
+    """A parse used a 11-07 reading rule: the import stamps the skeleton (see READ_GEN_KEY)."""
+    hint = _CODE_PAGE_HINT.get()
+    if hint is not None and not hint.forced:
+        hint.new_read = True
+
+
+BILINGUA_KEY = "bilingua"
+
+
+def is_bilingua_skeleton(skeleton) -> bool:
+    """True for a skeleton the Bilingua adapter stamped (`skeleton["bilingua"]` is a dict).
+    The same test as bilingua_adapter.is_bilingua_skeleton, kept here so the code that must not
+    import the adapter (base filters, the XLIFF numbering gate, ingest) can ask it."""
+    return isinstance(skeleton, dict) and isinstance(skeleton.get(BILINGUA_KEY), dict)
+
+
+@contextlib.contextmanager
 def document_code_page(skeleton: dict | None):
     """The forced hint for re-reading a stored original the way its import did: the
-    stamped code page, or no hint at all (the #509 rule) for a document without one."""
-    cp = (skeleton or {}).get(TEXT_CODE_PAGE_KEY) if isinstance(skeleton, dict) else None
-    if isinstance(cp, str) and _codec_name(cp) in _HINT_CODECS:
-        return source_code_page(codec=cp, forced=True)
-    return contextlib.nullcontext()
+    stamped code page, or no hint at all (the #509 rule) for a document without one. Also
+    pins the BOM read version the document was imported with (see TEXT_BOM_KEY), and a
+    stored document without the `read_gen` stamp is re-read by the pre-11-07 rules
+    (see READ_GEN_KEY)."""
+    if is_bilingua_skeleton(skeleton):
+        # A document the Bilingua adapter imported: none of the Python reading stamps
+        # (read_gen, text_bom, text_code_page) were written for it, and the adapter reads the
+        # stored original under the pinned Bilingua profile instead. Entering the legacy
+        # reading here would re-read it by pre-11-07 Python rules.
+        yield None
+        return
+    with contextlib.ExitStack() as stack:
+        if isinstance(skeleton, dict):
+            stack.enter_context(_bom_read_version(skeleton))
+        cp = (skeleton or {}).get(TEXT_CODE_PAGE_KEY) if isinstance(skeleton, dict) else None
+        if isinstance(cp, str) and _codec_name(cp) in _HINT_CODECS:
+            inner = source_code_page(codec=cp, forced=True)
+        else:
+            inner = contextlib.nullcontext()
+        if isinstance(skeleton, dict) and skeleton and READ_GEN_KEY not in skeleton:
+            inner = _legacy_reading(inner)
+        yield stack.enter_context(inner)
+
+
+@contextlib.contextmanager
+def _legacy_reading(inner):
+    token = _LEGACY_READ.set(True)
+    try:
+        with inner as hint:
+            yield hint
+    finally:
+        _LEGACY_READ.reset(token)
 
 
 def apply_code_page_hint(skeleton: dict, hint: CodePageHint | None) -> dict:
@@ -283,6 +471,8 @@ def apply_code_page_hint(skeleton: dict, hint: CodePageHint | None) -> dict:
         skeleton[TEXT_CODE_PAGE_KEY] = hint.used
     else:
         skeleton.pop(TEXT_CODE_PAGE_KEY, None)
+    if hint.new_read:
+        skeleton[READ_GEN_KEY] = READ_GEN
     warnings = [
         w
         for w in (skeleton.get("file_warnings") or [])
@@ -577,13 +767,15 @@ def note_source_encoding(skeleton: dict, encoding: str) -> dict:
     return skeleton
 
 
-def decode_text_lossless(data: bytes, *, sig: bool = False, declared: bool = False) -> str:
+def decode_text_lossless(
+    data: bytes, *, sig: bool = False, declared: bool = False, rare: bool = False
+) -> str:
     """Decode a stored original for BUILD the same way PARSE did (UTF-8, UTF-16 BOM,
     declared charset or Windows-1252), so indices line up and the export is UTF-8.
     A stored original from before #509 that none of those read keeps every byte:
     undecodable bytes become lone surrogates that `encode_text_lossless` writes back."""
     try:
-        return read_text_upload(data, sig=sig, declared=declared)[0]
+        return read_text_upload(data, sig=sig, declared=declared, rare=rare)[0]
     except UnsupportedEncodingError:
         return bytes(data).decode("utf-8-sig" if sig else "utf-8", "surrogateescape")
 
@@ -622,7 +814,7 @@ def _newline_style(data: bytes, codec: str) -> str:
     return ""
 
 
-def text_envelope(original: bytes, *, declared: bool = False) -> TextEnvelope:
+def text_envelope(original: bytes, *, declared: bool = False, rare: bool = False) -> TextEnvelope:
     """The envelope of a stored original, read the way parse read it (#509)."""
     data = bytes(original)
     if data.startswith(b"\xef\xbb\xbf"):
@@ -638,7 +830,7 @@ def text_envelope(original: bytes, *, declared: bool = False) -> TextEnvelope:
             label = m.group(2) if m else ""
         return TextEnvelope(codec, data[:2], _newline_style(data[2:], codec), label, declared)
     try:
-        _text, enc = _read_text_upload(data, declared=declared)
+        _text, enc = _read_text_upload(data, declared=declared, rare=rare)
     except UnsupportedEncodingError:
         enc = "utf-8"  # a pre-#509 original: kept byte for byte by surrogateescape
     label = ""
@@ -647,6 +839,8 @@ def text_envelope(original: bytes, *, declared: bool = False) -> TextEnvelope:
         named = _codec_name(m.group(2)) if m else None
         if m and named == enc:
             label = m.group(2)
+        elif m and enc == "cp1255" and named == "iso8859-8" and _hebrew_points(data):
+            label = m.group(2)  # #810.3: Hebrew vowel points under an ISO-8859-8 label
         elif m and enc == "cp1252" and named in ("iso8859-1", "ascii"):
             # B-bytes gate: #509 reads a declared ISO-8859-1 / US-ASCII file as
             # Windows-1252; write it back in the codec its label names (when it fits),
@@ -657,6 +851,38 @@ def text_envelope(original: bytes, *, declared: bool = False) -> TextEnvelope:
     if enc == "utf-16":  # a BOM-less UTF-16 never reaches here (BOM checked above)
         enc = "utf-8"
     return TextEnvelope(enc, b"", _newline_style(data, "utf-8"), label, declared)
+
+
+def _hebrew_points(data: bytes) -> bool:
+    """#810.3 gate: a page labelled ISO-8859-8 that was read as Windows-1255 because it holds
+    bytes ISO-8859-8 leaves undefined (vowel points). Only such a page keeps its label on
+    export; a stored document re-read by the pre-11-07 rules is written as before (UTF-8)."""
+    if legacy_read():
+        return False
+    try:
+        data.decode("iso8859-8")
+    except UnicodeDecodeError:
+        return True
+    return False
+
+
+# #810.3 gate: Windows-1255 bytes that mean something else under an ISO-8859-8 label (the
+# euro and shekel signs, curly quotes, dashes, the ellipsis ... are C1 controls or another
+# sign there). A file holding one is written as UTF-8 instead, never as wrong text.
+def _cp1255_not_8859_8() -> frozenset:
+    out = set()
+    for b in range(0x80, 0x100):
+        byte = bytes([b])
+        try:
+            ch, other = byte.decode("cp1255"), byte.decode("iso8859-8")
+        except UnicodeDecodeError:
+            continue  # undefined in one of them (the vowel points): not a different sign
+        if ch != other:
+            out.add(ch)
+    return frozenset(out)
+
+
+_CP1255_NOT_8859_8 = _cp1255_not_8859_8()
 
 
 def encode_like(text: str, env: TextEnvelope) -> bytes:
@@ -679,8 +905,12 @@ def encode_like(text: str, env: TextEnvelope) -> bytes:
         # declaration, or one past the first 4 KB, may name another charset): if any
         # does not name the codec written, write UTF-8 under the UTF-8 labels parse left.
         for m in _DECL_RE.finditer(restored):
-            if _codec_name(m.group(2)) != env.codec:
+            named = _codec_name(m.group(2))
+            hebrew = env.codec == "cp1255" and named == "iso8859-8"
+            if named != env.codec and not hebrew:
                 return text.encode("utf-8", "surrogateescape")
+            if hebrew and not _CP1255_NOT_8859_8.isdisjoint(restored):
+                return text.encode("utf-8", "surrogateescape")  # #810.3 gate: see above
     try:
         return env.bom + restored.encode(env.codec)  # bom: UTF-16 only on this path
     except (UnicodeEncodeError, LookupError):
@@ -902,8 +1132,47 @@ def register_lazy(module: str, fmt: str, exts: tuple[str, ...] = ()) -> None:
         _LAZY[name.lower()] = (module, fmt)
 
 
-def get_filter(fmt: str) -> Filter | None:
-    """Resolve a filter by canonical fmt OR by any registered extension alias."""
+def _bilingua_switched_on(canon: str) -> bool:
+    """True when the `bilingua_formats` setting (or its LOC_TMS_BILINGUA_FORMATS override)
+    lists `canon`. A new upload is the only caller. Never raises: an unreadable setting is
+    off, so a settings fault can never turn the engine on."""
+    env = os.environ.get("LOC_TMS_BILINGUA_FORMATS")
+    try:
+        if env is not None:
+            from app.services.settings import format_list
+
+            return canon in format_list(env)
+        from app.services import settings
+
+        return canon in settings.bilingua_formats()
+    except Exception:
+        return False
+
+
+def get_filter(
+    fmt: str, skeleton: dict | None = None, _python: bool = False, new_import: bool = False
+) -> Filter | None:
+    """Resolve a filter by canonical fmt OR by any registered extension alias.
+
+    Bilingua switch (OFF by default, app/filters/bilingua_adapter.py). The adapter is chosen
+    in exactly two cases: the stored `skeleton` carries the `bilingua` stamp (the document
+    was made by the adapter, which alone can rebuild it), or the caller says `new_import=True`
+    (the one place a file is parsed for the first time, services/ingest.py), there is no
+    stored skeleton, and the format is listed in the `bilingua_formats` setting (env
+    LOC_TMS_BILINGUA_FORMATS overrides it). Every other call, with or without a skeleton,
+    gets the Python filter, so an existing document keeps the filter that made it. With the
+    setting empty nothing changes."""
+    if not _python:
+        canon = _ALIASES.get((fmt or "").lower(), (fmt or "").lower())
+        stamped = isinstance(skeleton, dict) and "bilingua" in skeleton
+        switched = bool(new_import) and not skeleton and _bilingua_switched_on(canon)
+        if stamped or switched or os.environ.get("LOC_TMS_BILINGUA_ASSUME_NEW"):  # parity runner
+            from app.filters import bilingua_adapter
+
+            # select() reads the same setting (bilingua_adapter.enabled_formats)
+            chosen = bilingua_adapter.select(canon, skeleton, new_import=new_import)
+            if chosen is not None:
+                return chosen
     found = _FILTERS.get(_ALIASES.get((fmt or "").lower(), fmt))
     if found is None and (fmt or "").lower() in _LAZY:
         import importlib

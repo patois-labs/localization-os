@@ -418,10 +418,11 @@ def tokenize(p) -> tuple[str, dict]:
     return "".join(parts), inline_map
 
 
-def _spans(text: str, n_runs: int):
+def _spans(text: str, n_runs: int, n_points: int | None = None):
     """Translated text -> [("t", run_index_or_None, s) | ("x", point_index)]. Flat like
     docx_filter._split_on_run_tokens: a close returns to "no run"; unknown tokens are
-    kept as literal text so nothing the translator wrote disappears."""
+    kept as literal text so nothing the translator wrote disappears (#814.1: a point token
+    that names none of the paragraph's `n_points` breaks and fields is text too)."""
     from app.services.segment import _PLACEHOLDER_RE
 
     out: list = []
@@ -436,7 +437,12 @@ def _spans(text: str, n_runs: int):
         kind, num = inner.lstrip("/")[:1], inner.lstrip("/")[1:]
         if kind == "r" and num.isdigit() and 1 <= int(num) <= n_runs:
             cur = None if closing else int(num) - 1
-        elif kind == "x" and num.isdigit() and not closing:
+        elif (
+            kind == "x"
+            and num.isdigit()
+            and not closing
+            and (n_points is None or 0 <= int(num) - n_runs - 1 < n_points)
+        ):
             out.append(("x", int(num) - n_runs - 1))
         else:
             out.append(("t", cur, m.group(0)))
@@ -474,7 +480,7 @@ def write_paragraph(p, text: str) -> None:
     fallback = rprs[0] if rprs else None
     used: set = set()
     new: list = []
-    for span in _spans(text, len(runs)):
+    for span in _spans(text, len(runs), len(points)):
         if span[0] == "x":
             i = span[1]
             if 0 <= i < len(points) and i not in used:

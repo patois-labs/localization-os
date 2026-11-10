@@ -268,6 +268,20 @@ def setup_ai_save(
     return RedirectResponse("/setup-ai?saved=1", status_code=303)
 
 
+def _bilingua_module_label() -> str:
+    """The engine's label ("bilingua 0.9.1") when it is importable and usable here, "" when not
+    (the settings page then says every format uses the built-in filters). Never raises."""
+    try:
+        from app.filters import bilingua_adapter
+
+        mod = bilingua_adapter._module()
+        if mod is None:
+            return ""
+        return f"bilingua {getattr(mod, '__version__', '')}".strip()
+    except Exception:
+        return ""
+
+
 def _ledger_web_gate(request):
     # The WEB ceremony's posture is the one every other destructive web admin control uses
     # (retention, segmentation): an admin SESSION + CSRF (global middleware) + the typed
@@ -1445,6 +1459,12 @@ def settings_page(request: Request):
             # #424: under multi-org the install-wide SRX ruleset is host-only, so the form
             # is not offered (the POST answers 403). Always False with the gate off.
             "srx_host_only": bool(access.install_wide_security_refused(_SRX_KEYS)),
+            "bilingua_module": _bilingua_module_label(),
+            "parsing_host_only": bool(
+                access.install_wide_security_refused(
+                    ("bilingua_formats", "bilingua_shadow_formats")
+                )
+            ),
             "srx_msg": request.query_params.get("srx_msg"),
             "srx_error": request.query_params.get("srx_error"),
             # Segmentation profiles (P6, item 8): the manageable named-ruleset list
@@ -1713,6 +1733,37 @@ async def settings_segmentation_save(
     return RedirectResponse(
         "/settings?srx_msg=" + quote("Segmentation settings saved."), status_code=303
     )
+
+
+@router.post("/settings/bilingua")
+def settings_bilingua_save(
+    request: Request, bilingua_formats: str = Form(""), bilingua_shadow_formats: str = Form("")
+):
+    """Save which formats the Bilingua engine parses (new uploads only) and which it shadows.
+    Admin-only and install-wide (host-only under multi-org, like the SRX ruleset). Each value
+    goes through the settings validator, so a typo is refused and nothing is saved."""
+    me, blocked = _admin_block(request)
+    if blocked:
+        return blocked
+    keys = ("bilingua_formats", "bilingua_shadow_formats")
+    if access.install_wide_security_refused(keys):
+        return _error_page(request, 403, access.INSTALL_WIDE_REFUSAL)
+    raw = {"bilingua_formats": bilingua_formats, "bilingua_shadow_formats": bilingua_shadow_formats}
+    updates = {k: ",".join(settings.format_list(v)) for k, v in raw.items()}
+    try:
+        # the typed values first: normalising drops a malformed name, which must be refused
+        settings.validate_values(raw)
+        settings.validate_values(updates)
+    except settings.InvalidSettingValue as exc:
+        return _error_page(request, 400, str(exc))
+    settings.set_many(updates)
+    audit.log(
+        actor=getattr(me, "email", "system"),
+        action="bilingua.formats",
+        detail=f"formats={updates[keys[0]] or '(none)'} shadow={updates[keys[1]] or '(none)'}",
+        ip=_ip(request),
+    )
+    return RedirectResponse("/settings?saved=1", status_code=303)
 
 
 @router.post("/settings/segprofiles")

@@ -182,9 +182,15 @@ def test_balance():
     # crossed close: dropped where it does not match, closed at the end
     got = cue(1, "⟦g1⟧A⟦g2⟧B⟦/g1⟧C⟦/g2⟧")
     assert got == "<c.loud>A<i>BC</i></c>", got
-    # stray close, unknown marker and a duplicated point token are dropped
+    # a duplicated point token is dropped; a marker that names no token of the cue is its own
+    # text and stays (#813.7)
     got = cue(2, "a⟦/g9⟧b⟦r1⟧c⟦x1⟧d⟦x1⟧e")
-    assert got == "abc<00:00:08.000>de", got
+    assert got == "a⟦/g9⟧b⟦r1⟧c<00:00:08.000>de", got
+    # #813.7: token-like source text survives a build, as does a letterless model token (#814.1:
+    # the cue's own code skips the number 1 the look-alike uses, so it is g2)
+    src = b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<i>a</i> ref \xe2\x9f\xa61\xe2\x9f\xa7 b\n"
+    got = _f().build(src, {"0": "X ⟦g2⟧a⟦/g2⟧ ref ⟦1⟧ b"}).decode("utf-8")
+    assert got.endswith("X <i>a</i> ref ⟦1⟧ b\n"), got
     # unclosed open closed at the cue end
     assert cue(4, "⟦g3⟧orange") == "<b>orange</b>"
     # #713: a blank line in the translation never splits the cue

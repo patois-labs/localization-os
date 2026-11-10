@@ -532,6 +532,10 @@ def parse(xml: bytes | str) -> SrxDocument:
     an uncompilable rule regex."""
     if isinstance(xml, str):
         xml = xml.encode("utf-8")
+    from app.filters.xml_guard import tag_budget_exceeded
+
+    if tag_budget_exceeded(xml):  # #792 gate: before lxml
+        raise SrxError("Malformed SRX XML: a start tag has far too many attributes.")
     parser = etree.XMLParser(
         resolve_entities=False, no_network=True, dtd_validation=False, load_dtd=False
     )

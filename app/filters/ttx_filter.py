@@ -146,6 +146,9 @@ def _parse(raw: bytes, text: str | None = None):
         text = _decode(raw)[0]
     if _DOCTYPE_RE.search(text):
         raise TtxParseError("This TTX file declares a DOCTYPE or entity; TTX never needs one.")
+    from app.filters.xml_guard import check_tag_budget
+
+    check_tag_budget(text, what="This TTX file")  # #792: many xmlns on one tag is quadratic
     try:
         root = etree.fromstring(raw, parser=make_hardened_parser())
     except etree.XMLSyntaxError as exc:
@@ -420,6 +423,8 @@ def build_ttx(
             continue
         lead, trail = _edges(src_tok)
         body = xml_target_text(new).strip()
+        if not body:  # #793: only XML-illegal characters were left; leave the Tu untouched
+            continue
         inner = _render(lead + body + trail, _literals(items, text, spans))
         if slot.tgt is not None:
             sp = spans[slot.tgt]

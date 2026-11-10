@@ -97,12 +97,12 @@ def tokenize(value: str) -> tuple[str, list[str]]:
 
 
 def detokenize(text: str, tokens: list[str]) -> str:
-    """Put the original specifiers back; an unknown token number is dropped (never a
-    literal ⟦xN⟧ in the delivered file)."""
+    """Put the original specifiers back. A token number that names no specifier of the
+    value is text (#814.1: kept, not dropped; quality.tag_damage reports it)."""
 
     def repl(m: re.Match) -> str:
         n = int(m.group(1))
-        return tokens[n - 1] if 1 <= n <= len(tokens) else ""
+        return tokens[n - 1] if 1 <= n <= len(tokens) else m.group(0)
 
     return _TOKEN.sub(repl, text)
 

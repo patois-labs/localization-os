@@ -51,6 +51,7 @@ from app.filters.base import (
     read_text_upload,
     register,
 )
+from app.filters.token_lit import code_tokens
 from app.services.segment import _PLACEHOLDER_RE, ph_close, ph_open, ph_point
 
 _BOM = b"\xef\xbb\xbf"
@@ -84,12 +85,14 @@ def check_xmb_budget(raw: bytes) -> None:
 def _parse_tree(raw: bytes):
     """Hardened parse. The DOCTYPE stays in the file but nothing in it is resolved."""
     # Shared core parser (gate): never vendor_xliff, which is feature-gated (verify_features).
+    from app.filters.xml_guard import check_tag_budget
     from app.filters.xml_guard import make_hardened_parser as _make_parser
 
     if _ENTITY_DECL_RE.search(raw):
         raise AngularXmbError(
             "XMB/XTB file declares an ENTITY; refused (entity expansion / XXE vector)."
         )
+    check_tag_budget(raw, what="XMB/XTB file")  # #792
     try:
         root = etree.fromstring(raw, parser=_make_parser())
     except etree.XMLSyntaxError as exc:
@@ -222,7 +225,7 @@ def _render(text: str, inline: dict, *, original_raw: bool) -> str:
     used: set[str] = set()
     stack: list[tuple[str, str | None]] = []
     pos = 0
-    for m in _PLACEHOLDER_RE.finditer(text):
+    for m in code_tokens(text, inline):  # #814.1: a token naming no code is text
         out.append(_escape_text(text[pos : m.start()]))
         pos = m.end()
         inner = m.group(0)[1:-1]

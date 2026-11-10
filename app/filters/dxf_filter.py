@@ -53,6 +53,7 @@ from app.filters.base import (
     note_source_encoding,
     register,
 )
+from app.filters.token_lit import code_tokens
 from app.services.segment import _PLACEHOLDER_RE, ph_close, ph_open, ph_point
 
 # ---------------------------------------------------------------------------- encoding
@@ -125,7 +126,9 @@ def _line_budget(data: bytes) -> None:
     from app import config
 
     limit = 200 * config.MAX_DOCUMENT_SEGMENTS
-    if data.count(b"\n") + data.count(b"\r") > 2 * limit:
+    # a CRLF line end is one line, not two (#805.2)
+    breaks = data.count(b"\n") + data.count(b"\r") - data.count(b"\r\n")
+    if breaks > 2 * limit:
         raise InputLimitError(
             f"This DXF file has more than {limit} group codes (200 x MAX_DOCUMENT_SEGMENTS). "
             "Split the drawing or export only the layouts you need."
@@ -255,7 +258,9 @@ def _codec(data: bytes, acadver, codepage) -> str:
 
 def _decode_value(raw: bytes, codec: str, start: int) -> str:
     try:
-        return raw.decode(codec)
+        text = raw.decode(codec)
+        # DOS864 shows byte 0x25 as U+066A; AutoCAD reads it as `%`, so %%d stays a code (#805.3)
+        return text.replace("\u066a", "%") if codec == "cp864" else text
     except UnicodeDecodeError as exc:
         _refuse(
             f"Byte 0x{raw[exc.start]:02x} at position {start + exc.start} is not valid in this "
@@ -434,11 +439,49 @@ def _escape(s: str, kind: str) -> str:
     return s.replace("\u00a0", "\\~").replace("\n", "\\P").replace("\t", "^I")
 
 
+def _open_end(raw: str, kind: str) -> str:
+    """What closes a code that only ended where its value ended (#811.3): a lone trailing
+    backslash needs a second one (else it joins a following letter into a new code), an
+    unterminated format code such as A1 needs `;` (else it swallows text up to the next `;`).
+    Written only
+    when something follows the code, white space included; at the value end the code stays
+    as it is, so untouched and normal translations keep their bytes."""
+    if kind == "text":
+        return ""
+    if raw == "\\":
+        return "\\"
+    if (
+        len(raw) > 1
+        and raw[0] == "\\"
+        and not raw.endswith((";", "\\"))
+        and raw[1] in "ACcFfHpQTWS"
+    ):
+        return ";"
+    return ""
+
+
 def _render(text: str, imap: dict, kind: str) -> str:
     present = {m.group(0) for m in _PLACEHOLDER_RE.finditer(text)}
     out, pos = [], 0
-    for m in _PLACEHOLDER_RE.finditer(text):
-        out.append(_escape(text[pos : m.start()], kind))
+    seal = ""  # closes the open-ended code written just before, once something follows it
+    lone_pct = False  # the last piece is text ending in ONE `%`: it would join a following `%%d`
+
+    def put(piece: str, code: str | None = None) -> None:
+        nonlocal seal, lone_pct
+        if not piece:
+            return
+        if seal:
+            out.append(seal)
+        if lone_pct and piece.startswith("%"):
+            out.append(
+                "%%"
+            )  # `%` + `%%` = the literal-percent code `%%%`; the code after it survives (#805.1)
+        lone_pct = code is None and piece.endswith("%") and not piece.endswith("%%")
+        out.append(piece)
+        seal = _open_end(code, kind) if code is not None else ""
+
+    for m in code_tokens(text, imap):  # #814.1: a token naming no code of the unit is text
+        put(_escape(text[pos : m.start()], kind))
         pos = m.end()
         tokn = m.group(0)
         inner = tokn[1:-1]
@@ -446,15 +489,15 @@ def _render(text: str, imap: dict, kind: str) -> str:
         body = inner[1:] if closing else inner
         info = imap.get(body[1:]) if body[:1] in "xg" else None
         if not info:
-            continue  # unknown token dropped (same tolerance as rc/html/docx/xliff)
+            continue  # a code token of the wrong kind is dropped
         if "point" in info:
-            out.append(info["point"])
+            put(info["point"], info["point"])
             continue
         # a paired brace survives only with its partner, so braces stay balanced
         partner = ph_open("g", int(body[1:])) if closing else ph_close("g", int(body[1:]))
         if partner in present:
-            out.append(info["close"] if closing else info["open"])
-    out.append(_escape(text[pos:], kind))
+            put(info["close"] if closing else info["open"])
+    put(_escape(text[pos:], kind))
     return "".join(out)
 
 
@@ -464,14 +507,14 @@ def _fit_codec(s: str, codec: str) -> str:
     if codec == "utf-8":
         return s
     try:
-        s.encode(codec)
+        _encode_value(s, codec)
         return s
     except UnicodeEncodeError:
         pass
     out = []
     for ch in s:
         try:
-            ch.encode(codec)
+            _encode_value(ch, codec)
             out.append(ch)
         except UnicodeEncodeError:
             cp = ord(ch)
@@ -484,6 +527,9 @@ def _fit_codec(s: str, codec: str) -> str:
 
 
 def _encode_value(s: str, codec: str) -> bytes:
+    if codec == "cp864":
+        # the code page has no byte for `%` in Python's table but 0x25 is `%` to AutoCAD (#805.3)
+        return b"%".join(p.encode(codec) for p in re.split("[%\u066a]", s))
     return s.encode(codec, "surrogatepass" if codec == "utf-8" else "strict")
 
 

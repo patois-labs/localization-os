@@ -386,7 +386,13 @@ def test_damaged_tokens_never_lose_elements():
         root = story_of(out, "a")
         assert len(root.findall(".//HyperlinkTextSource[@Self='h9']")) == 1, bad
         assert len(root.findall(".//PageReference[@Self='p9']")) == 1, bad
-        assert "\u27e6" not in visible_text(root), bad
+        # #814.1 (g12): a token naming no code (x99, /g7) is text; a repeated real one is dropped
+        vis = visible_text(root)
+        assert "\u27e6g1\u27e7" not in vis and "\u27e6/g1\u27e7" not in vis, (bad, vis)
+        if "junk" in bad:
+            assert "\u27e6x99\u27e7 junk \u27e6/g7\u27e7" in vis, vis
+        else:
+            assert "\u27e6" not in vis, vis
     print("  [damage] dropped/unknown/repeated tokens never lose or duplicate an element OK")
 
 
@@ -807,6 +813,34 @@ def test_target_language_stamped():
     print("  [language] build_localized stamps the declared target language only OK")
 
 
+def test_deep_nested_ranges_stamp_once():
+    """#787: HyperlinkTextSource and CharacterStyleRange alternating 60 deep must not make
+    the language / RTL stamping exponential (every range is visited once)."""
+    import time
+
+    from app.filters import idml_filter as m
+
+    depth = 60
+    inner = "<Content>x</Content>"
+    for i in range(depth):
+        inner = f'<CharacterStyleRange CharacterDirection="LeftToRightDirection"><HyperlinkTextSource Self="h{i}">{inner}</HyperlinkTextSource></CharacterStyleRange>'
+    root = etree.fromstring(
+        f'<Story><ParagraphStyleRange Self="p">{inner}</ParagraphStyleRange></Story>'
+    )
+    top = [root.find(".//CharacterStyleRange")]
+    t0 = time.time()
+    m._stamp(top, "$ID/German")
+    m._stamp_rtl(top)
+    took = time.time() - t0
+    assert took < 2.0, took
+    ranges = root.findall(".//CharacterStyleRange")
+    assert len(ranges) == depth
+    assert all(r.get("AppliedLanguage") == "$ID/German" for r in ranges)
+    assert all(r.get("CharacterDirection") == "DefaultDirection" for r in ranges)
+    assert root.find("ParagraphStyleRange").get("ParagraphDirection") == "RightToLeftDirection"
+    print("  [stamp] 60-deep nested ranges stamp once, fast OK")
+
+
 def main():
     test_registered_everywhere()
     test_multi_story_order_and_byte_identity()
@@ -821,6 +855,7 @@ def main():
     test_hyperlink_spanning_ranges()
     test_real_export_shapes()
     test_target_language_stamped()
+    test_deep_nested_ranges_stamp_once()
     test_malformed_and_hostile()
     test_export_maps_idml_rebuild_errors()
     test_token_shuffle_fuzz()

@@ -230,10 +230,14 @@ def test_translated_round_trip():
     head = MIF[: MIF.index(" <Para\n  <Unique 1001>")]
     assert text.startswith(head)
     assert text.endswith(MIF[MIF.index(" <Para\n  <PgfTag `Body'>\n  <ParaLine\n   <ATbl 1>") :])
-    # dropped tokens are appended (anchors survive), unknown and duplicate tokens dropped
-    out2 = f.build(MIF_B, {"3": "Kurz ⟦x9⟧ ⟦x1⟧ ⟦g2⟧k⟦/g2⟧ ⟦x1⟧"}).decode("utf-8")
+    # dropped tokens are appended (anchors survive), duplicate tokens dropped
+    out2 = f.build(MIF_B, {"3": "Kurz ⟦x1⟧ ⟦g2⟧k⟦/g2⟧ ⟦x1⟧"}).decode("utf-8")
     p = f.parse(out2.encode("utf-8")).units[3].text
-    assert p == "Kurz  ⟦x1⟧ ⟦g2⟧k⟦/g2⟧ ", p  # appended tokens trail the text
+    assert p == "Kurz ⟦x1⟧ ⟦g2⟧k⟦/g2⟧ ", p  # appended tokens trail the text
+    # a token that names no code of the paragraph is text (#814.1, g12): written as a String
+    # (the reader skips a paragraph whose text holds the brackets, as for any source)
+    out3 = f.build(MIF_B, {"3": "Kurz ⟦x9⟧ ⟦x1⟧ ⟦g2⟧k⟦/g2⟧"}).decode("utf-8")
+    assert "<String `Kurz ⟦x9⟧ '>" in out3, out3
     assert out2.count("<XRefEnd >") == 1 and out2.count("<FTag `Emphasis'>") == 1
     assert out2.count("<FNote 3>") == 1 and out2.count("<VariableName `Product'>") == 2
     # control characters never reach a string

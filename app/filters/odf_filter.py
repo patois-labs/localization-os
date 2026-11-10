@@ -82,6 +82,7 @@ from app.filters.base import (
     check_unit_texts,
     register,
 )
+from app.filters.token_lit import code_tokens
 from app.services.segment import _PLACEHOLDER_RE, ph_close, ph_open, ph_point
 
 NS = {
@@ -475,7 +476,7 @@ def _rebuild_paragraph(p, text: str) -> None:
     w = _Writer(p)
     used: set[str] = set()
     pos = 0
-    for m in _PLACEHOLDER_RE.finditer(text):
+    for m in code_tokens(text, inline_map):  # #814.1: a token naming no code is text
         w.text(text[pos : m.start()])
         pos = m.end()
         inner = m.group(0)[1:-1]

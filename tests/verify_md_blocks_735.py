@@ -417,7 +417,42 @@ def test_end_to_end():
     print("  [e2e] .md: API upload, CLI translate, API export keeps definitions OK")
 
 
+def test_813_bom_and_autolinks():
+    bom = b"\xef\xbb\xbf"
+    src = bom + b"# Title\n\nText\n"
+    units = MD.parse(src).units
+    assert [u.text for u in units] == ["Title", "Text"], [u.text for u in units]
+    assert MD.build(src, {}) == src
+    out = MD.build(src, {"0": "Titel", "1": "Text2"})
+    assert out == bom + b"# Titel\n\nText2\n", out
+    # an upload without a BOM is unchanged
+    assert MD.build(b"# T\n", {"0": "U"}) == b"# U\n"
+    # a URL the source already glues to its neighbours is not rewritten (link text in a <...>
+    # destination)
+    from app.filters.md_emphasis import fix_cjk_autolinks, fix_cjk_emphasis
+
+    s = "[https://example.com/a #hash](<a b.md>)"
+    assert fix_cjk_autolinks(s, s) == s
+    assert fix_cjk_autolinks(s, "\u6587" + s) == "\u6587" + s
+    # an unglued source URL is still repaired
+    assert fix_cjk_autolinks("see https://x.org/a now", "\u898b\u3066https://x.org/a\u3092") == (
+        "\u898b\u3066<https://x.org/a>\u3092"
+    )
+    # many emphasis pairs on one line: linear
+    import time
+
+    src_e = "Click __Save__ now"
+    new_e = "".join(f"__\u4fdd\u5b58{i}__\u3092 " for i in range(40000))
+    t0 = time.time()
+    got = fix_cjk_emphasis(src_e, new_e)
+    assert got.startswith("**\u4fdd\u5b580**\u3092") and time.time() - t0 < 10, time.time() - t0
+    print(
+        "  [813] md BOM kept out of the first line, glued source URLs untouched, emphasis linear OK"
+    )
+
+
 def main():
+    test_813_bom_and_autolinks()
     test_readme()
     test_refdefs()
     test_titles()

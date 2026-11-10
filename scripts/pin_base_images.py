@@ -49,6 +49,7 @@ STAGE_BASES = {
     "tailscale": "TAILSCALE_BASE",
     "rust": "RUST_BASE",
     "native": "PYTHON_BASE",
+    "bilingua": "PYTHON_BASE",
     "runtime": "PYTHON_BASE",
 }
 
@@ -103,7 +104,8 @@ def base_errors(text: str, *, require_digest: bool = False) -> list[str]:
         if require_digest and not match["digest"]:
             errors.append(f"ARG {arg}={value} is not pinned by digest")
     expected = {f"FROM ${{{arg}}} AS {stage}" for stage, arg in STAGE_BASES.items()}
-    actual = from_lines(text)
+    # The one allowed non-registry stage: an empty named build-context slot (ADR 0111).
+    actual = [line for line in from_lines(text) if line != "FROM scratch AS bilingua-src"]
     if sorted(actual) != sorted(expected) or len(actual) != len(STAGE_BASES):
         errors.append(f"FROM lines must be exactly {sorted(expected)}, got {actual}")
     return errors

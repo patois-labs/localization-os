@@ -165,6 +165,58 @@ def test_table_switch():
     print("  [table] Cyrillic translation switches CCT 00 -> 01 OK")
 
 
+def _msg(fn):
+    try:
+        fn()
+    except CaptionTargetError as exc:
+        return str(exc)
+    raise AssertionError("expected a refusal")
+
+
+def test_table_switch_798():
+    """#798: comments and text-less subtitles move with a CCT switch (or the switch refuses);
+    only bytes both tables read the same way move raw; a mark + letter pair is a letter;
+    refusals are linear; an empty locale stamps nothing."""
+    import time
+
+    f = _f()
+    ru = "Привет"
+    # 1. a comment holding a section sign (A7 in table 00, FD in 8859-5) is re-encoded
+    base = gsi(tnb=2) + tti(1, b"a\xa7b", cf=1) + tti(2, b"Bye")
+    out = f.build(base, {"0": ru})
+    assert out[12:14] == b"01" and _blocks(out)[0][16:19] == b"a\xfdb", _blocks(out)[0][16:19]
+    assert _texts(out) == [(0, ru)]
+    # a comment that table 01 cannot hold refuses the switch and names the comment
+    cafe = gsi(tnb=2) + tti(1, b"caf\xc2e", cf=1) + tti(2, b"Bye")
+    m = _msg(lambda: f.build(cafe, {"0": ru}))
+    assert "comment subtitle at block 1" in m, m
+    assert f.build(cafe, {"0": "Salut"})[12:14] == b"00"  # no switch: comment untouched
+    # 2. C0 is no character in table 00 (a token) and a Cyrillic letter in table 01
+    c0 = gsi(tnb=2) + tti(1, b"note") + tti(2, b"ab\xc0cd")
+    m = _msg(lambda: f.build(c0, {"0": ru}))
+    assert "subtitle 2" in m and "subtitle 1:" not in m and "no equivalent" in m, m
+    assert f.build(c0, {"0": "Bonjour"})[12:14] == b"00"
+    # 3. 7F has no character in any table: it moves
+    seven = gsi(tnb=3) + tti(1, b"x\x7fy", cf=1) + tti(2, b"Bye") + tti(3, b"\xa7 2")
+    out = f.build(seven, {"0": ru})
+    assert out[12:14] == b"01" and _blocks(out)[0][16:19] == b"x\x7fy"
+    assert _texts(out) == [(0, ru), (1, "\xa7 2")], _texts(out)
+    # 4. a letter with no precomposed form (C1 78 = x + U+0300) round-trips
+    xg = gsi(tnb=1) + tti(1, b"say \xc1x \xcfq now")
+    assert _texts(xg)[0][1] == "say x̀ q̌ now", _texts(xg)
+    out = f.build(xg, {"0": "dis x̀ q̌ vite"})
+    assert b"\xc1x" in out and b"\xcfq" in out and _texts(out)[0][1] == "dis x̀ q̌ vite"
+    assert f.build(xg, {"0": "x̀ " * 12})  # wraps, does not refuse
+    # 5. 49 000 subtitles that do not fit are refused fast and counted
+    big = gsi(tnb=49000) + b"".join(tti(i % 65535 + 1, b"ab") for i in range(49000))
+    t0 = time.time()
+    m = _msg(lambda: f.build(big, {str(i): "x" * 50 for i in range(49000)}))
+    assert "(and 48990 more)" in m and time.time() - t0 < 10, (m[-80:], time.time() - t0)
+    # 4 (minor). an empty target locale stamps nothing
+    assert f.build_localized(STL, {}, "") == STL
+    print("  [table] #798 comments move, raw bytes checked, mark pairs, fast refusal OK")
+
+
 def test_cyrillic_quotes_679():
     """#679: Russian MT output with « » (not in table 01) exported nothing, and the error blamed
     every Cyrillic letter. The quotes fold to '"' when the table lacks them; a translated
@@ -279,6 +331,7 @@ def main():
     test_translate()
     test_reflow_and_extension()
     test_table_switch()
+    test_table_switch_798()
     test_cyrillic_quotes_679()
     test_refusals()
     test_language()

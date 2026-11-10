@@ -638,7 +638,12 @@ def _render(doc: _Doc, p: _Para, translated: str) -> str:
     used: set[str] = set()
     pos = 0
     pieces: list[tuple[str, str]] = []
-    matches = list(_ANY_TOKEN_RE.finditer(translated))
+    # #814.1: a token that names no code of the paragraph is text
+    matches = [
+        m
+        for m in _ANY_TOKEN_RE.finditer(translated)
+        if m.group(3) in p.pairs or m.group(3) in p.tokens
+    ]
     live = _live_pairs(p, matches)
     for k, m in enumerate(matches):
         pieces.append(("text", translated[pos : m.start()]))

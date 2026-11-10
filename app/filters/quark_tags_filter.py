@@ -651,7 +651,12 @@ def _live_pairs(p: _Para, matches) -> dict[str, tuple[int, int]]:
 
 
 def _render(p: _Para, translated: str) -> str:
-    matches = list(_ANY_TOKEN_RE.finditer(translated))
+    # #814.1: a token that names no code of the paragraph is text
+    matches = [
+        m
+        for m in _ANY_TOKEN_RE.finditer(translated)
+        if m.group(3) in p.pairs or "x" + m.group(3) in p.tokens
+    ]
     live = _live_pairs(p, matches)
     # A run's closes are written as the source's own reset tags while they stay
     # together and in order; once MT separates them (or drops one) each writes its own.

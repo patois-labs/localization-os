@@ -1238,6 +1238,20 @@ PDF_OCR_MAX_PIXEL_DIM = int(_get("PDF_OCR_MAX_PIXEL_DIM", "4000"))
 PDF_MAX_PAGES = int(_get("PDF_MAX_PAGES", "1000"))
 # About 1000 A4 scans at 150 dpi; preflight the complete document before rendering.
 PDF_OCR_MAX_TOTAL_PIXELS = int(_get("PDF_OCR_MAX_TOTAL_PIXELS", "2500000000"))
+# #808: PDFium runs in a child process that the parent kills on a wall-clock limit, so a
+# hostile file (form fan-out, page-tree DAG) can never hold a worker or a lock. A single
+# PDFium call longer than PDF_CALL_TIMEOUT_S, or more than PDF_TOTAL_TIMEOUT_S spent inside
+# PDFium for one file (OCR network time not counted), is refused. PDF_WORKER_MEMORY_MB and
+# the CPU limit are enforced on Linux/macOS only (Windows has the wall-clock kill alone).
+# PDF_WORKERS bounds how many child processes run at once. PDF_ISOLATE=0 runs PDFium inside
+# the app process again (tests that spy on pypdfium2 only). Sizing: 25 real PDFs
+# peak at 110 MB of address space each, a 4000 px OCR render under 256 MB, so 1024 MB is ample
+# and the worst case (PDF_WORKERS x PDF_WORKER_MEMORY_MB = 4 GB) fits an 8 GB machine.
+PDF_CALL_TIMEOUT_S = _get_num("PDF_CALL_TIMEOUT_S", 60, minimum=1)
+PDF_TOTAL_TIMEOUT_S = _get_num("PDF_TOTAL_TIMEOUT_S", 150, minimum=1)
+PDF_WORKER_MEMORY_MB = _get_num("PDF_WORKER_MEMORY_MB", 1024, minimum=256)
+PDF_WORKERS = _get_num("PDF_WORKERS", 4, minimum=1)
+PDF_ISOLATE = _get("PDF_ISOLATE", "1") != "0"
 # Image localization (#546/#589): total-pixel cap per uploaded image, checked from the header
 # before decode (the per-side MAX_PIXEL_DIM guard alone allows 64 MP, about 256 MB of RGBA).
 IMAGE_MAX_TOTAL_PIXELS = max(int(_get("IMAGE_MAX_TOTAL_PIXELS", "25000000")), 1)

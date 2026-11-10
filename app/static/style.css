@@ -21,6 +21,10 @@
   src: url("/static/fonts/jetbrains-mono-latin-wght-normal.woff2") format("woff2");
 }
 
+/* The HTML hidden attribute always wins over a class that sets display (#636: .form
+   {display:flex} showed a hidden form). Scripts unhide by clearing the attribute. */
+[hidden] { display: none !important; }
+
 :root {
   --bg: var(--color-canvas);
   --bg-2: var(--color-sidebar);

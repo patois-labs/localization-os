@@ -182,8 +182,9 @@ def test_tolerant_tokens():
         "CLOSE_LINK",
         "CLOSE_BOLD_TEXT",
     ], names
-    assert "⟦" not in "".join(t.itertext())
-    print("  [tolerant] unknown/repeated/stray tokens dropped, unclosed pairs closed OK")
+    # #814.1 (g12): a token that names no code (x9, /g7) is text; the repeated x3 is dropped
+    assert "".join(t.itertext()) == "A b ⟦x9⟧   ⟦/g7⟧ c", "".join(t.itertext())
+    print("  [tolerant] repeated tokens dropped, unknown kept as text, unclosed pairs closed OK")
 
 
 def _refused(data, exc=ValueError):

@@ -357,6 +357,10 @@ class _ServerPageFilter(HtmlFilter):
     def _escape_out(self, s: str) -> str:
         return s
 
+    def _guard_island(self, text: str, code: str) -> str:
+        """Hook: translated `text` is about to be followed by the code island `code`."""
+        return text
+
     # masking
     def _mask(self, text: str):
         if _SENT_CHARS_RE.search(text):
@@ -440,7 +444,7 @@ class _ServerPageFilter(HtmlFilter):
         if lenient:
             text, enc = bytes(data).decode("utf-8", "replace"), "utf-8"
         else:
-            text, enc = read_text_upload(data, declared=True)
+            text, enc = read_text_upload(data, declared=True, rare=True)
         if enforce_caps and text.count("<") > 10 * config.MAX_DOCUMENT_SEGMENTS:
             raise InputLimitError(
                 f"This {self.label} file has far more tags than MAX_DOCUMENT_SEGMENTS allows "
@@ -492,7 +496,7 @@ class _ServerPageFilter(HtmlFilter):
         return "".join(out) + "".join(f"⟦x{k}⟧" for k in missing)
 
     def build(self, original: bytes, paragraph_texts: dict) -> bytes:
-        text = decode_text_lossless(original, declared=True)
+        text = decode_text_lossless(original, declared=True, rare=True)
         masked, codes, inline = self._mask(text)
         tokens = self._tokens(masked, codes, inline)
         before = "".join(tokens)
@@ -506,7 +510,13 @@ class _ServerPageFilter(HtmlFilter):
             pos = 0
             # Escape only the translated words, never the re-materialized original tags.
             for m in _PLACEHOLDER_RE.finditer(new):
-                pieces.append(self._escape_out(new[pos : m.start()]))
+                piece = self._escape_out(new[pos : m.start()])
+                inner = m.group(0)[1:-1]
+                info = u["map"].get(inner[1:]) if inner[:1] == "x" else None
+                point = info.get("point") if info else None
+                if isinstance(point, _Island):
+                    piece = self._guard_island(piece, self._unmask(str(point), codes))
+                pieces.append(piece)
                 pieces.append(m.group(0))
                 pos = m.end()
             pieces.append(self._escape_out(new[pos:]))
@@ -546,7 +556,7 @@ class _ServerPageFilter(HtmlFilter):
         tag = a11y.target_tag(target_locale)
         if not tag:
             return self.build(original, paragraph_texts)
-        text = decode_text_lossless(original, declared=True)
+        text = decode_text_lossless(original, declared=True, rare=True)
         masked, codes, inline = self._mask(text)
         tokens = self._tokens(masked, codes, inline)
         before = list(tokens)
@@ -579,6 +589,14 @@ class JspFilter(_ServerPageFilter):
 
     def _escape_out(self, s):
         return _escape_jsp(s)
+
+    def _guard_island(self, text, code):
+        # #789: `\${...}` is literal text in JSP, so a run ending in a backslash would switch the
+        # next EL expression off. Write each trailing backslash as a character reference.
+        if code.startswith(("${", "#{")) and text.endswith("\\"):
+            keep = text.rstrip("\\")
+            return keep + "&#92;" * (len(text) - len(keep))
+        return text
 
 
 @register
@@ -691,7 +709,7 @@ def _lang_array_filter(data: bytes):
 
 
 def _has_page_text(data: bytes) -> bool:
-    text = decode_text_lossless(data, declared=True)
+    text = decode_text_lossless(data, declared=True, rare=True)
     pos = 0
     for s, e, _inline in _php_islands(text):
         if text[pos:s].strip():

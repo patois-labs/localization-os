@@ -2153,6 +2153,9 @@
       "GET",
       "POST"
     ],
+    "/settings/bilingua": [
+      "POST"
+    ],
     "/settings/context-default": [
       "POST"
     ],
@@ -2598,6 +2601,8 @@
     "audit_enabled",
     "audit_fail_open",
     "batch_max_parallel",
+    "bilingua_formats",
+    "bilingua_shadow_formats",
     "blobstore_s3_bucket",
     "blobstore_s3_credentials",
     "blobstore_s3_enabled",

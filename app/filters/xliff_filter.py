@@ -21,6 +21,8 @@ plain text, exactly as before.
 """
 
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 
 from lxml import etree
@@ -32,9 +34,14 @@ from app.filters.base import (
     ParseResult,
     TextUnit,
     check_segment_cap,
+    is_bilingua_skeleton,
+    legacy_read,
+    note_new_read,
     register,
     xml_like,
 )
+from app.filters.token_lit import next_free, reserved_numbers
+from app.filters.xml_guard import check_tag_budget
 from app.services.segment import (
     is_point_kind,
     ph_close,
@@ -149,6 +156,7 @@ def _parse_xml(data: bytes, capped: bool = False):
     _reject_doctype(raw)  # ASCII fast path
     if capped:
         check_markup_budget(raw)
+    check_tag_budget(raw, what="This XLIFF file")  # #792
     try:
         root = etree.fromstring(raw, parser=_make_parser())
     except etree.XMLSyntaxError as exc:
@@ -196,12 +204,46 @@ def _copy_work(src, limit: int) -> int:
     itself and once for every inline ancestor (#571 gate). Counted in one linear pass
     that stops as soon as the count passes `limit`."""
     work = 0
-    stack = [(c, 1) for c in src]
+    stack = [(c, 1) for c in src if isinstance(c.tag, str)]
     while stack and work <= limit:
         el, depth = stack.pop()
         work += depth
-        stack.extend((c, depth + 1) for c in el)
+        stack.extend((c, depth + 1) for c in el if isinstance(c.tag, str))
     return work
+
+
+def element_numbers(src) -> list[int]:
+    """The token number of each inline element of a <source>, in the order `_tokenize_source`
+    walks them (pre-order, not descending into point elements). 1, 2, 3 ... except that they
+    skip the numbers token look-alike text in the source uses (#814.1, see token_lit)."""
+    reserved = reserved_numbers(src.text or "")
+    count = 0
+    # #794: a comment / PI takes a number (and its text is unit text) only under the
+    # pre-#794 numbering; otherwise it is skipped here exactly as `_tokenize_source` skips it
+    commented = tokens_version() == TOKENS_LEGACY
+
+    def visit(e):
+        nonlocal count
+        for c in e:
+            element = isinstance(c.tag, str)
+            if element or commented:
+                count += 1
+                if not element or _local(c) not in _POINT:
+                    reserved.update(reserved_numbers(c.text or ""))
+                    if element:
+                        visit(c)
+            reserved.update(reserved_numbers(c.tail or ""))
+
+    visit(src)
+    if not reserved or legacy_read():
+        return list(range(1, count + 1))
+    out, n = [], 0
+    for _ in range(count):
+        n = next_free(n, reserved)
+        out.append(n)
+    if out[-1] != count:
+        note_new_read()
+    return out
 
 
 def _tokenize_source(src):
@@ -213,6 +255,7 @@ def _tokenize_source(src):
     point token ⟦xN⟧ (their own text/children are carried on the clone)."""
     inline_map: dict = {}
     counter = [0]
+    numbers = iter(element_numbers(src))
     data_refs: dict = {}  # #693 gate: per-unit 2.0 <originalData> lookups
 
     def walk(el, is_root) -> str:
@@ -220,7 +263,7 @@ def _tokenize_source(src):
         if not is_root:
             local = _local(el)
             counter[0] += 1
-            n = counter[0]
+            n = next(numbers)
             inline_map[str(n)] = deepcopy(el)
             if local in _POINT:
                 # standalone placeholder — do NOT recurse into its content. #693: an
@@ -231,16 +274,89 @@ def _tokenize_source(src):
                     return ph_free(n) + (el.tail or "")
                 return ph_point("x", n) + (el.tail or "")
             # content-wrapping element (g / mrk / unknown): recurse for inner text
-            inner = "".join(walk(c, False) for c in el)
+            inner = "".join(kids(el))
             return ph_open("g", n) + (el.text or "") + inner + ph_close("g", n) + (el.tail or "")
         # root <source>: emit its own text, then children, then their tails
         parts.append(el.text or "")
-        for c in el:
-            parts.append(walk(c, False))
+        parts.extend(kids(el))
         return "".join(parts)
+
+    legacy = tokens_version() == TOKENS_LEGACY
+
+    def kids(el):
+        # #794: a comment or processing instruction is dropped (its tail text stays) and
+        # takes no code number; it used to become a code pair around the comment text.
+        # A document imported before that (no stamp) keeps the old numbering at export.
+        for c in el:
+            if not legacy and not isinstance(c.tag, str):
+                yield c.tail or ""
+            else:
+                yield walk(c, False)
 
     text = walk(src, True)
     return text, inline_map
+
+
+# #794 gate: build() re-derives the token numbers from the ORIGINAL <source>, so the
+# numbering a document was imported under must be the numbering it is exported under.
+# 1 = before #794 (a comment / PI in a source took a code number, as a g pair around its
+# text), 2 = #794 (dropped, no number). Only a source that holds a comment or PI numbers
+# differently, so the stamp (skeleton["xliff_tokens"] = 2) is written only on a document
+# that has one; a document without the stamp is exported with numbering 1, which is the
+# same as 2 for every source without a comment or PI.
+TOKENS_KEY = "xliff_tokens"
+TOKENS_LEGACY = 1
+TOKENS_VERSION = 2
+_TOKENS: ContextVar = ContextVar("xliff_tokens", default=None)
+
+
+def tokens_version() -> int:
+    """The numbering in force: the stored document's (export, inside document_tokens),
+    else the current one (a parse, or a direct filter call)."""
+    v = _TOKENS.get()
+    return TOKENS_VERSION if v is None else v
+
+
+def skeleton_tokens(skeleton) -> int:
+    """The numbering a stored skeleton was imported with. A missing stamp is 1; a stamp
+    this build does not know is refused (guessing would move codes between elements)."""
+    skel = skeleton if isinstance(skeleton, dict) else {}
+    if is_bilingua_skeleton(skel):
+        # A Bilingua document carries no Python numbering stamp and never needs one: Bilingua
+        # numbers codes by the #794 v2 rule (comments and processing instructions take no
+        # number), so this is the current numbering and an absent stamp is not "legacy".
+        return TOKENS_VERSION
+    if TOKENS_KEY not in skel:
+        return TOKENS_LEGACY
+    stamp = skel[TOKENS_KEY]
+    if type(stamp) is int and stamp in (TOKENS_LEGACY, TOKENS_VERSION):
+        return stamp
+    raise ValueError(
+        f"This document was imported with XLIFF code numbering {stamp!r}, which this version "
+        "does not know. Re-import the document to export it."
+    )
+
+
+@contextmanager
+def document_tokens(skeleton):
+    """Export / rebuild of a stored document: number codes the way its import did."""
+    token = _TOKENS.set(skeleton_tokens(skeleton))
+    try:
+        yield
+    finally:
+        _TOKENS.reset(token)
+
+
+def has_comment_or_pi(src) -> bool:
+    """True when a source holds a comment or processing instruction (at any depth)."""
+    return any(not isinstance(e.tag, str) for e in src.iter())
+
+
+def stamp_tokens(skeleton: dict, numbered_differently: bool) -> dict:
+    """Stamp the current numbering on a new skeleton when one of its sources needs it."""
+    if numbered_differently:
+        skeleton[TOKENS_KEY] = TOKENS_VERSION
+    return skeleton
 
 
 def _clear(el) -> None:
@@ -257,9 +373,10 @@ def _rebuild_target(tgt, text: str, inline_map: dict) -> None:
     tokens as the source, so we validate each token against the source inline_map
     and degrade safely instead of corrupting the XML:
 
-      - a token with NO matching source-map entry (unknown id) is DROPPED — never
-        emitted as literal ⟦…⟧ text (which would leak into the document and, for an
-        id already materialized, duplicate the id attribute → schema-invalid).
+      - a token with NO matching source-map entry (unknown id) names no code of this
+        unit, so it is TEXT and is kept as typed (#814.1: source text such as ⟦x2⟧ is no
+        longer deleted). It can never clash with a real code: the unit's own codes skip
+        the numbers such text uses (`element_numbers`).
       - a source id is materialized AT MOST ONCE; a second open/point token for the
         same id is dropped (a duplicated element would repeat the id attribute).
       - a stray close (no matching open on the stack) is dropped, not kept literal.
@@ -311,6 +428,9 @@ def _rebuild_target(tgt, text: str, inline_map: dict) -> None:
         if inner.startswith("/"):
             # close token: pop matching open frame if any; else drop it.
             key = re.sub(r"^/[a-z]?", "", inner)
+            if key not in inline_map:
+                append_text(m.group(0))  # names no code of this unit: text
+                continue
             if stack and stack[-1][1] == key:
                 node, _key, phantom = stack.pop()
                 # After a real element closes, following text is its .tail. After a
@@ -322,11 +442,14 @@ def _rebuild_target(tgt, text: str, inline_map: dict) -> None:
         is_point = is_point_kind(inner[:1])
         key = re.sub(r"^[a-z]?", "", inner, count=1)
         el = inline_map.get(key)
-        if el is None or key in used:
-            # unknown id, or this id was already materialized -> drop the marker so
-            # we never emit literal ⟦…⟧ or a duplicate id attribute. For a paired
-            # open, push a phantom frame so its matching close is consumed instead
-            # of leaking as a stray close; its inner text stays inline.
+        if el is None:
+            append_text(m.group(0))  # names no code of this unit: text
+            continue
+        if key in used:
+            # this id was already materialized -> drop the marker so we never emit a
+            # duplicate id attribute. For a paired open, push a phantom frame so its
+            # matching close is consumed instead of leaking as a stray close; its inner
+            # text stays inline.
             if not is_point:
                 stack.append((None, key, True))
             continue
@@ -366,6 +489,7 @@ class XliffFilter(Filter):
         # copy is made (ten copies per allowed segment); export of a stored document is
         # not budgeted.
         budget = 10 * config.MAX_DOCUMENT_SEGMENTS
+        numbered = False
         for idx, src in enumerate(_source_elements(root)):
             # Protected units (translate="no", approved="yes", a final/signed-off target,
             # vendor locks) are skipped but keep their index; build() never writes them.
@@ -379,6 +503,7 @@ class XliffFilter(Filter):
                     "smaller files."
                 )
             text, inline_map = _tokenize_source(src)
+            numbered |= has_comment_or_pi(src)  # #794 gate: stamp the numbering
             text = text.strip()
             # Skip a whitespace-only <source> (an empty <source/> etc.): it carries no
             # translatable content, and in FULL_TEXT mode a blank unit becomes a blank
@@ -406,7 +531,7 @@ class XliffFilter(Filter):
             "format": "xliff",
             "units": [{"p_index": u.p_index, "text": u.text, "style": ""} for u in units],
         }
-        return ParseResult(skeleton=skeleton, units=units)
+        return ParseResult(skeleton=stamp_tokens(skeleton, numbered), units=units)
 
     def build(self, original: bytes, paragraph_texts: dict) -> bytes:
         from app.filters import cat_xliff

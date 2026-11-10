@@ -218,6 +218,25 @@ def test_hidden_condition_in_same_file_and_notes():
     print("  [hidden] hidden condition (declared in the file) and notes kept, never offered OK")
 
 
+def test_text_after_hidden_range_stays_after_it():
+    """#811.2: with a hidden range every visible run is tagged and there is no dominant run;
+    untyped text after the last run tag stays in the run closed just before it."""
+    conds = '\t<Condition Self="Condition/Print Only" Name="Print Only" Visible="false"/>\n'
+    body = psr(
+        csr("<Content>Visible </Content>")
+        + csr("<Content>SECRET</Content>", extra=' AppliedConditions="Condition/Print%20Only"')
+        + csr("<Content> tail</Content>")
+    )
+    data = icml(body, resources=conds)
+    (u,) = units(data)
+    assert u.text == "⟦r1⟧Visible ⟦/r1⟧⟦r2⟧ tail⟦/r2⟧", ascii(u.text)
+    new = "⟦r1⟧Sichtbar ⟦/r1⟧⟦r2⟧ Ende⟦/r2⟧]]"
+    out = FILT.build(data, {str(u.p_index): new})
+    txt = visible_text(root_of(out))
+    assert txt == "Sichtbar |SECRET| Ende]]", txt
+    print("  [hidden] text after a hidden range stays after it OK")
+
+
 def test_target_language_stamped():
     langs = (
         '\t<Language Self="Language/$ID/English%3a USA" Name="$ID/English: USA" Id="269"/>\n'
@@ -584,6 +603,7 @@ def main():
     test_nested_styles_one_segment_and_growth()
     test_specials_footnote_table_hyperlink()
     test_hidden_condition_in_same_file_and_notes()
+    test_text_after_hidden_range_stays_after_it()
     test_target_language_stamped()
     test_wcml_multi_story_article()
     test_wcml_smart_connection_v3_root()

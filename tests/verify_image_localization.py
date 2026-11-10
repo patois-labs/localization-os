@@ -368,6 +368,15 @@ def main() -> None:
     filt = get_filter("svg")
     rt = filt.build(SVG, {"0": "Summer Sale & more", "1": "Shop now"})
     assert rt == SVG, "non-text SVG content must round-trip byte-identically"
+    # #807: a namespace-prefixed script/style/metadata is as opaque as the bare one
+    pre = (
+        b'<svg xmlns="http://www.w3.org/2000/svg" xmlns:x="http://www.w3.org/2000/svg">'
+        b"<text>Hello</text><x:script>alert(document.domain)</x:script>"
+        b"<x:style>a { b: c }</x:style><x:metadata>meta words</x:metadata>"
+        b"<text><x:script>inside text</x:script></text></svg>"
+    )
+    ptexts = [u.text for u in filt.parse(pre).units]
+    assert ptexts == ["Hello"], ptexts
     print(
         "  svg: text-node swap e2e (glossary applied) + byte-identical "
         "round-trip for non-text content"

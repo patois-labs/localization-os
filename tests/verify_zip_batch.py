@@ -433,6 +433,211 @@ def section_f():
     print("  [F] .zip is not a registered document format")
 
 
+def _repack(data, *, replace=None, add=(), dup=()):
+    """The package with some parts replaced, extra members appended and the named parts
+    listed a second time (a duplicate central-directory name)."""
+    import warnings
+
+    replace = replace or {}
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(data)) as zf, zipfile.ZipFile(out, "w") as oz:
+        for info in zf.infolist():
+            oz.writestr(info.filename, replace.get(info.filename, zf.read(info)))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            for name in dup:
+                oz.writestr(name, replace.get(name, zf.read(name)))
+            for name, body in add:
+                oz.writestr(name, body)
+    return out.getvalue()
+
+
+def _office_packages():
+    import docx
+
+    from tests.fixtures.formats.pptx.make_pptx import make_pptx
+    from tests.fixtures.formats.xlsx.make_xlsx_objects import make_workbook
+
+    d = docx.Document()
+    d.add_paragraph("Hello world.")
+    buf = io.BytesIO()
+    d.save(buf)
+    return {
+        "docx": (buf.getvalue(), "word/document.xml"),
+        "pptx": (make_pptx(), "ppt/slides/slide1.xml"),
+        "xlsx": (make_workbook(), "xl/sharedStrings.xml"),
+    }
+
+
+def _must_refuse(fn, needle, what):
+    try:
+        fn()
+    except InputLimitError as exc:
+        assert needle in str(exc), (what, needle, str(exc))
+        return
+    raise AssertionError(f"{what}: expected refusal containing {needle!r}")
+
+
+def section_g():
+    """#812.2 batch colons and device names; #814.2-4 Office/XLIFF-package archive safety."""
+    from app.filters import get_filter, zip_guard
+
+    # 812.2: colon and Windows device names refused in the zip BATCH, any case/extension
+    for bad in (
+        "docs/a.md:evil.md",
+        "a:b.md",
+        "CON/a.md",
+        "docs/aux.md",
+        "Nul.txt",
+        "docs/COM1.md",
+        "lpt9.json",
+        "docs/Com\u00b9.md",
+        "LPT\u00b3/x.md",
+        "con .md",
+        "con.tar.md",
+    ):
+        _refused(_zip([("ok.md", MD), (bad, MD)]), "unsafe path")
+        assert zip_batch.safe_member_path(bad) is None, bad
+    for ok in ("docs/console.md", "COM0.md", "COM10.md", "word/icon.md", "LPT.md", "a/connect.md"):
+        assert zip_batch.safe_member_path(ok) == ok, ok
+    # Office part names such as word/con.xml stay allowed outside the batch
+    pk = _office_packages()["docx"][0]
+    zip_guard.check(_repack(pk, add=[("word/con.xml", b"<x/>"), ("word/aux.xml", b"<x/>")]), "DOCX")
+
+    # 814.2: names that leave the package are refused (Office and XLIFF packages)
+    for fmt, (pkg, _part) in _office_packages().items():
+        f = get_filter(fmt)
+        for bad in ("../evil.xml", "..\\evil.xml", "/abs/evil.xml", "C:/evil.xml", "a/b:c.xml"):
+            _must_refuse(
+                lambda f=f, pkg=pkg, bad=bad: f.parse(_repack(pkg, add=[(bad, b"x")])),
+                "unsafe path",
+                fmt + bad,
+            )
+    with open(os.path.join("tests", "fixtures", "formats", "xlzpack", "content.xlf"), "rb") as fh:
+        ws = fh.read()
+    for fmt in ("xlz", "mqxlz"):
+        for bad in ("../../evil.xlf", "/evil.xlf", "..\\evil.xlf", "c:evil.xlf"):
+            pkg = _zip([(bad, ws), ("ok.xlf", ws)])
+            f = get_filter(fmt)
+            _must_refuse(lambda f=f, pkg=pkg: f.parse(pkg), "unsafe path", fmt + bad)
+            _must_refuse(
+                lambda f=f, pkg=pkg: f.build(pkg, {"0": "x"}), "unsafe path", fmt + bad + " build"
+            )
+
+    # 814.3: duplicate part names refused for every Office format
+    for fmt, (pkg, part) in _office_packages().items():
+        _must_refuse(
+            lambda fmt=fmt, pkg=pkg, part=part: get_filter(fmt).parse(_repack(pkg, dup=[part])),
+            "duplicate",
+            fmt,
+        )
+        # gate: Bilingua parity (bilingua_zip read_zip / safe_name): ASCII-case twins,
+        # `./` and slash-direction twins, C1 controls and dots-only components
+        f = get_filter(fmt)
+        for extra in (part.upper(), "./" + part, part.replace("/", "\\")):
+            p = _repack(pkg, add=[(extra, b"<x/>")])
+            _must_refuse(lambda f=f, p=p: f.parse(p), "duplicate", fmt + " twin " + extra)
+        for bad in ("word/a\x85.xml", "word/.../x.xml", "word/ ./x.xml"):
+            p = _repack(pkg, add=[(bad, b"<x/>")])
+            _must_refuse(lambda f=f, p=p: f.parse(p), "unsafe path", fmt + " " + repr(bad))
+    # non-ASCII case is not folded (Bilingua folds ASCII only)
+    zip_guard.check(_zip([("Ä.md", MD), ("ä.md", MD)]), "EPUB file")
+
+    # 814.4: a DTD in a DOCX part is refused like PPTX and XLSX
+    pkg, part = _office_packages()["docx"]
+    body = zipfile.ZipFile(io.BytesIO(pkg)).read(part)
+    head, rest = body.split(b"?>", 1)
+    evil = head + b"?>" + b'<!DOCTYPE l [<!ENTITY a "b">]>' + rest
+    bad_pkg = _repack(pkg, replace={part: evil})
+    _must_refuse(lambda: get_filter("docx").parse(bad_pkg), "document type", "docx")
+    _must_refuse(
+        lambda: get_filter("docx").build(bad_pkg, {"0": "x"}), "document type", "docx build"
+    )
+    print("  [G] batch colon/device names; Office+XLIFF zip slip, duplicates, DOCX DTD refused")
+
+
+def section_h():
+    """#814.5/6: a bad docProps/core.xml date no longer refuses the workbook."""
+    import logging
+
+    from app.filters import get_filter
+    from tests.fixtures.formats.xlsx.make_xlsx_objects import make_workbook
+
+    pkg = make_workbook()
+    core = (
+        b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        b'<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/'
+        b'metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" '
+        b'xmlns:dcterms="http://purl.org/dc/terms/" '
+        b'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>X</dc:creator>'
+        b'<dcterms:created xsi:type="dcterms:W3CDTF">not a date</dcterms:created>'
+        b'<dcterms:modified xsi:type="dcterms:W3CDTF">31/12/2025 10:00</dcterms:modified>'
+        b"</cp:coreProperties>"
+    )
+    bad = _repack(pkg, replace={"docProps/core.xml": core})
+    f = get_filter("xlsx")
+    good_units = [u.text for u in f.parse(pkg).units]
+    assert good_units, "fixture must parse"
+    assert [u.text for u in f.parse(bad).units] == good_units
+    out = f.build(bad, {"0": "DE x"})
+    assert zipfile.ZipFile(io.BytesIO(out)).read("docProps/core.xml") == core, "core part kept"
+    # a genuinely broken workbook still refuses, and the cause is logged (814.6)
+    broken = _repack(pkg, replace={"xl/workbook.xml": b"<workbook"})
+    records = []
+
+    class H(logging.Handler):
+        def emit(self, rec):
+            records.append(rec.getMessage())
+
+    h = H()
+    log = logging.getLogger("app.filters.xlsx_filter")
+    log.addHandler(h)
+    try:
+        _must_refuse(lambda: f.parse(broken), "invalid spreadsheet XML", "broken workbook")
+    finally:
+        log.removeHandler(h)
+    # gate #814.6: the broken part is named when it is known
+    _must_refuse(lambda: f.parse(broken), "XML in xl/workbook.xml", "part named")
+    print("  [H] bad core date read; broken workbook still refused;", len(records), "log line(s)")
+
+
+def section_i():
+    """Bilingua parity: an encrypted member or a symlink member refuses every package."""
+    from app.filters import zip_guard
+
+    def zipped(members):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for info, body in members:
+                zf.writestr(info, body)
+        return buf.getvalue()
+
+    plain = zipfile.ZipInfo("doc/a.xml")
+    plain.create_system = 3
+    plain.external_attr = 0o100644 << 16
+    zip_guard.check(zipped([(plain, b"<a/>")]), "ZIP archive")  # a normal unix member passes
+    win = zipfile.ZipInfo("doc/w.xml")
+    win.create_system = 0
+    zip_guard.check(zipped([(win, b"<a/>")]), "ZIP archive")
+
+    link = zipfile.ZipInfo("doc/link")
+    link.create_system = 3
+    link.external_attr = 0o120777 << 16
+    _must_refuse(
+        lambda: zip_guard.check(
+            zipped([(plain, b"<a/>"), (link, b"../../etc/passwd")]), "DOCX file"
+        ),
+        "symbolic link",
+        "symlink member",
+    )
+
+    raw = bytearray(zipped([(plain, b"<a/>")]))
+    cd = raw.rindex(b"PK\x01\x02")
+    raw[cd + 8] |= 1  # general purpose flag bit 0 in the central directory entry: encrypted
+    _must_refuse(lambda: zip_guard.check(bytes(raw), "XLSX file"), "encrypted", "encrypted member")
+    print("  [I] encrypted and symlink members refused; plain unix and DOS members pass")
+
+
 def main():
     init_db()
     client = TestClient(app)
@@ -442,6 +647,9 @@ def main():
     section_d(client)
     section_e()
     section_f()
+    section_g()
+    section_h()
+    section_i()
     print("ZIP BATCH OK")
 
 

@@ -142,7 +142,55 @@ def test_records_view():
     print("  [records] key, value, comment and unit_index exposed OK")
 
 
+def test_nul_refused_813():
+    """#813.5: a NUL in a translation is refused, never written into the file."""
+    f = get_filter("strings")
+    data = b'"a" = "Hello";\n'
+    try:
+        f.build(data, {"0": "x" + chr(0) + "y"})
+    except ValueError as exc:
+        assert "NUL" in str(exc), exc
+    else:
+        raise AssertionError("a NUL in a .strings translation must be refused")
+    print("  [813.5] .strings refuses a NUL OK")
+
+
+def test_nul_export_refusal_813():
+    """#813.5 gate: at export the NUL refusal is the clean unreadable-target answer that
+    names the problem (an HTTP 409), not the generic "contact support" rebuild failure."""
+    from sqlmodel import Session, select
+
+    from app.db import engine, init_db
+    from app.models import Document, Project, Segment, TargetLocale
+    from app.services.export import ExportUnreadableBlob, build_translated_file
+    from app.services.ingest import ingest_document
+
+    init_db()
+    with Session(engine) as s:
+        p = Project(name="nul813", org_id=1, source_locale="en-US", default_provider="mock")
+        s.add(p)
+        s.commit()
+        s.refresh(p)
+        s.add(TargetLocale(project_id=p.id, locale="de-DE"))
+        s.commit()
+        doc = ingest_document(s, p, "a.strings", b'"a" = "Hello";\n', "segmented")
+        seg = s.exec(select(Segment).where(Segment.document_id == doc.id)).first()
+        seg.target_text = "Hal" + chr(0) + "lo"
+        seg.status = "translated"
+        s.add(seg)
+        s.commit()
+        try:
+            build_translated_file(s, s.get(Document, doc.id), "de-DE")
+        except ExportUnreadableBlob as exc:
+            assert "NUL" in str(exc), exc
+        else:
+            raise AssertionError("a NUL translation must refuse the .strings export")
+    print("  [813.5 gate] .strings export with a NUL is a clean refusal OK")
+
+
 def main():
+    test_nul_refused_813()
+    test_nul_export_refusal_813()
     test_grammar_utf8()
     test_utf16_with_bom_round_trip()
     test_braces_wrapper_and_dictionary_form()

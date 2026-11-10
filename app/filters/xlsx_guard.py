@@ -60,8 +60,11 @@ def _parse(zf, path, label, start, end=lambda name: None, characters=lambda text
         raise
     except Exception as exc:
         # Encoding, parser, ZIP and callback errors must be safe at stored export too.
+        # #814.6: name the part (as PPTX and Bilingua do); the name passed zip_guard.
+        part = getattr(path, "filename", path)
+        where = f" in {part[:120]}" if isinstance(part, str) and part else ""
         raise InputLimitError(
-            f"This {label} has invalid spreadsheet XML. Save it again in Excel."
+            f"This {label} has invalid spreadsheet XML{where}. Save it again in Excel."
         ) from exc
 
 

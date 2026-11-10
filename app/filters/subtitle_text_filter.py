@@ -41,14 +41,16 @@ from app.filters.base import (
     TextUnit,
     check_segment_cap,
     check_unit_texts,
-    decode_text_lossless,
+    decode_text_bom,
     encode_text_lossless,
     note_source_encoding,
-    read_text_upload,
+    read_text_bom,
     register,
+    stamp_text_bom,
 )
+from app.filters.scc_filter import CaptionTargetError
+from app.filters.token_lit import code_tokens
 from app.services.segment import (
-    _PLACEHOLDER_RE,
     ph_close,
     ph_open,
     ph_point,
@@ -115,7 +117,7 @@ def sniff_sub(data: bytes) -> str:
             "This .sub file is a VobSub image subtitle (binary, paired with a .idx file), "
             "not text. Convert it to SRT with an OCR tool, then upload the .srt."
         )
-    text = decode_text_lossless(raw, sig=True)
+    text = decode_text_bom(raw)
     micro = sv = sv1 = 0
     seen = 0
     for _s, _e, line in _lines(text):
@@ -210,7 +212,8 @@ def _microdvd_slots(text: str) -> list[dict]:
             continue
         body = text[start:end]
         first, last = m.group(2), m.group(3)
-        if first in ("0", "1") and last in ("0", "1") and _FPS_TEXT.match(body):
+        fps_cue = first in ("0", "1") and last in ("0", "1")
+        if fps_cue and _FPS_TEXT.match(body):
             continue  # {1}{1}23.976 frame-rate declaration
         # Codes that open the cue apply to its first line (or, uppercase, the whole cue):
         # they stay verbatim OUTSIDE the unit so a translation can never move them. In a
@@ -232,7 +235,17 @@ def _microdvd_slots(text: str) -> list[dict]:
         if not strip_placeholders(unit).strip():
             continue  # codes only, nothing to translate
         slots.append(
-            {"start": start, "end": end, "text": unit, "map": imap, "joiner": "|", "heads": heads}
+            {
+                "start": start,
+                "end": end,
+                "text": unit,
+                "map": imap,
+                "joiner": "|",
+                "heads": heads,
+                "fps": fps_cue,
+                "pre": text[body_start:start],
+                "size": end - start,
+            }
         )
         check_segment_cap(len(slots))
     return slots
@@ -270,18 +283,24 @@ def _microdvd_unit(body: str) -> tuple[dict, str, set]:
     for line in lines:
         out: list[str] = []
         opened: list[int] = []
+        # words_after[i]: some text at or after index i has a word (a suffix flag, so a run of
+        # codes never re-joins the rest of the line; #799.2)
+        words_after = [False] * (len(line) + 1)
+        for i in range(len(line) - 1, -1, -1):
+            words_after[i] = words_after[i + 1] or (not line[i][0] and bool(line[i][1].strip()))
+        words_before = False
         k = 0
         while k < len(line):
             if not line[k][0]:
                 out.append(line[k][1])
+                words_before = words_before or bool(line[k][1].strip())
                 k += 1
                 continue
             j = k
             while j < len(line) and line[j][0]:
                 j += 1
             run = [s for _c, s in line[k:j]]
-            rest = "".join(s for c, s in line[j:] if not c)
-            styles = [code for code in run if code[1].islower()] if rest.strip() else []
+            styles = [code for code in run if code[1].islower()] if words_after[j] else []
             for code in run:
                 if code not in styles:
                     n += 1
@@ -291,7 +310,7 @@ def _microdvd_unit(body: str) -> tuple[dict, str, set]:
                 n += 1
                 imap[f"g{n}"] = "".join(styles)
                 imap[f"/g{n}"] = ""
-                if not strip_placeholders("".join(out)).strip():
+                if not words_before:
                     heads.add(str(n))
                 out.append(ph_open("g", n))
                 opened.append(n)
@@ -313,7 +332,8 @@ def _microdvd_text(t: str, slot: dict) -> str:
     tolerance of the other filters, never a 409)."""
     imap = slot["map"]
     pairs = {key[1:] for key in imap if key[:1] == "g"}
-    matches = list(_PLACEHOLDER_RE.finditer(t))
+    # #814.1: a token that names no code of the unit is text
+    matches = code_tokens(t, {key.lstrip("/g") for key in imap})  # points: "2"; pairs: "g1"
     opens: dict[str, int] = {}
     closes: dict[str, int] = {}
     for k, m in enumerate(matches):
@@ -327,22 +347,45 @@ def _microdvd_text(t: str, slot: dict) -> str:
             closes.setdefault(name[1:], k)
     live = {num: (opens[num], closes[num]) for num in closes}
     empty = set()  # pairs MT emptied: no style code around nothing
+    # prefix count of text pieces with words (pieces are separated by tokens, so piece by
+    # piece answers "is there a word between the open and the close" without rescanning the
+    # text of every pair; #799.2)
+    ends = [0] + [m.end() for m in matches]
+    starts = [m.start() for m in matches] + [len(t)]
+    wordy = [0]
+    for i in range(len(matches) + 1):
+        piece = t[ends[i] : starts[i]]
+        wordy.append(wordy[-1] + (1 if strip_placeholders(piece).strip() else 0))
     for num, (a, b) in live.items():
-        if not strip_placeholders(t[matches[a].end() : matches[b].start()]).strip():
+        if wordy[b + 1] - wordy[a + 1] == 0:
             empty.add(num)
+    budget = 16 * slot.get("size", 0) + 65536
+    written = 0  # style codes this build writes itself (a code of the translator's is not one)
+    emitted = 0  # characters of re-emitted style codes
+    open_len = 0
     heads = slot.get("heads", set())
     out: list[str] = [""]  # out[head]: the style codes that open the current line
     head = 0
     open_pairs: list[str] = []
 
     def text(s: str) -> None:
-        nonlocal head
+        nonlocal head, written, emitted
         for j, seg in enumerate(re.split(r"\r\n|\r|\n", s)):
             if j:
+                emitted += open_len
+                if emitted > budget:
+                    raise CaptionTargetError(
+                        "the translation breaks lines inside so many open style codes that the "
+                        "cue would grow past its size bound"
+                    )
                 out.append("\n")
                 head = len(out)
                 out.append("".join(imap[f"g{num}"] for num in open_pairs))
+                written += sum(ncodes(imap[f"g{num}"]) for num in open_pairs)
             out.append(seg)
+
+    def ncodes(code: str) -> int:
+        return len(_MDVD_CODE.findall(code))
 
     pos = 0
     for k, m in enumerate(matches):
@@ -351,7 +394,9 @@ def _microdvd_text(t: str, slot: dict) -> str:
         inner = m.group(0)[1:-1]
         num = inner.lstrip("/")[1:]
         if inner[:1] == "x":
-            out.append(imap.get(inner[1:], ""))  # unknown tokens are dropped
+            code = imap.get(inner[1:], "")  # a point token for a pair code is dropped
+            out.append(code)
+            written += ncodes(code)
         elif num not in live or num in empty or k not in live[num]:
             continue  # not part of a pair written whole: dropped
         elif inner[:1] == "g":
@@ -359,11 +404,23 @@ def _microdvd_text(t: str, slot: dict) -> str:
                 out[head] += imap[inner]
             else:
                 out.append(imap[inner])
+            written += ncodes(imap[inner])
+            open_len += len(imap[inner])
             open_pairs.append(num)
         else:
-            open_pairs.remove(num)
+            if open_pairs and open_pairs[-1] == num:
+                open_pairs.pop()
+            else:
+                open_pairs.remove(num)
+            open_len -= len(imap[f"g{num}"])
     text(t[pos:])
-    return "".join(out).strip()
+    result = "".join(out).strip()
+    if ncodes(result) != written:
+        raise CaptionTargetError(
+            "the translation holds a MicroDVD style code of its own ({y:i} and the like); "
+            "style codes can only come from the source cue"
+        )
+    return result
 
 
 def _slots(text: str, dialect: str) -> list[dict]:
@@ -379,11 +436,49 @@ def _render(translation: str, slot: dict, dialect: str) -> str:
         t = _microdvd_text(t, slot)
     # A line break never becomes a blank line (which would end an SBV/SubViewer cue) or
     # a raw newline (which would end a MicroDVD cue line).
-    return re.sub(r"[ \t]*(?:\r\n|\r|\n)+[ \t]*", lambda _m: slot["joiner"], t)
+    joiner = slot["joiner"]
+    if dialect != "microdvd" and ("\n" in joiner or "\r" in joiner):
+        # A line of only Unicode spaces would read as a blank line and end the cue (#799.4):
+        # it is left out, as Bilingua's render_block does.
+        pieces = (p.strip(" \t") for p in _NEWLINE_RE.split(t))
+        r = joiner.join(p for p in pieces if p.strip())
+    else:
+        r = re.sub(r"[ \t]*(?:\r\n|\r|\n)+[ \t]*", lambda _m: joiner, t)
+    # #799.1: refuse a cue that would read back differently from what was written.
+    if dialect == "microdvd":
+        # Joining the lines with "|" can close a code the line break had split (`{y:a<newline>b}`
+        # reads back as the live code `{y:a|b}`): the cue must hold exactly the codes the build
+        # wrote itself (Bilingua counts after the join too).
+        if len(_MDVD_CODE.findall(r)) != len(_MDVD_CODE.findall(t)):
+            raise CaptionTargetError(
+                "the translation holds text that reads as a MicroDVD control code ({y:i}, "
+                "{c:$..}) once its line breaks are written as |"
+            )
+        bare = strip_placeholders(_MDVD_CODE.sub("", r)).replace("|", "")
+        if not bare.strip():
+            raise CaptionTargetError(
+                "the translation is empty (nothing but control codes and line breaks), so the "
+                "cue would drop out of the file"
+            )
+        if slot.get("fps") and _FPS_TEXT.match(slot.get("pre", "") + r):
+            raise CaptionTargetError(
+                "the translation reads as a frame rate in a {0}{1} or {1}{1} cue, which the "
+                "file would take as a declaration"
+            )
+        return r
+    probe = _SV_BR.sub("\n", r) if dialect == "subviewer" else r
+    if not probe.replace(joiner, "").strip():
+        raise CaptionTargetError("the translation is empty, so the cue would drop out of the file")
+    for line in _NEWLINE_RE.split(r):
+        if _TIME_PAIR.match(line):
+            raise CaptionTargetError("a line of the translation reads as a timecode")
+        if dialect == "subviewer" and _MDVD_CUE.match(line):
+            raise CaptionTargetError("a line of the translation reads as a MicroDVD cue")
+    return r
 
 
 def _parse(data: bytes, fmt: str, dialect: str) -> ParseResult:
-    text, enc = read_text_upload(data, sig=True)  # #509 refusal + #571 line budget
+    text, enc = read_text_bom(data)  # #509 refusal + #571 line budget
     slots = _slots(text, dialect)
     check_unit_texts([s["text"] for s in slots])
     units = [
@@ -394,12 +489,13 @@ def _parse(data: bytes, fmt: str, dialect: str) -> ParseResult:
         "dialect": dialect,
         "units": [{"p_index": u.p_index, "text": u.text, "style": ""} for u in units],
     }
+    stamp_text_bom(skeleton, data)  # #799.4: a BOM before non-UTF-8 bytes is read as a mark
     return ParseResult(skeleton=note_source_encoding(skeleton, enc), units=units)
 
 
 def _build(original: bytes, paragraph_texts: dict, dialect: str) -> bytes:
     raw = bytes(original)
-    text = decode_text_lossless(raw, sig=True)
+    text = decode_text_bom(raw)
     out: list[str] = []
     pos = 0
     for i, slot in enumerate(_slots(text, dialect)):
@@ -408,7 +504,12 @@ def _build(original: bytes, paragraph_texts: dict, dialect: str) -> bytes:
         if new is None or new == slot["text"]:
             out.append(text[slot["start"] : slot["end"]])
         else:
-            out.append(_render(new, slot, dialect))
+            try:
+                out.append(_render(new, slot, dialect))
+            except CaptionTargetError as exc:
+                raise CaptionTargetError(
+                    f"Cue {i + 1} was not exported: {exc}. Edit that translation and export again."
+                ) from None
         pos = slot["end"]
     out.append(text[pos:])
     body = encode_text_lossless("".join(out))

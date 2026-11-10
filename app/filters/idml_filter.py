@@ -82,6 +82,7 @@ from app.filters.base import (
     check_segment_cap,
     register,
 )
+from app.filters.token_lit import code_tokens
 from app.services.segment import _PLACEHOLDER_RE, ph_close, ph_open, ph_point
 
 IDML_MIMETYPE = "application/vnd.adobe.indesign-idml-package"
@@ -546,14 +547,18 @@ def _story_paras(raw: bytes, name: str, hidden: set, budget: _Budget | None):
 # --------------------------------------------------------------------------- rebuild
 def _pieces(text: str, tok: _Tok) -> list:
     """Parse translated text into pieces (run, wrap_chain, kind, payload), validating
-    tokens against the source registry: unknown or repeated ids and stray closes are
-    dropped (the QA tag check flags the segment); unclosed opens close at the end."""
+    tokens against the source registry: repeated ids and stray closes are dropped (the
+    QA tag check flags the segment); unclosed opens close at the end. A token that names
+    no code of the unit is text (#814.1)."""
     pieces: list = []
     used: set = set()
     stack: list = []  # (key, kind, obj) ; kind "r" | "g" | "phantom"
+    last = [None]  # the run tag closed most recently (#811.2)
 
     def ctx():
-        run = tok.dominant
+        # Untagged text after a run tag stays in that run (a hidden range between runs
+        # must not pull the text in front of it); a dominant run still wins.
+        run = tok.dominant if tok.dominant is not None else last[0]
         chain = []
         for key, kind, obj in stack:
             if kind == "r":
@@ -570,14 +575,16 @@ def _pieces(text: str, tok: _Tok) -> list:
             pieces.append((run, chain, "t", s))
 
     pos = 0
-    for m in _PLACEHOLDER_RE.finditer(text):
+    for m in code_tokens(text, tok.reg):
         add_text(text[pos : m.start()])
         pos = m.end()
         inner = m.group(0)[1:-1]
         if inner.startswith("/"):
             key = re.sub(r"^/[a-z]?", "", inner)
             if stack and stack[-1][0] == key:
-                stack.pop()
+                _k, kind, obj = stack.pop()
+                if kind == "r":
+                    last[0] = obj
             continue
         key = re.sub(r"^[a-z]?", "", inner, count=1)
         entry = tok.reg.get(key)
@@ -1022,22 +1029,45 @@ def _indesign_language(designmap, tag: str) -> str | None:
     return None
 
 
+def _nested_ranges(el) -> list:
+    """The ranges nested under `el` that the stamping walks reach: directly, or through
+    wrappers only (never through a point element)."""
+    out: list = []
+    for child in el:
+        if not isinstance(child.tag, str):
+            continue
+        if _is_range(child):
+            out.append(child)
+        elif _is_wrapper(child):
+            out.extend(c for c in child.iter() if _is_range(c) and _wrapped_only(c, child))
+    return out
+
+
+def _stamp_walk(ranges: list) -> list:
+    """The rebuilt ranges and the ranges nested under them, each ONCE (#787). A range
+    under alternating wrappers and ranges is reachable from every range above it, so a
+    walk without the seen set is exponential in the nesting (a crafted story stalls an
+    export worker)."""
+    seen: set = set()
+    out: list = []
+    stack = list(ranges)
+    while stack:
+        el = stack.pop()
+        if el in seen:
+            continue
+        seen.add(el)
+        out.append(el)
+        stack.extend(r for r in _nested_ranges(el) if r not in seen)
+    return out
+
+
 def _stamp(ranges: list, language: str) -> None:
     """AppliedLanguage on every range that now holds translated text, nested ranges
     (inside a hyperlink or XML tag) included. Never descends into a point element
     (footnote, table, note, hidden text, anchored frame): their ranges are other
     paragraphs, stamped only if they are translated themselves."""
-    stack = list(ranges)
-    while stack:
-        el = stack.pop()
+    for el in _stamp_walk(ranges):
         el.set("AppliedLanguage", language)
-        for child in el:
-            if not isinstance(child.tag, str):
-                continue
-            if _is_range(child):
-                stack.append(child)
-            elif _is_wrapper(child):
-                stack.extend(c for c in child.iter() if _is_range(c) and _wrapped_only(c, child))
 
 
 # Right-to-left targets (B-rtl, decision 20). ParagraphDirection and CharacterDirection
@@ -1063,25 +1093,18 @@ def _stamp_rtl(ranges: list) -> None:
     Unicode bidi rules and the paragraph direction decide. A range with no paragraph range
     of its own (bare text directly in a story or cell, rare) is left as it is."""
     paras: list = []
-    stack = list(ranges)
-    while stack:
-        el = stack.pop()
+    seen_paras: set = set()
+    for el in _stamp_walk(ranges):
         if el.get("CharacterDirection") == "LeftToRightDirection":
             el.set("CharacterDirection", "DefaultDirection")
         up = el.getparent()
         while up is not None and _local(up) not in _PARA_STOPS:
             if _local(up) == "ParagraphStyleRange":
-                if not any(up is p for p in paras):
+                if up not in seen_paras:
+                    seen_paras.add(up)
                     paras.append(up)
                 break
             up = up.getparent()
-        for child in el:
-            if not isinstance(child.tag, str):
-                continue
-            if _is_range(child):
-                stack.append(child)
-            elif _is_wrapper(child):
-                stack.extend(c for c in child.iter() if _is_range(c) and _wrapped_only(c, child))
     for psr in paras:
         psr.set("ParagraphDirection", "RightToLeftDirection")
         composer = psr.get("Composer") or ""

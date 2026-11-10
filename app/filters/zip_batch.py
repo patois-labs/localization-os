@@ -45,6 +45,7 @@ NAME_SEPARATOR = "__"
 _JUNK_NAMES = {".ds_store", "thumbs.db", "desktop.ini"}
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+_DEVICE_NAMES = frozenset({"CON", "PRN", "AUX", "NUL"})
 _S_IFMT = 0o170000
 _S_IFLNK = 0o120000
 
@@ -74,14 +75,25 @@ def is_batch_upload(filename: str) -> bool:
     return "." in name and name.rsplit(".", 1)[-1].lower() in BATCH_EXTS
 
 
+def is_device_name(part: str) -> bool:
+    """A Windows device name as a path component (#812.2): CON, PRN, AUX, NUL, COM1-9,
+    LPT1-9 and the superscript COM/LPT 1-3 forms, any case, with or without an extension
+    (Windows opens the device, not a file). Same rule as Bilingua's batch.rs."""
+    stem = part.split(".", 1)[0].rstrip(" ").upper()
+    if stem in _DEVICE_NAMES:
+        return True
+    return stem[:3] in ("COM", "LPT") and len(stem) == 4 and stem[3] in "123456789¹²³"
+
+
 def safe_member_path(raw: str) -> str | None:
     """The normalised relative path of an archive member, or None when it is unsafe
-    (absolute, drive-qualified, `..`, control characters, empty). Used at upload AND
+    (absolute, drive-qualified, a colon anywhere, `..`, control characters, a Windows
+    device name in any component, empty). Used at upload AND
     again at export, so a stored path can never write outside its locale folder."""
     if not isinstance(raw, str) or not raw or _CONTROL_RE.search(raw):
         return None
     p = raw.replace("\\", "/")
-    if p.startswith("/") or _DRIVE_RE.match(p):
+    if p.startswith("/") or _DRIVE_RE.match(p) or ":" in p:
         return None
     parts = [c for c in p.split("/") if c not in ("", ".")]
     if not parts or any(c == ".." for c in parts):
@@ -89,6 +101,9 @@ def safe_member_path(raw: str) -> str | None:
     if any(c != c.strip() or c.endswith(".") for c in parts):
         # Windows silently drops trailing dots/spaces, which would let two members
         # collide on extraction; refuse rather than guess.
+        return None
+    if any(is_device_name(c) for c in parts):
+        # #812.2: the delivered archive is unpacked on Windows, where CON/a.md opens a device
         return None
     return "/".join(parts)
 
@@ -114,7 +129,8 @@ def expand(data: bytes, archive: str = "upload.zip") -> ZipBatch:
         raise NotAZipArchive("This .zip file is not a readable ZIP archive.") from exc
     # Bomb, member-count and forged-size checks over the central directory and the real
     # compressed streams, BEFORE any member is read.
-    zip_guard.check(data, label="ZIP archive")
+    # (repeats are handled below, per member, so the batch can list them as skipped)
+    zip_guard.check(data, label="ZIP archive", duplicates=False, links=False)
     batch = ZipBatch(batch_id=uuid.uuid4().hex[:12], archive=archive)
     seen: set[str] = set()
     with zf:
@@ -126,8 +142,8 @@ def expand(data: bytes, archive: str = "upload.zip") -> ZipBatch:
             if path is None:
                 raise InputLimitError(
                     "This ZIP archive contains an unsafe path "
-                    f"({_CONTROL_RE.sub('?', raw)[:120]!r}): absolute, drive-qualified or "
-                    "climbing out with '..'. It was not processed."
+                    f"({_CONTROL_RE.sub('?', raw)[:120]!r}): absolute, drive-qualified, with a "
+                    "colon, a Windows device name, or climbing out with '..'. It was not processed."
                 )
             leaf = path.rsplit("/", 1)[-1]
             ext = _ext(path)

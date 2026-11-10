@@ -11,7 +11,7 @@ import re
 
 from lxml import etree
 
-from app.filters.base import Filter, ParseResult, register
+from app.filters.base import Filter, ParseResult, legacy_read, note_new_read, register
 from app.filters.xml_resource_common import (
     _LEX,
     ResourceRecord,
@@ -24,6 +24,7 @@ from app.filters.xml_resource_common import (
     plural_categories,
     render_inner,
     split_ws,
+    with_newlines,
 )
 
 # --- Android string resources (res/values*/strings.xml): <string>, <plurals>, <string-array>. ---
@@ -274,6 +275,7 @@ class ResxFilter(XmlResourceFilter):
     fmt = "resx"
     exts = ("resw",)
     what = "This RESX file"
+    newline_rule = "all"  # #813.6: a translation's breaks follow an all-CRLF file
 
     def slots(self, root) -> list[Slot]:
         if local(root) != "root":
@@ -315,10 +317,32 @@ def _no(v) -> bool:
     return (v or "").strip().lower() in ("no", "false")
 
 
+def _wxl_runs(el) -> list[str]:
+    """The runs of text of an element whose children are comments / PIs only."""
+    return [el.text or "", *[c.tail or "" for c in el]]
+
+
+_WXL_NOTE = re.compile(r"<!\[CDATA\[.*?\]\]>|<!--.*?-->|<\?.*?\?>", re.DOTALL)
+
+
+def _wxl_gaps(text: str, start: int, end: int) -> list[tuple[int, int]]:
+    """Character spans of the text runs between the comments / PIs of an element's content."""
+    gaps: list[tuple[int, int]] = []
+    at = start
+    for m in _WXL_NOTE.finditer(text, start, end):
+        if m.group(0).startswith("<![CDATA["):
+            continue
+        gaps.append((at, m.start()))
+        at = m.end()
+    gaps.append((at, end))
+    return gaps
+
+
 @register
 class WxlFilter(XmlResourceFilter):
     fmt = "wxl"
     what = "This WiX localization file"
+    newline_rule = "first"  # #813.6: element text takes the file's line break
 
     def slots(self, root) -> list[Slot]:
         out: list[Slot] = []
@@ -332,7 +356,20 @@ class WxlFilter(XmlResourceFilter):
                 if el.get("Value") is not None:
                     out.append(Slot(el, el, rec, src_attr="Value", dst_attr="Value", skip=skip))
                 else:
-                    out.append(Slot(el, el, rec, skip=skip or len(el) > 0))
+                    slot = Slot(el, el, rec, skip=skip or len(el) > 0)
+                    if not skip and len(el) > 0 and not legacy_read():
+                        # g13: comments (WiX loc tools write `<!-- _locID_text=.. -->` in every
+                        # string) do not make a mixed string. One run of text beside them is the
+                        # value; an element child, or text on both sides, still skips it.
+                        # Stamped (read_gen): a document stored before keeps skipping them.
+                        runs = _wxl_runs(el)
+                        if not any(isinstance(c.tag, str) for c in el):
+                            live = [i for i, r in enumerate(runs) if r.strip()]
+                            if len(live) == 1:
+                                slot.skip = False
+                                slot.extra["run"] = live[0]
+                                note_new_read()
+                    out.append(slot)
             elif tag == "UI" and el.get("Text") is not None:
                 key = ".".join(x for x in (el.get("Dialog"), el.get("Control")) if x) or (
                     el.get("Id") or ""
@@ -340,6 +377,30 @@ class WxlFilter(XmlResourceFilter):
                 rec = ResourceRecord(key, "")
                 out.append(Slot(el, el, rec, src_attr="Text", dst_attr="Text"))
         return out
+
+    def source_text(self, slot: Slot):
+        run = slot.extra.get("run")
+        if run is not None:
+            return _wxl_runs(slot.src)[run], {}
+        return super().source_text(slot)
+
+    def write(self, slot: Slot, new: str, sp: Splicer) -> None:
+        run = slot.extra.get("run")
+        if run is None:
+            return super().write(slot, new, sp)
+        raw, _ = self.source_text(slot)
+        lead, core, trail = split_ws(raw)
+        if new == core:
+            return  # unchanged: the original bytes stay
+        span = sp.of(slot.dst)
+        gaps = _wxl_gaps(sp.text, span.stag_end, span.etag_start)
+        if len(gaps) != len(_wxl_runs(slot.src)):
+            raise ValueError("could not map the wxl string's text runs")
+        start, end = gaps[run]
+        body = with_newlines(lead + new + trail, self.newline_for(sp) or chr(10))
+        cdata = "<![CDATA[" in sp.text[start:end]
+        inner = render_inner(slot.dst, body, {}, self.escape(slot), self.is_point, cdata)
+        sp.edits.append((start, end, inner))
 
     def localize(self, root, slots, paragraph_texts, sp: Splicer, locale):
         from app.filters import a11y

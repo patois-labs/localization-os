@@ -34,7 +34,7 @@ import zipfile
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(_ROOT)
 sys.path.insert(0, _ROOT)
-from tests._bootstrap import init_env
+from tests._bootstrap import bilingua_switch_off, init_env
 
 init_env("loctms_xlsxinplace_")
 
@@ -253,7 +253,9 @@ def test_g_end_to_end():
         s.refresh(p)
         s.add(TargetLocale(project_id=p.id, locale="de-DE"))
         s.commit()
-        doc = ingest_document(s, p, "objects.xlsx", M.make_workbook(), "segmented")
+        # Python filter path (documents imported before Bilingua, or no wheel)
+        with bilingua_switch_off():
+            doc = ingest_document(s, p, "objects.xlsx", M.make_workbook(), "segmented")
         segs = s.exec(
             select(Segment).where(Segment.document_id == doc.id, Segment.target_locale == "de-DE")
         ).all()

@@ -264,9 +264,10 @@ def test_translated_round_trip():
     _well_formed(members)
     # the output parses again with the same unit count
     assert len(f.parse(out).units) == len(units)
-    # placeholder tokens a model invents never leak into the OPF/NCX
+    # an OPF/NCX value has no codes, so a token in its translation is text (#814.1, g12: kept,
+    # not deleted; quality.tag_damage reports a model that invents one)
     out2 = f.build(src, {"0": "Titre ⟦g9⟧X⟦/g9⟧"})
-    assert "Titre X" in _members(out2)[0]["OEBPS/content.opf"].decode()
+    assert "Titre ⟦g9⟧X⟦/g9⟧" in _members(out2)[0]["OEBPS/content.opf"].decode()
     print("  translated round trip (mimetype first+stored, assets identical, tags) OK")
 
 

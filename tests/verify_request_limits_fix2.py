@@ -672,6 +672,38 @@ def test_spreadsheet_broken_xml_safe():
     assert_refused(lambda: XlsxFilter().build(blob, {}))
 
 
+def _bilingua_refuses_swapped_original(client, headers, pid, blob):
+    """A Bilingua document's stamp holds the original's sha256: any swapped stored workbook is
+    refused at export with "re-import the file" (a 4xx), before any XML is read. Only when the
+    engine is installed and xlsx is switched on (the default)."""
+    from sqlmodel import Session
+
+    from app.db import engine
+    from app.filters import bilingua_adapter
+    from app.models import Document
+    from app.ports import blobstore
+    from app.services import settings
+
+    if bilingua_adapter._module() is None or "xlsx" not in settings.bilingua_formats():
+        return
+    response = client.post(
+        f"/projects/{pid}/documents", files={"file": ("bl.xlsx", blob)}, follow_redirects=False
+    )
+    doc_id = int(response.headers["location"].rsplit("/", 1)[-1].split("?")[0])
+    with Session(engine) as session:
+        doc = session.get(Document, doc_id)
+        assert "bilingua" in (doc.skeleton or {}), doc.skeleton
+        blob_key = blobstore.document_key(doc)
+    swapped = rewrite(blob, lambda n, b: b[:-20] if n.endswith("sheet1.xml") else b)
+    blobstore.get().put(blob_key, swapped)
+    for url in (
+        f"/documents/{doc_id}/export?locale=de-DE",
+        f"/api/documents/{doc_id}/download?locale=de-DE",
+    ):
+        response = client.get(url, headers=headers)
+        assert 400 <= response.status_code < 500, (url, response.status_code, response.text[:200])
+
+
 def test_limit_http_envelopes():
     from fastapi.testclient import TestClient
     from sqlmodel import Session, select
@@ -701,9 +733,17 @@ def test_limit_http_envelopes():
         files={"file": ("hostile.xlsx", hostile)},
     )
     assert response.status_code == 413 and "limit" in response.json()["error"], response.text
-    response = client.post(
-        f"/projects/{pid}/documents", files={"file": ("safe.xlsx", blob)}, follow_redirects=False
-    )
+    _bilingua_refuses_swapped_original(client, headers, pid, blob)
+    from tests._bootstrap import bilingua_switch_off
+
+    # Python filter path (documents imported before Bilingua, or no wheel): its export re-reads
+    # the stored workbook, so the swapped parts below reach its limit guards
+    with bilingua_switch_off():
+        response = client.post(
+            f"/projects/{pid}/documents",
+            files={"file": ("safe.xlsx", blob)},
+            follow_redirects=False,
+        )
     doc_id = int(response.headers["location"].rsplit("/", 1)[-1].split("?")[0])
     with Session(engine) as session:
         for segment in session.exec(select(Segment).where(Segment.document_id == doc_id)):
@@ -803,9 +843,15 @@ def test_limit_http_envelopes_legacy_key():
     headers = {"X-Loc-Token": key}
     pid = _project()
     blob = linked_book()
-    response = client.post(
-        f"/projects/{pid}/documents", files={"file": ("legacy.xlsx", blob)}, follow_redirects=False
-    )
+    from tests._bootstrap import bilingua_switch_off
+
+    # Python filter path (documents imported before Bilingua, or no wheel)
+    with bilingua_switch_off():
+        response = client.post(
+            f"/projects/{pid}/documents",
+            files={"file": ("legacy.xlsx", blob)},
+            follow_redirects=False,
+        )
     doc_id = int(response.headers["location"].rsplit("/", 1)[-1].split("?")[0])
     with Session(engine) as session:
         for segment in session.exec(select(Segment).where(Segment.document_id == doc_id)):
@@ -915,7 +961,9 @@ def test_pdf_total_pixels():
     blob = _pdf([(100, 100)] * 3)
     # At 150 dpi each page is ceil(100 * 150 / 72)^2 = 43681 pixels.
     with (
-        _Override(PDF_OCR_MAX_TOTAL_PIXELS=3 * 43681 - 1),
+        _Override(
+            PDF_OCR_MAX_TOTAL_PIXELS=3 * 43681 - 1, PDF_ISOLATE=False
+        ),  # spy needs in-process
         patch.object(
             pdfium.PdfPage, "render", side_effect=AssertionError("over-budget PDF rendered")
         ),

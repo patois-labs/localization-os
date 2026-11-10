@@ -5,6 +5,12 @@ a page has little or no text (a scanned/image page), render it to a 150-dpi PNG 
 OCR it with a vision-capable engine (services/ocr.py) - cloud or local Qwen3-VL.
 Either way we emit paragraph units.
 
+  #808 PROCESS ISOLATION: PDFium runs in a child process (app/filters/_pdf_worker.py) that the
+  parent kills when a call exceeds config.PDF_CALL_TIMEOUT_S (or PDF_TOTAL_TIMEOUT_S in all),
+  so a hostile file can never hold an app worker. Each child has its own PDFium, so the
+  thread-safety note below now applies only to PDF_ISOLATE=0 (in-process, tests). Extraction
+  version 2 (skeleton key pdf_extract) drops U+FFFE and C0 controls; version 1 is the old text.
+
   THREAD-SAFETY (HIGH-1, gate rounds 2-3): PDFium is single-threaded and pypdfium2
   documents that ALL of its calls must be serialized; two threads inside PDFium at
   once corrupt its global state PERMANENTLY for the worker process (every later parse
@@ -60,13 +66,15 @@ PDFium; typst: Apache-2.0), so the default install carries no copyleft PDF engin
 See tests/verify_licenses.py.
 """
 
-import io
+import contextlib
+import json
 import logging
 import math
 import os
 import re
 import sys
 import threading
+import time
 
 import typst
 
@@ -116,8 +124,38 @@ _PDFIUM_LOCK = threading.RLock()
 _font_warned = False
 
 
-def _paragraphs(text: str) -> list[str]:
+# #808: the extraction version. 1 = text exactly as PDFium wrote it (documents imported
+# before the fix carry no stamp); 2 = U+FFFE and C0 controls removed, OCR threshold counts
+# printable characters only (same rules as Bilingua's bilingua-pdf clean_text). A stored
+# document keeps the units it was imported with; a caller that re-parses one passes
+# extract_version=pdf_extract_version(skeleton).
+PDF_EXTRACT_VERSION = 2
+PDF_EXTRACT_KEY = "pdf_extract"
+
+
+def pdf_extract_version(skeleton) -> int:
+    """The extraction version a stored PDF document was imported with (1 = no stamp)."""
+    v = (skeleton or {}).get(PDF_EXTRACT_KEY)
+    return v if isinstance(v, int) and v >= 1 else 1
+
+
+def _clean_text(text: str) -> str:
+    """Drop every U+FFFE (PDFium writes it in place of the line break after a hyphen at a
+    line end, and for a glyph its font maps to U+0000), keep line breaks, and strip C0
+    controls other than tab, LF and CR."""
+    return "".join(c for c in text if c != "￾" and (c >= " " or c in "\t\n\r"))
+
+
+def _printable_count(text: str) -> int:
+    """Characters of a page that count toward OCR_MIN_CHARS: cleaned, without U+FFFD,
+    stripped."""
+    return len(_clean_text((text or "").replace("�", "")).strip())
+
+
+def _paragraphs(text: str, clean: bool = False) -> list[str]:
     """Split a page's text into paragraph-ish blocks on blank lines."""
+    if clean:
+        text = _clean_text(text or "")
     blocks = re.split(r"\n\s*\n", (text or "").strip())
     out = []
     for b in blocks:
@@ -244,45 +282,234 @@ def _build_source(ordered: list, lang_tag: str = "") -> str:
     )
 
 
+class _InProcessBackend:
+    """PDFium inside the app process (config.PDF_ISOLATE=0), every call behind
+    _PDFIUM_LOCK. Used by tests that spy on pypdfium2; production runs _ChildBackend."""
+
+    def __init__(self, data: bytes):
+        from app.filters import _pdf_worker
+
+        with _PDFIUM_LOCK:
+            self._s = _pdf_worker.PdfSession(data)
+        self.npages = self._s.npages
+
+    def preflight(self, pno, objects_left):
+        with _PDFIUM_LOCK:
+            return self._s.preflight(pno, objects_left)
+
+    def extract(self, pno, scale):
+        with _PDFIUM_LOCK:
+            meta, png = self._s.extract(pno, scale)
+        return meta, png
+
+    def close(self):
+        with _PDFIUM_LOCK:
+            self._s.close()
+
+
+_slots_lock = threading.Lock()
+_slots_sem: threading.BoundedSemaphore | None = None
+
+
+def _worker_slots() -> threading.BoundedSemaphore:
+    """At most config.PDF_WORKERS PDFium child processes at once (memory bound)."""
+    global _slots_sem
+    with _slots_lock:
+        if _slots_sem is None:
+            from app import config
+
+            _slots_sem = threading.BoundedSemaphore(config.PDF_WORKERS)
+        return _slots_sem
+
+
+_STOPPED = "The PDF reader stopped unexpectedly: the file is damaged or too large."
+
+
+class _ChildBackend:
+    """PDFium in a child process (#808). Every wait has a wall-clock limit; on expiry the
+    child is killed and the file refused, so a hostile PDF never holds a worker or a lock
+    (each child has its own PDFium, so no cross-process lock is needed either)."""
+
+    def __init__(self, data: bytes):
+        import queue
+        import subprocess
+
+        from app import config
+        from app.filters import _pdf_worker
+
+        self._config = config
+        self._worker = _pdf_worker
+        self._spent = 0.0
+        self._proc = None
+        self._slots = _worker_slots()
+        self._slots.acquire()
+        try:
+            cmd = [
+                sys.executable,
+                "-I",
+                os.path.abspath(_pdf_worker.__file__),
+                str(config.PDF_WORKER_MEMORY_MB),
+                str(config.PDF_TOTAL_TIMEOUT_S + 30),
+            ]
+            kw = {}
+            if os.name == "nt":
+                kw["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+            # Fixed argv: this interpreter, -I, the bundled worker script and two numbers.
+            self._proc = subprocess.Popen(  # noqa: S603
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                **kw,
+            )
+            self._q: queue.Queue = queue.Queue()
+            threading.Thread(target=self._pump, args=(self._proc,), daemon=True).start()
+            # The PDF can be megabytes: write it off-thread so a stuck child cannot block us.
+            threading.Thread(target=self._write_open, args=(self._proc, data), daemon=True).start()
+            self.npages = self._reply()["npages"]
+        except BaseException:
+            self.close()
+            raise
+
+    def _write_open(self, proc, data: bytes) -> None:
+        # On failure the reader sees EOF, or the wall-clock limit fires.
+        with contextlib.suppress(Exception):
+            self._worker.write_frame(proc.stdin, b'{"op": "open"}')
+            self._worker.write_frame(proc.stdin, data)
+            proc.stdin.flush()
+
+    def _pump(self, proc) -> None:
+        try:
+            while True:
+                self._q.put(self._worker.read_frame(proc.stdout))
+        except Exception:
+            self._q.put(None)
+
+    def _frame(self) -> bytes:
+        import queue
+
+        from app.filters.base import InputLimitError
+
+        cfg = self._config
+        wait = min(float(cfg.PDF_CALL_TIMEOUT_S), cfg.PDF_TOTAL_TIMEOUT_S - self._spent)
+        t0 = time.monotonic()
+        try:
+            if wait <= 0:
+                raise queue.Empty
+            item = self._q.get(timeout=wait)
+        except queue.Empty:
+            self._kill()
+            raise InputLimitError(
+                "This PDF took too long to read and was stopped "
+                f"(limit {cfg.PDF_CALL_TIMEOUT_S} s per step, {cfg.PDF_TOTAL_TIMEOUT_S} s "
+                "in all). It may be damaged or built to exhaust a reader."
+            ) from None
+        self._spent += time.monotonic() - t0
+        if item is None:
+            self._died()
+        return item
+
+    def _died(self):
+        """The child went away without answering. Before the document opened that is a
+        corrupt file; afterwards (killed by its memory or CPU limit, or a crash while
+        reading) the file is one the reader cannot take: refused like a timeout."""
+        from app.filters.base import InputLimitError
+
+        if hasattr(self, "npages"):
+            raise InputLimitError(
+                "This PDF used more memory or time than the reader allows and was stopped. "
+                "It may be damaged or built to exhaust a reader."
+            )
+        raise ValueError(_STOPPED)
+
+    def _reply(self) -> dict:
+        msg = json.loads(self._frame().decode("utf-8"))
+        if not msg.get("ok"):
+            raise ValueError(f"{msg.get('etype', 'PdfError')}: {msg.get('msg', '')}")
+        return msg
+
+    def _send(self, obj: dict) -> None:
+        try:
+            self._worker.write_frame(self._proc.stdin, json.dumps(obj).encode("utf-8"))
+            self._proc.stdin.flush()
+        except (OSError, ValueError):
+            self._died()
+
+    def preflight(self, pno, objects_left):
+        self._send({"op": "pre", "pno": pno, "left": objects_left})
+        return self._reply()
+
+    def extract(self, pno, scale):
+        self._send({"op": "ext", "pno": pno, "scale": scale})
+        meta = self._reply()
+        png = self._frame() if meta.get("png") else None
+        return meta, png
+
+    def _kill(self) -> None:
+        proc = self._proc
+        if proc is not None and proc.poll() is None:
+            with contextlib.suppress(OSError):
+                proc.kill()
+
+    def close(self) -> None:
+        proc, self._proc = self._proc, None
+        slots, self._slots = getattr(self, "_slots", None), None
+        try:
+            if proc is not None:
+                if proc.poll() is None:
+                    proc.kill()
+                for f in (proc.stdin, proc.stdout):
+                    with contextlib.suppress(Exception):
+                        f.close()
+                with contextlib.suppress(Exception):
+                    proc.wait(timeout=10)
+        finally:
+            if slots is not None:
+                slots.release()
+
+
+def _open_backend(data: bytes):
+    from app import config
+
+    if config.PDF_ISOLATE:
+        return _ChildBackend(data)
+    return _InProcessBackend(data)
+
+
 @register
 class PdfFilter(Filter):
     fmt = "pdf"
     passthrough_untouched = False  # B-bytes: the deliverable is a different file
 
-    def parse(self, data: bytes, provider: str | None = None) -> ParseResult:
-        # pypdfium2 is imported on first use (test speed, 2026-10-08): it loads the PDFium
-        # library, and every app and CLI process imports this filter through the registry.
-        import pypdfium2 as pdfium
-
-        # PAGE-AT-A-TIME (HIGH-1, gate round 3): the PDFium lock is taken PER PAGE, and the
-        # OCR call happens OUTSIDE it, so at most ONE page's PNG is alive at any moment.
-        # (An earlier fix buffered every scanned page's PNG before the first OCR call — a
-        # 100-page scan held ~228 MiB regardless of the upload size; O(pages), not O(1).)
-        # The PdfDocument handle stays open across the per-page lock releases: the RLock
-        # guards PDFium *calls*, not handle lifetime, and the whole document is never
-        # touched by two threads at once.
-        units: list[TextUnit] = []
-        pages_meta = []
-        idx = 0
-        with _PDFIUM_LOCK:
-            # PdfDocument raises pypdfium2.PdfiumError on a corrupt / non-PDF / empty
-            # stream; the upload path (app/web/documents.py) maps any parse exception to
-            # a clean "?err=parse" user-facing error, so we let it propagate.
-            pdf = pdfium.PdfDocument(data)
-            npages = len(pdf)
-        # #272: every page with no text layer is one bitmap render and one OCR call, so the
-        # page count is capped. Refused before any page is rendered.
+    def parse(
+        self, data: bytes, provider: str | None = None, extract_version: int | None = None
+    ) -> ParseResult:
+        """`extract_version` None = the current rules (PDF_EXTRACT_VERSION). A caller that
+        replays a stored document passes pdf_extract_version(skeleton) (1 for a skeleton
+        with no stamp) to get the pre-#808 text back."""
         from app import config
         from app.filters.base import InputLimitError
 
-        if npages > config.PDF_MAX_PAGES:
-            with _PDFIUM_LOCK:
-                pdf.close()
-            raise InputLimitError(
-                f"This PDF has {npages} pages; the limit is {config.PDF_MAX_PAGES}. "
-                "Split it into smaller files and upload those."
-            )
+        ver = PDF_EXTRACT_VERSION if extract_version is None else int(extract_version)
+        if ver not in (1, PDF_EXTRACT_VERSION):
+            raise ValueError(f"unknown PDF extraction version {ver}")
+        # PAGE-AT-A-TIME (HIGH-1, gate round 3): at most ONE page's PNG is alive at any
+        # moment, and the OCR network call happens with no PDFium call in flight.
+        units: list[TextUnit] = []
+        pages_meta = []
+        idx = 0
+        # PdfiumError (corrupt / non-PDF / empty stream) surfaces as a ValueError from the
+        # child; the upload path maps any parse exception to a clean "corrupt file" error.
+        backend = _open_backend(data)
         try:
+            npages = backend.npages
+            # #272: every page with no text layer is one bitmap render and one OCR call, so the
+            # page count is capped. Refused before any page is rendered.
+            if npages > config.PDF_MAX_PAGES:
+                raise InputLimitError(
+                    f"This PDF has {npages} pages; the limit is {config.PDF_MAX_PAGES}. "
+                    "Split it into smaller files and upload those."
+                )
             # Preflight only pages that need OCR, using the same size/scale and ceil
             # rounding as PDFium. Refuse the whole document before the first bitmap or
             # OCR call. Keep only scales here, not every page's text or PNG in memory.
@@ -296,61 +523,35 @@ class PdfFilter(Filter):
             # before any text page is built.
             objects_left = 80 * config.MAX_DOCUMENT_SEGMENTS
             for pno in range(npages):
-                with _PDFIUM_LOCK:
-                    page = pdf[pno]
-                    try:
-                        objects_left -= pdfium.raw.FPDFPage_CountObjects(page.raw)
-                        if objects_left < 0:
-                            raise InputLimitError(
-                                "This PDF has far more text and drawing objects than "
-                                "MAX_DOCUMENT_SEGMENTS allows "
-                                f"({config.MAX_DOCUMENT_SEGMENTS} segments). "
-                                "Split it into smaller files."
-                            )
-                        textpage = page.get_textpage()
-                        try:
-                            needs_ocr = (
-                                len((textpage.get_text_range() or "").strip()) < OCR_MIN_CHARS
-                            )
-                        finally:
-                            textpage.close()
-                        width, height = page.get_size()
-                        scale = _ocr_render_scale(width, height) if needs_ocr else None
-                        scales.append(scale)
-                        if scale is not None:
-                            total_pixels += math.ceil(width * scale) * math.ceil(height * scale)
-                            if total_pixels > config.PDF_OCR_MAX_TOTAL_PIXELS:
-                                raise InputLimitError(
-                                    "This PDF exceeds the total OCR render pixel limit "
-                                    f"({config.PDF_OCR_MAX_TOTAL_PIXELS} pixels). "
-                                    "Split it into smaller files."
-                                )
-                    finally:
-                        page.close()
+                pre = backend.preflight(pno, objects_left)
+                objects_left -= pre["objs"]
+                if pre.get("over") or objects_left < 0:
+                    raise InputLimitError(
+                        "This PDF has far more text and drawing objects than "
+                        "MAX_DOCUMENT_SEGMENTS allows "
+                        f"({config.MAX_DOCUMENT_SEGMENTS} segments). "
+                        "Split it into smaller files."
+                    )
+                if ver >= 2:
+                    # #808: garbage glyph codes and hyphen markers are not text.
+                    needs_ocr = _printable_count(pre["text"]) < OCR_MIN_CHARS
+                else:
+                    needs_ocr = len((pre["text"] or "").strip()) < OCR_MIN_CHARS
+                width, height = pre["w"], pre["h"]
+                scale = _ocr_render_scale(width, height) if needs_ocr else None
+                scales.append(scale)
+                if scale is not None:
+                    total_pixels += math.ceil(width * scale) * math.ceil(height * scale)
+                    if total_pixels > config.PDF_OCR_MAX_TOTAL_PIXELS:
+                        raise InputLimitError(
+                            "This PDF exceeds the total OCR render pixel limit "
+                            f"({config.PDF_OCR_MAX_TOTAL_PIXELS} pixels). "
+                            "Split it into smaller files."
+                        )
             for pno in range(npages):
-                png = None
-                # PDFium work for THIS page ONLY, under the lock.
-                with _PDFIUM_LOCK:
-                    page = pdf[pno]
-                    try:
-                        textpage = page.get_textpage()
-                        try:
-                            text = (textpage.get_text_range() or "").strip()
-                        finally:
-                            textpage.close()
-                        # #272: the render scale is bounded by the page's own size.
-                        scale = scales[pno]
-                        if scale is not None:
-                            bitmap = page.render(scale=scale)
-                            try:
-                                png_buf = io.BytesIO()
-                                bitmap.to_pil().save(png_buf, format="PNG")
-                                png = png_buf.getvalue()
-                            finally:
-                                bitmap.close()
-                    finally:
-                        page.close()  # release the native page handle
-                # OCR OUTSIDE the lock (network call); only this one page's PNG is alive,
+                meta, png = backend.extract(pno, scales[pno])
+                text = (meta["text"] or "").strip()
+                # OCR OUTSIDE any PDFium call (network); only this one page's PNG is alive,
                 # and it is dropped before the next page renders.
                 ocr_used = False
                 if png is not None:
@@ -358,19 +559,20 @@ class PdfFilter(Filter):
                     ocr_used = True
                     png = None
                 pages_meta.append({"page": pno, "ocr": ocr_used})
-                for para in _paragraphs(text or ""):
+                for para in _paragraphs(text or "", clean=ver >= 2):
                     units.append(TextUnit(p_index=idx, text=para))
                     idx += 1
                     check_segment_cap(idx)  # #571 gate: stop before the remaining pages
         finally:
-            with _PDFIUM_LOCK:
-                pdf.close()  # release the native document handle
+            backend.close()
         skeleton = {
             "format": "pdf",
             "pages": pages_meta,
             "ocr_pages": sum(1 for m in pages_meta if m["ocr"]),
             "units": [{"p_index": u.p_index, "text": u.text, "style": ""} for u in units],
         }
+        if ver >= 2:
+            skeleton[PDF_EXTRACT_KEY] = ver
         return ParseResult(skeleton=skeleton, units=units)
 
     def build(self, original: bytes, paragraph_texts: dict) -> bytes:

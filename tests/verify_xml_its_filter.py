@@ -350,7 +350,8 @@ def test_token_damage_stays_wellformed():
         out = filt.build(data, {str(k): bad})
         root = _wellformed(out)
         s = out.decode("utf-8")
-        assert "⟦" not in s and "⟧" not in s, ("token leaked", s)
+        # #814.1 (g12): only x9 names no code of the unit, so only it is written, as text
+        assert s.count("⟦") == s.count("⟦x9⟧") == ("⟦x9⟧" in bad), ("token leaked", s)
         assert s.count("<footnote>") == 1, "the footnote is kept exactly once"
         assert root is not None
     print("  [tokens] damaged token streams rebuild well-formed, footnote kept OK")
@@ -450,6 +451,51 @@ def test_hostile_inputs():
     print("  [hostile] internal subset refused, external DTD never loaded, caps enforced OK")
 
 
+def test_dita_docbook_809():
+    """#809: DocBook 4.x prefix namespace gets lang; nested source-language elements are
+    restamped when they hold a changed unit; attributes under translate=no / conref."""
+    dbk = get_filter("dbk")
+    four = (
+        b'<!DOCTYPE article PUBLIC "-//OASIS//DTD DocBook XML V4.5//EN" "docbookx.dtd">'
+        b'<article xmlns:db="http://docbook.org/ns/docbook"><para>Hi</para></article>'
+    )
+    out = dbk.build_localized(four, {"0": "Hallo"}, "de-DE")
+    assert b' lang="de-DE"' in out and b"xml:lang" not in out, out
+    five = b'<article xmlns="http://docbook.org/ns/docbook"><para>Hi</para></article>'
+    assert b' xml:lang="de-DE"' in dbk.build_localized(five, {"0": "Hallo"}, "de-DE")
+
+    dita = get_filter("dita")
+    comp = (
+        b'<dita xml:lang="en-US"><topic id="a" xml:lang="en"><title>A</title></topic>'
+        b'<topic id="b" xml:lang="en"><title>B</title></topic>'
+        b'<topic id="c" xml:lang="fr"><title>C</title></topic>'
+        b'<topic id="d" xml:lang="en-GB"><title>D</title></topic></dita>'
+    )
+    out = dita.build_localized(comp, {"0": "Ah", "2": "Ce", "3": "De"}, "de-DE").decode()
+    assert '<dita xml:lang="de-DE">' in out, out
+    assert '<topic id="a" xml:lang="de-DE">' in out, out  # same language, changed unit
+    assert '<topic id="b" xml:lang="en">' in out, out  # nothing translated inside: untouched
+    assert '<topic id="c" xml:lang="fr">' in out, out  # a foreign passage stays
+    assert '<topic id="d" xml:lang="en-GB">' in out, out  # another region stays
+    # a plain build never restamps
+    assert b'xml:lang="en"' in dita.build(comp, {"0": "Ah"})
+
+    dmap = (
+        b'<map xml:lang="en"><topicref href="b.dita" navtitle="Off" translate="no"/>'
+        b'<topicref navtitle="Ref" conref="m.ditamap#m/r"/>'
+        b'<topicref navtitle="-dita-use-conref-target" conref="m.ditamap#m/r"/>'
+        b'<topicref navtitle="Plain"><topicmeta><navtitle>Meta</navtitle></topicmeta></topicref>'
+        b'<topicref conref="x.ditamap#x/y"><topicref navtitle="Inner"/></topicref></map>'
+    )
+    texts = _texts(dita, dmap)
+    assert "Off" not in texts, texts  # translate="no"
+    assert "Ref" in texts, texts  # a conref element's own attributes stay
+    assert "-dita-use-conref-target" not in texts, texts
+    assert "Plain" in texts and "Meta" in texts, texts
+    assert "Inner" not in texts, texts  # replaced with the conref target
+    print("  [809] DocBook 4.x lang, nested xml:lang restamp, translate=no / conref attributes OK")
+
+
 def test_generic_localized_lang_only_when_present():
     filt = get_filter("xml")
     data = b"<r><p>Hello</p></r>"
@@ -472,4 +518,5 @@ if __name__ == "__main__":
     test_encodings()
     test_hostile_inputs()
     test_generic_localized_lang_only_when_present()
+    test_dita_docbook_809()
     print("XML ITS FILTER OK")

@@ -342,7 +342,23 @@ def test_api_and_cli_round_trip():
     print("  [surfaces] API upload/download and CLI upload/export round trip OK")
 
 
+def test_crlf_file_converts_translation_breaks_813():
+    """#813.6: in a CRLF file a single-line string whose translation has line breaks gets
+    CRLF (it used to stay LF unless the string's own text held a CRLF)."""
+    src = (
+        b'<ResourceDictionary xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">\r\n'
+        b'  <x:String x:Key="A">One line</x:String>\r\n</ResourceDictionary>\r\n'
+    )
+    out = F.build(src, {"0": "Eins\nZwei\rDrei"})
+    assert b">Eins\r\nZwei\r\nDrei<" in out, out
+    assert b"\n" not in out.replace(b"\r\n", b""), out
+    lf = src.replace(b"\r\n", b"\n")
+    assert b">Eins\nZwei<" in F.build(lf, {"0": "Eins\nZwei"})
+    print("  [813.6] CRLF file: translation breaks follow the file OK")
+
+
 def main():
+    test_crlf_file_converts_translation_breaks_813()
     test_registration()
     test_wpf_resources()
     test_multiline_crlf_translation()

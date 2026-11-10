@@ -42,6 +42,7 @@ records that are not part of the public repository.
 - 0108 is reserved (not part of this edition).
 - [0109 Postgres reuses query plans across pooled checkouts](0109-postgres-plan-reuse.md) - psycopg connections keep their prepared statements across the rollback that ends every checkout when the transaction was clean; failed, DDL and savepoint rollbacks still clear (Accepted)
 - [0110 Cross-process live events](0110-cross-process-live-events.md) - app/services/events.py: Postgres LISTEN/NOTIFY (one listen connection per process), SQLite liveevent table polled with an id cursor (Accepted)
+- [0111 Bilingua is the LocOS parsing engine, per format behind a setting](0111-bilingua-parsing-engine.md) - setting bilingua_formats (default `all`, wheel from PyPI 0.9.1); a document keeps its engine via the bilingua stamp; Dockerfile source stage optional (Accepted)
 
 ## Hosting and deploys
 - [0007 Release identity and clean deploys](0007-release-identity-and-clean-deploys.md) - RELEASE build args always; build from a clean detached worktree (Accepted)

@@ -452,7 +452,13 @@ def _smoke_script_rules():
 
 def _names_agree():
     declared = set(re.findall(r"^ARG (WITH_[A-Z]+|SAML_LXML)=(?:0|locked)$", DOCKERFILE, re.M))
-    assert declared == {"WITH_SAML", "WITH_LDAP", "WITH_SQLCIPHER", "SAML_LXML"}, declared
+    assert declared == {
+        "WITH_SAML",
+        "WITH_LDAP",
+        "WITH_SQLCIPHER",
+        "WITH_BILINGUA",
+        "SAML_LXML",
+    }, declared
     book = (_ROOT / "deploy/aws-hosted/LAUNCH.md").read_text(encoding="utf-8")
     assert "--build-arg WITH_SAML=1" in book
     assert "--build-arg WITH_SAML=1 --build-arg SAML_LXML=6.0.0" in book, "guide fallback"

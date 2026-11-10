@@ -274,10 +274,96 @@ def test_inline_tokens_and_escaping():
     # TEXT: newline becomes a space, %% is tripled per percent, caret escaped
     out = F.build(SAMPLE, {"3": "Salon\n100%% ^ok"})
     assert (1, "Salon 100%%%%%% ^ ok") in pairs_of(out)
-    # unknown tokens dropped, known ones kept
+    # a token that names no code is text (#814.1, g12), known ones kept
     out = F.build(SAMPLE, {"4": "⟦x9⟧tuyau ⟦x1⟧50"})
-    assert (1, "tuyau %%c50") in pairs_of(out)
+    assert (1, "⟦x9⟧tuyau %%c50") in pairs_of(out), pairs_of(out)
     print("  [dxf] inline tokens: balanced braces, escapes, %% and ^ OK")
+
+
+def _one(kind, value, ver="AC1032", cp="ANSI_1252", enc="utf-8"):
+    pairs = [
+        *header(ver, cp),
+        (0, "SECTION"),
+        (2, "ENTITIES"),
+        (0, kind),
+        (5, "1"),
+        (1, value),
+        (0, "ENDSEC"),
+        (0, "EOF"),
+    ]
+    return dxf(pairs, enc=enc)
+
+
+def test_issue_805_percent_budget_cp864():
+    from app import config
+
+    # 1. a lone % before each %% code keeps the code
+    for code in ("%%d", "%%c", "%%p", "%%176"):
+        src = _one("TEXT", f"Angle 45{code}")
+        (u,) = F.parse(src).units
+        assert u.text == "Angle 45⟦x1⟧", u.text
+        out = F.build(src, {"0": "Winkel 45%⟦x1⟧"})
+        (u2,) = F.parse(out).units
+        # the literal percent is the %%% token and the degree / diameter / plus-minus code survives
+        assert u2.text == "Winkel 45⟦x1⟧⟦x2⟧", u2.text
+        assert u2.inline_map["1"]["point"] == "%%%" and u2.inline_map["2"]["point"] == code, (
+            code,
+            u2.inline_map,
+        )
+        assert (1, f"Winkel 45%%%{code}") in pairs_of(out)
+    # the same through two text pieces split by a dropped token (p1: a code's number with a
+    # letter this filter never writes; a token naming no code, x9, is text since #814.1/g12)
+    out = F.build(_one("TEXT", "A%%d"), {"0": "a%⟦p1⟧%b⟦x1⟧"})
+    assert (1, "a%%%%b%%d") in pairs_of(out), pairs_of(out)
+    out = F.build(_one("TEXT", "A%%d"), {"0": "a%⟦x9⟧%b⟦x1⟧"})
+    assert (1, "a%⟦x9⟧%b%%d") in pairs_of(out), pairs_of(out)
+    # 2. a CRLF file with exactly the LF budget of group codes is accepted
+    old = config.MAX_DOCUMENT_SEGMENTS
+    config.MAX_DOCUMENT_SEGMENTS = 5  # budget: 1000 group codes
+    try:
+        body = [(999, "c")] * 999 + [(0, "EOF")]
+        assert F.parse(dxf(body, nl="\r\n")).units == []
+        assert F.parse(dxf(body, nl="\n")).units == []
+        try:
+            F.parse(dxf(body + [(999, "c")] * 2, nl="\r\n"))
+            raise AssertionError("over budget must be refused")
+        except InputLimitError:
+            pass
+    finally:
+        config.MAX_DOCUMENT_SEGMENTS = old
+    # 3. DOS864: byte 0x25 reads and writes as %
+    src = _one("TEXT", "Angle 45%%d", ver="AC1015", cp="DOS864", enc="ascii")
+    (u,) = F.parse(src).units
+    assert u.text == "Angle 45⟦x1⟧", u.text
+    out = F.build(src, {"0": "Winkel 50%⟦x1⟧ 5٪"})
+    assert b"Winkel 50%%%%%d 5%" in out and b"U+" not in out, out
+    print("  [dxf] 805: % before a %% code, CRLF budget, cp864 percent OK")
+
+
+def test_issue_811_open_code_at_value_end():
+    # a lone trailing backslash / unterminated format code is closed when anything follows
+    for raw in ("Note \\", "Note \\A1"):
+        (u,) = F.parse(_one("MTEXT", raw)).units
+        assert u.text == "Note ⟦x1⟧", u.text
+    src = _one("MTEXT", "Note \\")
+    cases = (
+        ("Hinweis ⟦x1⟧q", "Hinweis \\\\q"),
+        ("Hinweis ⟦x1⟧ Ende", "Hinweis \\\\ Ende"),
+        ("Hinweis ⟦x1⟧", "Hinweis \\"),
+    )
+    for new, want in cases:
+        assert (1, want) in pairs_of(F.build(src, {"0": new})), (new, want)
+    src = _one("MTEXT", "Note \\A1")
+    for new, want in (
+        ("Text ⟦x1⟧und", "Text \\A1;und"),
+        ("Text ⟦x1⟧ und", "Text \\A1; und"),
+        ("Text ⟦x1⟧", "Text \\A1"),
+    ):
+        assert (1, want) in pairs_of(F.build(src, {"0": new})), (new, want)
+    # a terminated code is untouched
+    src = _one("MTEXT", "Note \\H2.5x;")
+    assert (1, "Text \\H2.5x; und") in pairs_of(F.build(src, {"0": "Text ⟦x1⟧ und"}))
+    print("  [dxf] 811.3: open code closed before anything that follows OK")
 
 
 def test_legacy_code_page_and_unicode_escape():
@@ -449,6 +535,8 @@ if __name__ == "__main__":
     test_translated_round_trip()
     test_short_mtext_collapses_chunks()
     test_inline_tokens_and_escaping()
+    test_issue_805_percent_budget_cp864()
+    test_issue_811_open_code_at_value_end()
     test_legacy_code_page_and_unicode_escape()
     test_encoding_selection()
     test_hostile_inputs()

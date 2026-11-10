@@ -401,13 +401,43 @@ def test_end_to_end():
         assert r.status_code == 200 and r.content == first, r.content
     finally:
         del os.environ["LOC_TMS_FRONT_MATTER_KEYS"]
-    # an unknown walk stamp is refused at export, never guessed
+    # an unknown stamp is refused at export, never guessed. The Python md_walk stamp lives on a
+    # Python document only: a Bilingua document carries no walk stamp, its own stamp is the guard.
     with Session(engine) as s:
         d = s.get(Document, doc_id)
+        if "bilingua" in (d.skeleton or {}):
+            assert "md_walk" not in d.skeleton, d.skeleton
+            bl = dict(d.skeleton["bilingua"], schema=99)
+            d.skeleton = dict(d.skeleton, bilingua=bl)
+            s.add(d)
+            s.commit()
+            r = client.get(
+                f"/api/documents/{doc_id}/download", headers=hdr, params={"locale": "fr-FR"}
+            )
+            assert 400 <= r.status_code < 500, (r.status_code, r.text)
+    from tests._bootstrap import bilingua_switch_off
+
+    # Python filter path (documents imported before Bilingua, or no wheel)
+    with bilingua_switch_off():
+        r = client.post(
+            "/api/documents",
+            headers=hdr,
+            data={"project_id": str(pid)},
+            files={"file": ("post.md", POST, "text/markdown")},
+        )
+    assert r.status_code in (200, 201), (r.status_code, r.text)
+    py_id = r.json()["document_id"]
+    code, out, err = run_cli(["doc", "translate", str(py_id), "--locale", "fr-FR"])
+    assert code == 0, (code, out, err)
+    r = client.get(f"/api/documents/{py_id}/download", headers=hdr, params={"locale": "fr-FR"})
+    assert r.status_code == 200, (r.status_code, r.text)
+    with Session(engine) as s:
+        d = s.get(Document, py_id)
+        assert "bilingua" not in d.skeleton and d.skeleton.get("md_walk"), d.skeleton
         d.skeleton = dict(d.skeleton, md_walk=99)
         s.add(d)
         s.commit()
-    r = client.get(f"/api/documents/{doc_id}/download", headers=hdr, params={"locale": "fr-FR"})
+    r = client.get(f"/api/documents/{py_id}/download", headers=hdr, params={"locale": "fr-FR"})
     assert 400 <= r.status_code < 500, (r.status_code, r.text)
     print("  [e2e] .md: API upload, CLI translate, API export keeps valid front matter OK")
 

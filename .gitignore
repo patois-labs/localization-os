@@ -95,3 +95,4 @@ app/resources/tbx/*.tbx
 
 # locos_native (ADR 0091): cargo and maturin build output
 native/locos_native/target/
+.venv-bili/

@@ -75,7 +75,7 @@ jobs:
       fail-fast: true
       max-parallel: 2
       matrix:
-        profile: [base, postgres, ldap, saml, vendor-studio, pii, ocr, sqlcipher, saml-lxml-fallback, aux-build, aux-ci-check-tools]
+        profile: [base, postgres, ldap, saml, vendor-studio, pii, ocr, sqlcipher, saml-lxml-fallback, aux-build, aux-ci-check-tools, aux-maturin]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

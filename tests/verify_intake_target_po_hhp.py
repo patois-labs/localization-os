@@ -651,7 +651,46 @@ def _api_user_named(email, name):
     return {"X-Loc-Token": raw}
 
 
+def test_813_rule_key_linear():
+    import random
+    import time
+
+    from app.filters.po_filter import _rule_key
+
+    def old(expr):
+        while expr.startswith("(") and expr.endswith(")"):
+            depth = 0
+            for i, ch in enumerate(expr):
+                depth += {"(": 1, ")": -1}.get(ch, 0)
+                if depth == 0 and i < len(expr) - 1:
+                    break
+            else:
+                expr = expr[1:-1]
+                continue
+            break
+        return expr
+
+    rnd = random.Random(813)
+    for _ in range(20000):
+        e = "".join(rnd.choice("(()) n") for _ in range(rnd.randint(0, 14))).replace(" ", "")
+        hdr = "Plural-Forms: nplurals=2; plural=" + e + ";"
+        assert _rule_key(hdr) == ("2", old(e)), (e, _rule_key(hdr), old(e))
+    assert _rule_key("Plural-Forms: nplurals=2; plural=((n != 1));") == ("2", "n!=1")
+    # gate: a bounded size first, so the old quadratic loop FAILS here (about 13 s on this PC for
+    # 8,000 layers) instead of hanging on the 300,000-layer case below; one pass takes milliseconds
+    mid = "(" * 8000 + "n" + ")" * 8000
+    t0 = time.time()
+    assert _rule_key("Plural-Forms: nplurals=2; plural=" + mid + ";") == ("2", "n")
+    assert time.time() - t0 < 1.5, ("quadratic parenthesis strip", time.time() - t0)
+    deep = "(" * 300000 + "n" + ")" * 300000
+    t0 = time.time()
+    assert _rule_key("Plural-Forms: nplurals=2; plural=" + deep + ";") == ("2", "n")
+    assert time.time() - t0 < 5, time.time() - t0
+    print("  [813.3] PO plural rule parentheses are stripped in one pass OK")
+
+
 def main():
+    test_813_rule_key_linear()
     test_687_ingest()
     test_687_seed_and_export()
     test_687_web_and_api()

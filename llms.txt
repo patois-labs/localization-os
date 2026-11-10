@@ -224,6 +224,14 @@ abbreviations (e.g., i.e., incl., ext., approx., vs., Mr., Dr., single-letter in
 p. before a number; per source language z. B., bzw., p. ex., Sra., Sig., bijv.); "etc." at a real
 sentence end still splits. Documents imported before these rules keep their stored split and
 export unchanged (skeleton seg_engine "legacy" vs "legacy:2"); a custom SRX ruleset overrides.
+File parsing engine: the install-wide settings `bilingua_formats` and `bilingua_shadow_formats` (comma
+lists of format names such as md,json,po; `bilingua_formats` defaults to `all`, the shadow list to empty;
+a blank `bilingua_formats` keeps the built-in filter for every format) are read and written like any setting: Settings page, `config get|set`, GET/POST /api/admin/config,
+MCP manage_install (get_config / set_config); env LOC_TMS_BILINGUA_FORMATS and
+LOC_TMS_BILINGUA_SHADOW_FORMATS override. A listed format's NEW uploads are read by the Bilingua engine; a
+document keeps the engine that imported it (emptying the list never moves existing documents), and a
+Bilingua document without the server module is refused at export with a plain re-import message.
+Shadow formats are also read by Bilingua in the background; only counts and hashes are logged.
 CSV/TSV documents and column-mapped spreadsheets: upload a .csv/.tsv (or an .xlsx with a
 mapping) with a column mapping such as
 `source=English, target.de=German, key=id, context=notes`
@@ -263,6 +271,8 @@ POST /api/segments/{id}/propagation {linked:false|true} or {undo:true} unlinks, 
 on a human review step these controls answer 409 awaiting_review, like every other segment writer.
 PDF_OCR_MAX_TOTAL_PIXELS defaults to 2500000000 rendered pixels per document; over-budget
 PDFs are refused before rendering. Text-only pages do not consume the pixel budget.
+A PDF that keeps the reader busy past PDF_CALL_TIMEOUT_S (60 s per step) or PDF_TOTAL_TIMEOUT_S
+(150 s in all) is stopped and refused with HTTP 413.
 A refusal includes a plain reason; remote document uploads return HTTP 413.
 Bilingual CAT files: Trados .sdlxliff/.sdlxlf, memoQ .mqxliff and Phrase .mxliff are document
 formats (GET /api/formats lists them). Each vendor segment is one unit; the export writes
@@ -737,6 +747,8 @@ segments are collapsed by default.
   SemIf on a GPU box, on the same PC or over Tailscale, Kev notes, auto-fix, troubleshooting.
 - [Deployment](docs/DEPLOY.md); the generic hosted-instance kit is in
   [deploy/aws-hosted](deploy/aws-hosted/README.md).
+- [Upgrading to 1.2](docs/releases/1.2.0.md): Bilingua becomes the file parsing engine, on by default, plus filter fixes for
+  security, archives, encodings and speed; no migration.
 - [Upgrading to 1.1](docs/releases/1.1.0.md): the DB job queue becomes the default, process roles
   (LOC_TMS_ROLE all/web/worker, LOC_TMS_WEB_PROCESSES, LOC_TMS_WORKER_PROCESSES), runs that resume
   after a restart, the optional native module, new migrations and changed settings.

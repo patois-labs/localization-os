@@ -125,6 +125,10 @@ def external_resource_warnings(data: bytes) -> list[dict]:
                 consumed += max(0, len(raw) - info.file_size)
                 if len(raw) > limit:
                     raise ValueError("scan size limit exceeded")
+                from app.filters.xml_guard import tag_budget_exceeded
+
+                if tag_budget_exceeded(raw):  # #792 gate: before lxml
+                    raise ValueError("scan size limit exceeded")
                 return etree.fromstring(
                     raw,
                     parser=etree.XMLParser(resolve_entities=False, no_network=True),

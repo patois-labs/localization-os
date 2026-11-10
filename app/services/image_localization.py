@@ -1202,6 +1202,8 @@ def render_localized(session, doc, locale: str) -> tuple[bytes, list[dict]]:
         from app.filters.base import document_code_page
 
         with document_code_page(getattr(doc, "skeleton", None)):  # decision 22
-            return get_filter(doc.fmt).build(original, mapping), []
+            return get_filter(doc.fmt, skeleton=getattr(doc, "skeleton", None)).build(
+                original, mapping
+            ), []
     regions = (doc.skeleton or {}).get("regions") or detect_regions(original)
     return compose_overlay(original, regions, mapping)

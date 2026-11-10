@@ -65,11 +65,14 @@ from app.filters.base import (
     check_segment_cap,
     decode_text_lossless,
     encode_like,
+    legacy_read,
+    note_new_read,
     note_source_encoding,
     read_text_upload,
     register,
     text_envelope,
 )
+from app.filters.token_lit import next_free, reserved_numbers
 
 _TIMECODE = re.compile(r"-->")
 #: WebVTT structural blocks that are NEVER translatable cue text and must survive
@@ -222,6 +225,14 @@ def _vtt_bounds(pieces, pinned: set[int]) -> tuple[int, int]:
     return lo, hi
 
 
+def _lookalikes(pieces) -> set:
+    """Numbers of the token look-alike text among the cue's text pieces (#814.1); none for
+    a cue of a document imported before the codes learned to skip them."""
+    if legacy_read():
+        return set()
+    return reserved_numbers("".join(s for tok, s in pieces if not tok))
+
+
 def _vtt_tokenize(text: str):
     """(prefix, core, suffix, tokens) for one WebVTT cue text. `core` is the unit text with
     ``⟦gN⟧``/``⟦/gN⟧``/``⟦xN⟧`` for each tag; tokens maps the marker name to its source
@@ -268,6 +279,8 @@ def _vtt_tokenize(text: str):
     tokens: dict[str, str] = {}
     core: list[str] = []
     n = 0
+    made = 0
+    reserved = _lookalikes(core_pieces)  # #814.1: the cue's codes skip these numbers
     for k, (tok, s) in enumerate(core_pieces, start=lo):
         if not tok:
             core.append(s)
@@ -276,7 +289,10 @@ def _vtt_tokenize(text: str):
             tokens[f"/g{tid}"] = s
             core.append(f"⟦/g{tid}⟧")
         else:
-            n += 1
+            n = next_free(n, reserved)
+            made += 1
+            if n != made:
+                note_new_read()
             if k in pairs and pairs[k] < hi:
                 ids[k] = n
                 tokens[f"g{n}"] = s
@@ -311,8 +327,9 @@ def _vtt_escape(text: str) -> str:
 def _vtt_detokenize(translated: str, tokens: dict[str, str]) -> str:
     """Each marker back to its exact source tag. Pairs are written balanced: a close with
     no matching open is dropped, an open left unclosed is closed at the end of the cue; a
-    repeated marker or one that names no source token is dropped (the tag-damage gate
-    reports such damage on the segment)."""
+    repeated marker of a source token is dropped (the tag-damage gate reports such damage on
+    the segment); a marker that names no source token is the cue's own text, so it is kept
+    (#813.7: source text that looks like a token, or a model's letterless ``⟦9⟧``)."""
     out: list[str] = []
     stack: list[str] = []
     used: set[str] = set()
@@ -321,12 +338,15 @@ def _vtt_detokenize(translated: str, tokens: dict[str, str]) -> str:
         out.append(_vtt_escape(translated[pos : m.start()]))
         pos = m.end()
         name = m.group(0)[1:-1]
+        if name not in tokens:
+            out.append(_vtt_escape(m.group(0)))  # not a token of this cue: literal text
+            continue
         if name.startswith("/"):
             if stack and stack[-1] == name[1:]:
                 stack.pop()
                 out.append(tokens[name])
             continue
-        if name in tokens and name not in used:
+        if name not in used:
             used.add(name)
             out.append(tokens[name])
             if name[0] == "g":
@@ -391,9 +411,14 @@ def _srt_tokenize(text: str):
         core_pieces[-1] = (False, s.rstrip())
     tokens: dict[str, str] = {}
     core: list[str] = []
+    reserved = _lookalikes(core_pieces)  # #814.1: the cue's codes skip these numbers
+    n = 0
     for tok, s in core_pieces:
         if tok:
-            name = f"x{len(tokens) + 1}"
+            n = next_free(n, reserved)
+            if n != len(tokens) + 1:
+                note_new_read()
+            name = f"x{n}"
             tokens[name] = s
             core.append(f"⟦{name}⟧")
         else:
@@ -403,8 +428,9 @@ def _srt_tokenize(text: str):
 
 def _srt_cue(text: str, translated: str) -> str:
     """#738: the new SRT cue text for source cue `text` and its (tokenized) translation.
-    Each ``⟦xN⟧`` becomes its source block once; an unknown or repeated marker is dropped
-    (the tag-damage gate reports it on the segment). SRT text is never escaped."""
+    Each ``⟦xN⟧`` becomes its source block once; a repeated marker is dropped (the tag-damage
+    gate reports it on the segment) and one that names no token of the cue is kept as text
+    (#813.7). SRT text is never escaped."""
     prefix, _core, suffix, tokens = _srt_tokenize(text)
     if not (tokens or prefix or suffix):
         return _cue_text(translated, text)
@@ -418,7 +444,9 @@ def _srt_cue(text: str, translated: str) -> str:
         out.append(translated[pos : m.start()])
         pos = m.end()
         name = m.group(0)[1:-1]
-        if name in tokens and name not in used:
+        if name not in tokens:
+            out.append(m.group(0))  # not a token of this cue: literal text (#813.7, as WebVTT)
+        elif name not in used:
             used.add(name)
             out.append(tokens[name])
     out.append(translated[pos:])

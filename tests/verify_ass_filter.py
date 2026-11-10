@@ -161,10 +161,11 @@ def test_translation_edge_cases():
     data = (
         b"[Events]\nDialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,One {\\b1}two{\\b0} three\n"
     )
-    # A real newline in the translation becomes \N; unknown markers are dropped.
+    # A real newline in the translation becomes \N; a marker that names no token of the line
+    # is text (#800.2), not deleted.
     assert _ass().parse(data).units[0].text == "One ⟦g1⟧two⟦/g1⟧ three"
     out = _ass().build(data, {"0": "Un ⟦g1⟧deux⟦/g1⟧\ntrois⟦x9⟧⟦g7⟧"}).decode("utf-8")
-    assert out.endswith(",,Un {\\b1}deux{\\b0}\\Ntrois\n"), out
+    assert out.endswith(",,Un {\\b1}deux{\\b0}\\Ntrois⟦x9⟧⟦g7⟧\n"), out
     # A Title translation never gets a line break.
     t = b"[Script Info]\nTitle: A\n"
     assert _ass().build(t, {"0": "B\nC"}) == b"[Script Info]\nTitle: B C\n"
@@ -176,6 +177,77 @@ def test_translation_edge_cases():
     ):
         assert _ass().parse(raw).units == [], raw
     print("  [edge] newline -> \\N, stray markers dropped, Title one line, <untitled> skipped OK")
+
+
+def test_issue_800():
+    """#800: typed text is inert, literal marker text survives, header and BOM stay valid."""
+    head = "[Events]\nDialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,"
+    src = (head + "Hello\n").encode()
+
+    def build(tr, base=src):
+        return _ass().build(base, {"0": tr}).decode("utf-8")
+
+    # 1. a translation can not create overrides, drawing mode or escapes
+    out = build("{\\an8}{\\pos(10,10)}{\\fs200}HUGE")
+    assert "{" not in out.split(",,", 1)[1] and "｛\\an8" in out, out
+    assert [u.text for u in _ass().parse(out.encode()).units] == [
+        "｛\\an8}｛\\pos(10,10)}｛\\fs200}HUGE"
+    ]
+    out = build("{\\p1}m 0 0 l 100 100")
+    assert len(_ass().parse(out.encode()).units) == 1, out
+    out = build("a\\Nb\\hc")
+    assert "\\N" not in out.split(",,")[-1] and "\\h" not in out.split(",,")[-1], out
+    out = build("Bonjour {la")
+    assert "{" not in out.split(",,")[-1], out
+    # a backslash before a kept token or the suffix does not escape it
+    tok = (head + "A {\\i1}b{\\i0} {\\an8}\n").encode()
+    out = build("x\\ ⟦g1⟧y⟦/g1⟧ z\\", tok)
+    assert "\\{" not in out and not out.rstrip("\n").endswith("\\"), out
+    assert build("ligne1\nligne2").endswith(",,ligne1\\Nligne2\n")
+    # 2. literal marker text is kept
+    lit = (head + "See ⟦x9⟧ here\n").encode()
+    assert [u.text for u in _ass().parse(lit).units] == ["See ⟦x9⟧ here"]
+    assert build("Voir ⟦x9⟧ ici", lit).endswith(",,Voir ⟦x9⟧ ici\n")
+    # 3. Language: on a [Script Info] that is the last line
+    last = b"[Script Info]"
+    out = _ass().build_localized(last, {}, "de")
+    assert out == b"[Script Info]\nLanguage: de\n", out
+    # 4. BOM before non-UTF-8 bytes: see test_bom_before_legacy_800 (versioned read)
+    # a backslash before a typed line break is a plain backslash (Bilingua safe_text)
+    assert build("a\\\nb").endswith(",,a\\\\Nb\n"), build("a\\\nb")
+    # 5. every Title spelling is one line
+    tt = "[Script Info]\nTİtle: A\n".encode()
+    assert _ass().build(tt, {"0": "B\nC"}) == "[Script Info]\nTİtle: B C\n".encode()
+    print("  [issue 800] inert text, literal markers, header and BOM OK")
+
+
+def test_bom_before_legacy_800():
+    """#800.4: a UTF-8 BOM before cp1252 bytes is a mark. A new upload finds the Title and the
+    dialogue and writes one BOM; a document stored before the fix keeps its old unit list."""
+    from app.filters.base import document_code_page
+
+    body = (
+        "[Script Info]\nTitle: Café\n[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Héllo\n"
+    ).encode("cp1252")
+    src = b"\xef\xbb\xbf" + body
+    f = _ass()
+    new = f.parse(src)
+    assert [u.text for u in new.units] == ["Café", "Héllo"], new.units
+    assert new.skeleton.get("text_bom") == 2
+    out = f.build(src, {"1": "Bonjour"})
+    assert out.startswith(b"\xef\xbb\xbf[Script Info]") and out.count(b"\xef\xbb\xbf") == 1, out[
+        :20
+    ]
+    assert out.decode("utf-8-sig").endswith(",,Bonjour\n")
+    with document_code_page({}):  # stored before the fix: no stamp, the old reading
+        old = f.parse(src)
+        assert [u.text for u in old.units] != [u.text for u in new.units]
+        assert "text_bom" not in old.skeleton
+    print(
+        "  [issue 800.4] BOM before cp1252: Title and dialogue read, one BOM, old docs unchanged OK"
+    )
 
 
 def test_style_switch_pairs_680():
@@ -372,6 +444,8 @@ def main():
     test_gate_lines_language()
     test_translated_round_trip()
     test_translation_edge_cases()
+    test_issue_800()
+    test_bom_before_legacy_800()
     test_style_switch_pairs_680()
     test_custom_format_and_ssa()
     test_encodings()

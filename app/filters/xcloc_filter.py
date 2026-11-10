@@ -179,14 +179,19 @@ class XclocFilter(Filter):
     writes_targets = True  # B-bytes: a target equal to its source is a real write
 
     def parse(self, data: bytes, provider: str | None = None) -> ParseResult:
+        from app.filters.xliff_filter import TOKENS_KEY, TOKENS_VERSION
+
         with _open(data) as zf:
             prefix, xliffs = _layout(zf)
             _raw, meta = _read_contents(zf, prefix)
             units: list[TextUnit] = []
             offset = 0
+            numbered = False  # #794 gate: any member numbered by the current tokenizer
             for name in xliffs:
                 raw = zf.read(name)
-                for u in _xliff().parse(raw).units:
+                member = _xliff().parse(raw)
+                numbered = numbered or TOKENS_KEY in member.skeleton
+                for u in member.units:
                     units.append(
                         TextUnit(p_index=offset + u.p_index, text=u.text, inline_map=u.inline_map)
                     )
@@ -200,6 +205,8 @@ class XclocFilter(Filter):
             "target_locale": str(meta.get("targetLocale") or ""),
             "units": [{"p_index": u.p_index, "text": u.text, "style": ""} for u in units],
         }
+        if numbered:
+            skeleton[TOKENS_KEY] = TOKENS_VERSION
         return ParseResult(skeleton=skeleton, units=units)
 
     def build(self, original: bytes, paragraph_texts: dict) -> bytes:

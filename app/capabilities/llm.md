@@ -602,8 +602,11 @@ narrows that: an **`admin`-scoped** key, on an install that has turned
 (settings, engines, provider keys, connector/vendor secrets, LDAP/OIDC/SMTP). So the
 rule is now precise: a `docs`/`keys`/plain-`api` key still changes content, never
 configuration; only the top `admin` scope + the host-side switch unlock config. This
-covers the install-global operational toggles too - the retention policy
-and the SRX segmentation ruleset are **configuration**, not content,
+covers the install-global operational toggles too - the retention policy, the SRX segmentation
+ruleset and the Bilingua parsing-engine lists
+(`bilingua_formats`, `bilingua_shadow_formats`: which formats new uploads are parsed by, install-wide;
+`bilingua_formats` defaults to `all`, the shadow list to empty; an unknown format name or a list of more than 256 names is refused with nothing saved, never cut) are
+**configuration**, not content,
 so they require the same `admin` scope + `remote_admin_enabled` as any other config
 route (a `docs`-scoped key, whatever its role, cannot reach them). Some things stay
 **local-only** for every key including `admin`: the install-locked switches above
@@ -1921,7 +1924,10 @@ MCP tool). The *CLI* verb has no `--remote` arm yet, so run it in-process.
   These checks cover rules imports and exports too. PDF OCR uses at most
   `PDF_OCR_MAX_PIXEL_DIM` (4000 pixels) on either edge and `PDF_OCR_MAX_TOTAL_PIXELS`
   (2500000000 pixels) per document, checked before any rendering. Text-only pages do not
-  consume that budget. Every format has `MAX_DOCUMENT_SEGMENTS` (50000 segments per document;
+  consume that budget. PDFium reads each PDF in its own child process: a file that keeps it
+  busy longer than `PDF_CALL_TIMEOUT_S` (60 s) for one step or `PDF_TOTAL_TIMEOUT_S` (150 s) in
+  all, or (Linux) needs more than `PDF_WORKER_MEMORY_MB` (1024) of memory, is stopped and
+  refused with HTTP 413; `PDF_WORKERS` (4) readers run at once. Every format has `MAX_DOCUMENT_SEGMENTS` (50000 segments per document;
   for XLSX, 50000 text cells), `MAX_SEGMENT_CHARS` (100000 characters per line or paragraph)
   and `MAX_DOCUMENT_ROWS` (500000 segment rows, segments x target languages) caps, refused
   with a 413 before anything is stored. The same caps apply to connector pulls and seeders

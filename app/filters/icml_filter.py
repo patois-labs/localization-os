@@ -106,6 +106,9 @@ def _parse(data: bytes):
             "This InCopy file has far more markup than MAX_DOCUMENT_SEGMENTS allows "
             f"({config.MAX_DOCUMENT_SEGMENTS} segments). Split the document."
         )
+    from app.filters.xml_guard import check_tag_budget
+
+    check_tag_budget(raw, what="This InCopy file")  # #792 gate
     parser = etree.XMLParser(
         resolve_entities=False,
         no_network=True,

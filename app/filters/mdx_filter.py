@@ -50,6 +50,8 @@ from app.filters.base import (
     check_unit_texts,
     decode_text_lossless,
     encode_text_lossless,
+    legacy_read,
+    note_new_read,
     note_source_encoding,
     read_text_upload,
     register,
@@ -76,6 +78,7 @@ from app.filters.md_emphasis import (
     fold_line_breaks,
     restore_cell_escapes,
 )
+from app.filters.token_lit import next_free, reserved_numbers
 from app.services.segment import _PLACEHOLDER_RE, ph_close, ph_open, ph_point, strip_placeholders
 
 DEFAULT_ATTRS = ("alt", "aria-label", "caption", "label", "placeholder", "title")
@@ -97,8 +100,10 @@ _STR_END = {
 }
 _INLINE_SPECIAL = re.compile(r"[\\`{<]")
 _EOL_CHARS = "\r\n\x0b\x0c\x1c\x1d\x1e\x85  "
-_CODE_SPAN = re.compile(r"(`+)(?:.+?)(?<!`)\1(?!`)")
-_UNESCAPED_SPECIAL = re.compile(r"(?<!\\)([{}<])")
+_TICK_RUN = re.compile(r"`+")  # #790 gate: code spans are found by _code_spans
+_ROW_PIPE = re.compile(r"(?<!\\)\|")
+_BS_RUN_SPECIAL = re.compile(r"(\\*)([{}<])")
+_BS_RUN_SPECIAL_TICK = re.compile(r"(\\*)([{}<`])")  # #790 structure fuzz: a stray backtick too
 _FOOTNOTE_LEAD = re.compile(FOOTNOTE_DEF.pattern + "$")
 
 
@@ -471,7 +476,11 @@ class _Walk:
         out: list[str] = []
         spans: dict = {}
         ids: dict[int, int] = {}
-        counter = 0
+        counter = made = 0
+        # #814.1: the codes skip the numbers token look-alike text in the line uses
+        reserved = reserved_numbers("".join(p for p in parts if isinstance(p, str)))
+        if reserved and legacy_read():
+            reserved = set()
         for pi, p in enumerate(parts):
             if isinstance(p, str):
                 out.append(p)
@@ -482,7 +491,10 @@ class _Walk:
                 spans[str(n)]["close"] = (s, e)
                 out.append(ph_close("g", n))
                 continue
-            counter += 1
+            counter = next_free(counter, reserved)
+            made += 1
+            if counter != made:
+                note_new_read()
             ids[pi] = counter
             if pi in partner:
                 spans[str(counter)] = {"open": (s, e)}
@@ -512,17 +524,75 @@ def _walk(
     return _Walk(text, translatable_attrs() if allow is None else allow, md_walk, fm_keys)
 
 
-def _escape_text(s: str) -> str:
+def _escape_special(seg: str, ticks: bool = False) -> str:
+    """#790: a `{ } <` is already escaped only after an ODD run of backslashes; after an even run
+    (including none) `\\{` is an escaped backslash and the brace is live, so escape it.
+    `ticks`: a backtick too (see `_rematerialize`)."""
+    return (_BS_RUN_SPECIAL_TICK if ticks else _BS_RUN_SPECIAL).sub(
+        lambda m: m.group(0) if len(m.group(1)) % 2 else m.group(1) + "\\" + m.group(2), seg
+    )
+
+
+def _escape_text(s: str, row: bool = False, ticks: bool = False) -> str:
     """Backslash-escape `{`, `}` and `<` a translation introduced (outside code spans),
-    so the rebuilt MDX still compiles; already escaped ones are left alone."""
+    so the rebuilt MDX still compiles; already escaped ones are left alone. With `ticks`, a
+    backtick outside the code spans of this text run is escaped too."""
     out = []
     pos = 0
-    for m in _CODE_SPAN.finditer(s):
-        out.append(_UNESCAPED_SPECIAL.sub(r"\\\1", s[pos : m.start()]))
-        out.append(m.group(0))
-        pos = m.end()
-    out.append(_UNESCAPED_SPECIAL.sub(r"\\\1", s[pos:]))
+    spans = _code_spans(s)
+    if row:  # keep only spans both a cell-first reader and a whole-line reader see (fail closed)
+        spans = sorted(set(spans) & set(_code_spans(s, True)))
+    for a, b in spans:
+        out.append(_escape_special(s[pos:a], ticks))
+        out.append(s[a:b])
+        pos = b
+    out.append(_escape_special(s[pos:], ticks))
     return "".join(out)
+
+
+def _code_spans(s: str, row: bool = False) -> list[tuple[int, int]]:
+    """Code spans in a translation, the CommonMark way (#790 gate; the old regex read
+    ``\\`{x}` `` and ``w ``<z` `` as spans and left the `{` / `<` live):
+    - an opener is a WHOLE backtick run, never a suffix of a longer run;
+    - a backtick after an ODD run of backslashes is a literal, so that run opens one shorter;
+    - the closer is the next whole run of the same length on the same line;
+    - `row`: in a table row an unescaped `|` ends the cell first, so no span crosses one."""
+    runs = [(m.start(), m.end()) for m in _TICK_RUN.finditer(s)]
+    spans: list[tuple[int, int]] = []
+    j = 0
+    while j < len(runs):
+        a, b = runs[j]
+        bs = a - len(s[:a].rstrip("\\"))
+        if bs % 2:
+            a += 1
+        n = b - a
+        close = None
+        if n:
+            for c in range(j + 1, len(runs)):
+                ca, cb = runs[c]
+                gap = s[b:ca]
+                if "\n" in gap or "\r" in gap or (row and _ROW_PIPE.search(gap)):
+                    break
+                if cb - ca == n:
+                    close = c
+                    break
+        if close is None:
+            j += 1
+            continue
+        spans.append((a, runs[close][1]))
+        j = close + 1
+    return spans
+
+
+def _inert_esm(src: str, new: str) -> str:
+    """#790 gate: a translated line that starts with ``import `` / ``export `` would be compiled
+    as an ESM block (JavaScript). Its first letter is written as a character reference, which
+    MDX prints as the same letter; the walk no longer sees ESM there."""
+    body = new.lstrip(" \t")
+    if not _ESM.match(body) or _ESM.match(src.lstrip(" \t")):
+        return new
+    at = len(new) - len(body)
+    return f"{new[:at]}&#{ord(body[0])};{body[1:]}"
 
 
 _ATTR_OPAQUE = {"{": "&#123;", "}": "&#125;", "<": "&#60;", ">": "&#62;", "=": "&#61;"}
@@ -537,26 +607,46 @@ def _escape_attr(s: str, quote: str) -> str:
     return s.replace(quote, "&quot;" if quote == '"' else "&#39;")
 
 
-def _rematerialize(text: str, spans: dict, raw) -> str:
-    """Put the original JSX / expressions back for the tokens; a token with no entry is
-    dropped (never left as literal bracket text), like html_filter."""
+def _token_info(spans: dict, tok: str):
+    inner = tok[1:-1]
+    if inner.startswith("/"):
+        return spans.get(re.sub(r"^/[a-z]?", "", inner))
+    return spans.get(re.sub(r"^[a-z]?", "", inner, count=1))
+
+
+def _rematerialize(text: str, spans: dict, raw, row: bool = False, changed: bool = False) -> str:
+    """Put the original JSX / expressions back for the tokens; a token that names no code of
+    the line is text and stays, escaped like the text around it (#814.1).
+    #790 (structure fuzz, as Bilingua render_line):
+    - in a changed line with codes, a backtick outside a code span of its own text run is
+      escaped: two backticks on either side of `{count}` paired into a code span around it
+      and the expression was read back as text;
+    - a text run that ends in an odd run of backslashes before a code gets one more
+      backslash, so the code's first character (`<Badge>`) is not escaped into text."""
+    ticks = changed and any(
+        _token_info(spans, m.group(0)) is not None for m in _PLACEHOLDER_RE.finditer(text)
+    )
     out: list[str] = []
     pos = 0
+
+    def code(span) -> None:
+        if span:
+            prev = out[-1] if out else ""
+            if (len(prev) - len(prev.rstrip("\\"))) % 2:
+                out.append("\\")
+            out.append(raw(*span))
+
     for m in _PLACEHOLDER_RE.finditer(text):
-        out.append(_escape_text(text[pos : m.start()]))
+        out.append(_escape_text(text[pos : m.start()], row, ticks))
         pos = m.end()
-        inner = m.group(0)[1:-1]
-        if inner.startswith("/"):
-            info = spans.get(re.sub(r"^/[a-z]?", "", inner))
-            if info and "close" in info:
-                out.append(raw(*info["close"]))
-        else:
-            info = spans.get(re.sub(r"^[a-z]?", "", inner, count=1))
-            if info:
-                span = info.get("point") or info.get("open")
-                if span:
-                    out.append(raw(*span))
-    out.append(_escape_text(text[pos:]))
+        info = _token_info(spans, m.group(0))
+        if info is None:
+            out.append(_escape_text(m.group(0), row, ticks))
+        elif m.group(0)[1] == "/":
+            code(info.get("close"))
+        elif info:
+            code(info.get("point") or info.get("open"))
+    out.append(_escape_text(text[pos:], row, ticks))
     return "".join(out)
 
 
@@ -687,16 +777,29 @@ class MdxFilter(Filter):
                     reps.append((lu.start, lu.end, encode_link_title(new, lu.delim)))
             elif new is not None:
                 if new != lu.text:  # #695: emphasis marks glued to CJK text
+                    raw_new = new
                     new = fold_line_breaks(lu.text, new)  # #714: one line stays one line
                     new = fix_cjk_emphasis(lu.text, new)
                     new = fix_cjk_autolinks(lu.text, new, mdx=True)  # #700
                     new = restore_cell_escapes(lu.text, new)  # #710: table cell `\|`
+                    # #814.1: a repair that moved a mark into a token (`_x1` to `*x1` inside
+                    # the brackets) would write that token as text and lose its code: skip the
+                    # repairs for this line (Bilingua render.rs does the same). The block-start
+                    # and ESM guards below still run (gate).
+                    if _PLACEHOLDER_RE.findall(new) != _PLACEHOLDER_RE.findall(raw_new):
+                        new = raw_new
                     # #704: a line-start unit (not heading text) opens no new block
                     lead = text[text.rfind("\n", 0, lu.start) + 1 : lu.start]
                     lead = _FOOTNOTE_LEAD.sub("", lead)  # #735: footnote text starts a block
-                    if "#" not in lead and _PREFIX.fullmatch(lead):
+                    # #790 (structure fuzz): heading text too, `## 1. x` read back as `x`
+                    if _PREFIX.fullmatch(lead):
                         new = escape_block_start(lu.text, new)
-                reps.append((lu.start, lu.end, _rematerialize(new, lu.spans, raw)))
+                    if not lead.strip():
+                        new = _inert_esm(lu.text, new)
+                row = bool(_ROW_PIPE.search(lu.text))  # a table row (cells split first)
+                reps.append(
+                    (lu.start, lu.end, _rematerialize(new, lu.spans, raw, row, new != lu.text))
+                )
         for a_start, a_end, val, line in attr_new:
             # an attribute inside a translated line is written through its token (raw);
             # if the translation dropped that token, the attribute goes with it

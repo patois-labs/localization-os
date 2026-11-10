@@ -203,7 +203,8 @@ def test_inline_damage_is_safe():
     }
     out = F.build(TTX, bad)
     etree.fromstring(out)
-    assert b"\xe2\x9f\xa6" not in out, "a token leaked into the file"
+    # #814.1: a token that names no code of the unit is text and stays; the repeated one goes
+    assert out.count(b"\xe2\x9f\xa6") == 3, "unknown tokens are kept as text"
     assert b"&amp; &lt;b>" in out
     print("  [inline] damaged tokens dropped or closed, output well-formed OK")
 
@@ -244,6 +245,38 @@ def test_hostile_inputs():
     finally:
         config.MAX_DOCUMENT_SEGMENTS = old
     print("  [hostile] DOCTYPE, wrong root, malformed, budget and segment cap refused OK")
+
+
+def test_many_namespace_declarations_792():
+    """#792: 40,000 xmlns:pN declarations + pN:a attributes on one tag took 27 s inside
+    lxml. Refused before the parse; an ordinary file (and spaced `=`) is unaffected."""
+    import time
+
+    from app.filters.base import InputLimitError
+
+    n = 40000
+    decls = " ".join(f'xmlns:p{i}="u{i}"' for i in range(n))
+    attrs = " ".join(f'p{i}:a="v"' for i in range(n))
+    for nsattr in (decls + " " + attrs, " ".join(f'a{i} = "v"' for i in range(n))):
+        raw = TTX.replace(b"<TRADOStag ", b"<TRADOStag " + nsattr.encode() + b" ", 1)
+        for data in (raw, _utf16(raw)):
+            t0 = time.time()
+            try:
+                F.parse(data)
+            except InputLimitError:
+                pass
+            else:
+                raise AssertionError("a tag with 40,000 attributes must be refused")
+            assert time.time() - t0 < 3, "refusal must come before the parse"
+    print("  [792] 40,000 namespace declarations on one tag refused fast OK")
+
+
+def test_control_char_translation_793():
+    """#793: a translation of only XML-illegal characters leaves the Tu untouched (it was
+    stamped Origin=mt with an empty target)."""
+    assert F.build(TTX, {"0": "\x01\x0b "}) == TTX
+    assert F.build(TTX, {"0": "\x01\x0b ", "1": ""}) == TTX
+    print("  [793] a control-character-only translation writes nothing OK")
 
 
 def test_localized_language():
@@ -311,6 +344,8 @@ def main():
     test_encodings()
     test_inline_damage_is_safe()
     test_hostile_inputs()
+    test_many_namespace_declarations_792()
+    test_control_char_translation_793()
     test_localized_language()
     test_export_end_to_end()
     print("TTX FILTER OK")

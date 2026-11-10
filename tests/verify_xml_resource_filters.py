@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """XML software-resource filters (file-format Batch 2): Android strings.xml and Java XML
 properties (.xml), .NET .resx/.resw, WiX .wxl, Qt Linguist .ts.
 
@@ -287,6 +288,75 @@ def test_wxl():
     print("  [wxl] Value attribute and v3 text, Localizable=no skipped, Culture stamped OK")
 
 
+def test_wxl_comment_child_g13():
+    """LocOS: wxl strings with a comment inside were skipped (WiX loc tools write
+    `<!-- _locID_text=.. -->` in every string). The text beside one run of text is the value, the
+    comment stays; a child element, or text on both sides of a comment, is still skipped. A
+    document stored before (no read_gen stamp) keeps skipping them (base.legacy_read)."""
+    from app.filters import base
+
+    f = get_filter("wxl")
+    src = (
+        b'<WixLocalization Culture="en-us" xmlns="http://wixtoolset.org/schemas/v3/wxl">\n'
+        b'  <String Id="Back"><!-- _locID_text="Back" _locComment="x" -->&amp;Back</String>\n'
+        b'  <String Id="Next">\n    <!-- c1 -->\n    Next &gt;\n    <!-- c2 -->\n  </String>\n'
+        b'  <String Id="Two">One <!-- mid --> two</String>\n'
+        b'  <String Id="Kid">One <b>two</b></String>\n'
+        b'  <String Id="Only"><!-- nothing else --></String>\n'
+        b'  <String Id="Cdata"><!-- c --><![CDATA[Hi <there>]]></String>\n'
+        b"</WixLocalization>\n"
+    )
+    units = _units(f, src)
+    assert units == {0: "&Back", 1: "Next >", 5: "Hi <there>"}, units
+    assert f.build(src, {}) == src
+    out = f.build(src, {"0": "&Zurueck", "1": "Weiter >", "5": "Hallo <da>"}).decode("utf-8")
+    assert (
+        '<String Id="Back"><!-- _locID_text="Back" _locComment="x" -->&amp;Zurueck</String>' in out
+    ), out
+    assert "<!-- c1 -->\n    Weiter &gt;\n    <!-- c2 -->" in out, out
+    assert "<!-- c --><![CDATA[Hallo <da>]]>" in out, out
+    assert "One <!-- mid --> two" in out and "One <b>two</b>" in out, out
+    assert [r.translatable for r in f.records(src)] == [True, True, False, False, False, True]
+    # the stamp: a parse inside an import notes the new reading rule
+    with base.source_code_page("en") as hint:
+        f.parse(src)
+    assert hint.new_read is True
+    plain = (
+        b'<WixLocalization xmlns="http://wixtoolset.org/schemas/v3/wxl">'
+        b'<String Id="a">Hi</String></WixLocalization>'
+    )
+    with base.source_code_page("en") as hint:
+        f.parse(plain)
+    assert hint.new_read is False
+    # a document imported before keeps skipping the strings (and never re-stamps)
+    token = base._LEGACY_READ.set(True)
+    try:
+        with base.source_code_page("en") as hint:
+            assert _units(f, src) == {}
+        assert hint.new_read is False
+        assert f.build(src, {"0": "x", "1": "y"}) == src
+    finally:
+        base._LEGACY_READ.reset(token)
+    print("  [wxl] strings with a comment inside are units (g13), old documents keep skipping OK")
+
+
+def test_resx_unchanged_multiline_keeps_crlf_g13():
+    """LocOS: in an all-CRLF resx a multi-line value whose translation equals its source (a
+    pseudo build leaves non-Latin text alone) was rewritten with bare LF while a changed one got
+    CRLF. An unchanged value keeps its bytes."""
+    f = get_filter("resx")
+    src = (
+        b'<root>\r\n  <data name="a" xml:space="preserve">\r\n    <value>One.\r\n\r\n{1}</value>\r\n  </data>\r\n'
+        b'  <data name="b" xml:space="preserve">\r\n    <value>Two\r\nlines</value>\r\n  </data>\r\n</root>\r\n'
+    )
+    units = _units(f, src)
+    assert units == {0: "One.\n\n{1}", 1: "Two\nlines"}, units
+    out = f.build(src, {"0": units[0], "1": "Zwei\nZeilen"})
+    assert out == src.replace(b"Two\r\nlines", b"Zwei\r\nZeilen"), out
+    assert f.build(src, {"0": units[0], "1": units[1]}) == src
+    print("  [resx] an unchanged multi-line value keeps its CRLF in a multi-unit build (g13) OK")
+
+
 def test_qt_ts():
     f = get_filter("ts")
     data = _read("ts", "app_de.ts")
@@ -496,7 +566,80 @@ def test_upload_translate_download_end_to_end():
     print("  [e2e] API upload, CLI translate, API download for strings.xml and .resx OK")
 
 
+def test_build_is_linear_786_812():
+    """#786 / #812.1: the translated build copied the whole document once per edit. At these
+    sizes the old code took 10 s (Qt ts) and 20 s (Android plurals); the one-pass splice
+    takes about a second."""
+    import time
+
+    n = 12000
+    android = (
+        '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n'
+        + "".join(
+            f'<plurals name="p{i}"><item quantity="one">%d thing {i}</item>'
+            f'<item quantity="other">%d things {i}</item></plurals>\n'
+            for i in range(n)
+        )
+        + "</resources>\n"
+    ).encode()
+    ts = (
+        '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE TS>\n<TS version="2.1" language="en_US">\n'
+        "<context><name>C</name>\n"
+        + "".join(
+            f'<message><source>Hello {i}</source><translation type="unfinished"></translation></message>\n'
+            for i in range(n)
+        )
+        + "</context></TS>\n"
+    ).encode()
+    for ext, data, localized in (("xml", android, True), ("ts", ts, False)):
+        f = get_filter(ext)
+        r = f.parse(data)
+        tr = {str(u.p_index): u.text + " X" for u in r.units}
+        t0 = time.time()
+        out = f.build_localized(data, tr, "pl") if localized else f.build(data, tr)
+        took = time.time() - t0
+        assert took < 8, (ext, took)
+        assert out.count(b" X") >= n, ext
+    print("  [786/812] Android plurals and Qt ts translated build is linear OK")
+
+
+def test_nul_and_crlf_813():
+    """#813.5 / #813.6: a NUL never reaches a wxl attribute; resx / wxl text follow the
+    file's CRLF for a translation's line breaks (wxl attributes keep &#10;)."""
+    wxl = get_filter("wxl")
+    src = (
+        b'<WixLocalization Culture="en-us" xmlns="http://wixtoolset.org/schemas/v4/wxl">\r\n'
+        b'  <String Id="k7" Value="Hello" />\r\n'
+        b'  <String Id="k8">Text</String>\r\n'
+        b"</WixLocalization>\r\n"
+    )
+    out = wxl.build(src, {"0": "a" + chr(0) + "b\nc", "1": "x\ny"})
+    assert chr(0).encode() not in out, out
+    assert b'Value="ab&#10;c"' in out, out
+    assert b">x\r\ny</String>" in out, out
+    assert b"\n" not in out.replace(b"\r\n", b""), out
+    # an LF file stays LF; an unchanged value keeps its bytes
+    lf = src.replace(b"\r\n", b"\n")
+    out = wxl.build(lf, {"1": "x\r\ny"})
+    assert b">x\ny</String>" in out and b"\r" not in out, out
+    resx = get_filter("resx")
+    rsrc = b'<root>\r\n  <data name="a" xml:space="preserve">\r\n    <value>One</value>\r\n  </data>\r\n</root>\r\n'
+    out = resx.build(rsrc, {"0": "a\nb"})
+    assert b"<value>a\r\nb</value>" in out, out
+    assert b"\n" not in out.replace(b"\r\n", b""), out
+    out = resx.build(rsrc.replace(b"\r\n", b"\n"), {"0": "a\nb"})
+    assert b"\r" not in out, out
+    # mixed file (not all CRLF): the translation is left as it is
+    mixed = rsrc.replace(b"</data>\r\n", b"</data>\n")
+    assert b"<value>a\nb</value>" in resx.build(mixed, {"0": "a\nb"})
+    print("  [813.5/6] wxl NUL dropped, resx/wxl line breaks follow the file OK")
+
+
 def main():
+    test_wxl_comment_child_g13()
+    test_resx_unchanged_multiline_keeps_crlf_g13()
+    test_nul_and_crlf_813()
+    test_build_is_linear_786_812()
     test_registration()
     test_android_units_and_skips()
     test_android_escaping_on_build()

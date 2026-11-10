@@ -23,6 +23,7 @@ init_env("loctms_subs_text_")
 
 from app.filters import get_filter, supported_exts
 from app.filters.base import EmptyDocumentError, InputLimitError, UnsupportedEncodingError
+from app.filters.scc_filter import CaptionTargetError
 from app.filters.subtitle_text_filter import UnrecognizedSubtitleError, sniff_sub
 
 LOC = "fr-FR"
@@ -140,7 +141,7 @@ def test_microdvd():
         {
             "0": "⟦g1⟧Salut !⟦/g1⟧\nCa va ?",
             "1": "Texte {0} simple",
-            # the token brings back its code; an invented token is dropped
+            # the token brings back its code; one that names no code is text (#814.1, g12)
             "2": "⟦g1⟧Rouge⟦/g1⟧\n⟦g2⟧Ligne grasse⟦/g2⟧ ⟦x9⟧",
         },
     )
@@ -149,8 +150,8 @@ def test_microdvd():
     assert lines[2] == "{25}{50}{y:i}Salut !|Ca va ?", lines[2]
     assert lines[3] == "{60}{90}Texte {0} simple", lines[3]
     assert lines[4] == "{100}{}{Y:b}", lines[4]
-    assert lines[5] == "{120}{150}{c:$0000FF}Rouge|{y:b}Ligne grasse", lines[5]
-    assert "⟦" not in out.decode()
+    assert lines[5] == "{120}{150}{c:$0000FF}Rouge|{y:b}Ligne grasse ⟦x9⟧", lines[5]
+    assert out.decode().count("⟦") == 1
     # Gate: spaces around | are layout; the unit is trimmed per line and identity is exact.
     spaced = b"{10}{20}{0} items | %s\r\n"
     assert [u.text for u in get_filter("sub").parse(spaced).units] == ["{0} items\n%s"]
@@ -205,6 +206,94 @@ def test_microdvd_style_pairs_680():
     out = f.build(src, {"1": "⟦g1⟧a ⟦x2⟧b\nc⟦/g1⟧"}).decode().split("\n")
     assert out[2] == "{30}{40}{y:i}{c:$FF}a {Y:u}b|{y:i}{c:$FF}c", out[2]
     print("  [microdvd #680] line-scoped codes are pairs that travel with their words OK")
+
+
+def _refused(fmt, data, mapping, *needles):
+    try:
+        _round(fmt, data, mapping)
+    except CaptionTargetError as exc:
+        msg = str(exc)
+        assert all(n in msg for n in needles), msg
+        return msg
+    raise AssertionError(f"expected a refusal for {mapping!r}")
+
+
+def test_structure_799():
+    """#799: a translation that would read back as a different cue list is refused; MicroDVD is
+    linear; re-emitted style codes are bounded; a BOM before non-UTF-8 bytes is not a BOM."""
+    import time
+
+    # 1. SBV / SubViewer
+    _refused("sbv", SBV, {"1": "A\n0:00:09.000,0:00:09.500\nB"}, "Cue 2", "timecode")
+    _refused("sbv", SBV, {"0": " "}, "Cue 1", "empty")
+    # a line of only Unicode spaces would end the cue: it is left out (as Bilingua does)
+    sp = _texts("sbv", _round("sbv", SBV, {"0": "A\n　\nB"}))
+    assert sp[0] == "A\nB" and sp[1:] == _texts("sbv", SBV)[1:], sp
+    sv_nl = b"00:00:01.00,00:00:04.00\r\nHello\r\nWorld\r\n\r\n"  # lines joined by newlines
+    _refused("sub", sv_nl, {"0": "A\n{1}{2}B"}, "MicroDVD")
+    ok = _texts("sbv", _round("sbv", SBV, {"0": "Fine\nthanks"}))
+    assert ok[0] == "Fine\nthanks" and ok[1:] == _texts("sbv", SBV)[1:], ok
+    # MicroDVD
+    md = b"{0}{1}Hello\n{25}{50}World\n"
+    _refused("sub", md, {"0": "25"}, "frame rate")
+    assert _texts("sub", _round("sub", md, {"0": "Salut"})) == ["Salut", "World"]
+    _refused("sub", MDVD, {"1": "{y:i}Hi"}, "style code of its own")
+    # a line break inside braces: written as "|" it would close a live code (Bilingua refuses)
+    _refused("sub", MDVD, {"1": "x {c:\n$0000FF} y"}, "Cue 2 was not exported", "control code")
+    _refused("sub", MDVD, {"1": "{y:i\n}z"}, "control code")
+    assert b"ok|line" in _round("sub", MDVD, {"1": "ok\nline"})
+    _refused("sub", MDVD, {"1": "a {y:i}b"}, "style code of its own")
+    _refused("sub", MDVD, {"1": " "}, "empty")
+    # only a code of the cue: the cue would read back as codes only and drop out (gate)
+    code_only = b"{10}{20}Caf {F:Arial}\n{30}{40}Two\n"
+    _refused("sub", code_only, {"0": "⟦x1⟧"}, "Cue 1", "nothing but control codes")
+    # a translation that keeps the source's own code token still works
+    kept = _round("sub", MDVD, {"0": "⟦g1⟧Salut!⟦/g1⟧\nComment ?"})
+    assert kept.count(b"{y:i}") == 1, kept
+    # 2. linear parse and build: 3000 pairs took 2.2 s / 6.0 s
+    big = b"{1}{2}x" + b"{y:i}a" * 3000 + b"\n"
+    t0 = time.time()
+    pr = get_filter("sub").parse(big)
+    out = get_filter("sub").build(big, {"0": pr.units[0].text + " z"})
+    assert out.endswith(b" z\n") and time.time() - t0 < 2.5, time.time() - t0
+    # 3. re-emitted style codes are bounded
+    n = 2000
+    src = b"{1}{2}x" + b"{y:i}a" * n + b"\n"
+    opens = "".join(f"⟦g{k}⟧" for k in range(1, n + 1))
+    closes = "".join(f"⟦/g{k}⟧" for k in range(n, 0, -1))
+    t0 = time.time()
+    _refused("sub", src, {"0": "w" + opens + "w\n" * 30000 + closes}, "size bound")
+    assert time.time() - t0 < 5, time.time() - t0
+    print("  [structure #799] refusals, linear MicroDVD, bounded re-emit OK")
+
+
+def test_bom_before_legacy_799():
+    """#799.4: a UTF-8 BOM before cp1252 bytes is a mark, not three letters. A NEW upload reads
+    the first cue and writes one BOM; a document stamped before the fix keeps the old reading."""
+    from app.filters.base import document_code_page
+
+    src = b"\xef\xbb\xbf0:00:01.000,0:00:02.000\nCaf\xe9\n\n0:00:03.000,0:00:04.000\nSecond\n"
+    f = get_filter("sbv")
+    parsed = f.parse(src)
+    assert [u.text for u in parsed.units] == ["Café", "Second"], parsed.units
+    assert parsed.skeleton.get("text_bom") == 2, parsed.skeleton
+    out = f.build(src, {"0": "Café au lait", "1": "Seconde"})
+    assert out.startswith(b"\xef\xbb\xbf0:00:01.000"), out[:12]
+    assert out.count(b"\xef\xbb\xbf") == 1 and out.decode("utf-8-sig").count("Café au lait") == 1
+    # a document stored before the fix (no stamp): the old reading, the old unit list
+    with document_code_page({}):
+        old = f.parse(src)
+        assert [u.text for u in old.units] == ["Second"], old.units
+        assert "text_bom" not in old.skeleton
+    # a stamped document keeps the new reading under repair/export
+    with document_code_page({"text_bom": 2}):
+        assert len(f.parse(src).units) == 2
+    # ordinary BOM files carry no stamp
+    ok = b"\xef\xbb\xbf0:00:01.000,0:00:02.000\nHi\n"
+    assert "text_bom" not in f.parse(ok).skeleton
+    print(
+        "  [bom #799.4] BOM before cp1252: first cue read, one BOM written, old docs unchanged OK"
+    )
 
 
 def test_sniff_refusals():
@@ -352,6 +441,8 @@ def main():
     test_subviewer()
     test_microdvd()
     test_microdvd_style_pairs_680()
+    test_structure_799()
+    test_bom_before_legacy_799()
     test_sniff_refusals()
     test_encodings()
     test_caps()

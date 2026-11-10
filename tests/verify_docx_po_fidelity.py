@@ -594,10 +594,11 @@ def test_lost_and_duplicated_tokens(src: bytes, body: dict):
     b = KEYS.index("bookmark_pic")
     bm = _body_paras(_doc_xml(f.build(src, {str(b): "⟦x1⟧MOVED TEXT."})))[b]
     assert _child_kinds(bm) == ["drawing", "bookmarkStart", "bookmarkEnd", "T"], _child_kinds(bm)
-    # garbage / out-of-range tokens never delete anything
+    # garbage / out-of-range tokens never delete anything; they name no code of the paragraph, so
+    # they are kept as text (#814.1)
     junk = f.build(src, {str(i): "⟦x9⟧⟦r7⟧junk⟦/r7⟧"})
     jp = _body_paras(_doc_xml(junk))[i]
-    assert _counts(jp) == _counts(src_paras[i]) and _para_text(jp) == "junk"
+    assert _counts(jp) == _counts(src_paras[i]) and _para_text(jp) == "⟦x9⟧⟦r7⟧junk⟦/r7⟧"
     print("  2)  lost token keeps the object in place + QA flag; duplicate placed once")
 
 
@@ -671,6 +672,40 @@ def test_end_to_end():
     assert "AFTER THE PICTURE COMES THIS SENTENCE." in texts, texts
     from unittest.mock import patch
 
+    from tests._bootstrap import bilingua_switch_off
+
+    # the Python docx object writer is patched below: a Python document (a Bilingua one never
+    # calls it)
+    # Python filter path (documents imported before Bilingua, or no wheel)
+    with bilingua_switch_off():
+        r = client.post(
+            f"/projects/{pid}/documents",
+            data={"mode": "segmented"},
+            files={
+                "file": (
+                    "objects-py.docx",
+                    src,
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+            follow_redirects=False,
+        )
+    assert r.status_code == 303, r.text
+    doc_id = int(r.headers["location"].rsplit("/", 1)[-1])
+    with Session(engine) as s:
+        rows = [
+            (x.id, x.source_text)
+            for x in s.exec(
+                select(Segment).where(
+                    Segment.document_id == doc_id, Segment.target_locale == "es-ES"
+                )
+            ).all()
+        ]
+    for sid, text in rows:
+        r = client.post(
+            f"/segments/{sid}/save", data={"target_text": _translate(text) + "", "tte_ms": "0"}
+        )
+        assert r.status_code == 200, r.text
     with patch("app.filters.docx_filter._set_paragraph_objects", side_effect=ValueError("bad XML")):
         refused = client.get(f"/documents/{doc_id}/export?locale=es-ES")
     assert 400 <= refused.status_code < 500, refused.text
@@ -2624,12 +2659,16 @@ def _new_docx_doc(client, name: str, data: bytes, comments: bool = False) -> int
         from app.services import comment_option
 
         comment_option.set_for(pid, True)
-    r = client.post(
-        f"/projects/{pid}/documents",
-        data={"mode": "segmented"},
-        files={"file": (name + ".docx", data, _DOCX_CTYPE)},
-        follow_redirects=False,
-    )
+    from tests._bootstrap import bilingua_switch_off
+
+    # Python filter path (documents imported before Bilingua, or no wheel)
+    with bilingua_switch_off():
+        r = client.post(
+            f"/projects/{pid}/documents",
+            data={"mode": "segmented"},
+            files={"file": (name + ".docx", data, _DOCX_CTYPE)},
+            follow_redirects=False,
+        )
     assert r.status_code == 303, r.text
     return int(r.headers["location"].rsplit("/", 1)[-1])
 

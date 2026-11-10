@@ -55,6 +55,8 @@ from app.filters.base import (
     InputLimitError,
     ParseResult,
     TextUnit,
+    UnsupportedEncodingError,
+    _declared_codec,
     check_segment_cap,
     check_unit_texts,
     decode_text_lossless,
@@ -63,6 +65,7 @@ from app.filters.base import (
     read_text_upload,
     register,
 )
+from app.filters.token_lit import code_tokens
 from app.services.segment import _PLACEHOLDER_RE, ph_close, ph_open, ph_point
 
 #: TTML 1/2 (and IMSC1) namespace, plus the two DFXP candidate-recommendation drafts
@@ -81,7 +84,8 @@ _TOKEN_RE = re.compile(
     re.S,
 )
 _NAME_RE = re.compile(r"</?\s*([^\s/>]+)")
-_LANG_ATTR_RE = re.compile(r"""(\sxml:lang\s*=\s*)(["'])(.*?)\2""", re.S)
+# Every attribute of a start tag, walked name by name (a value never starts a match: #801.3).
+_ANY_ATTR_RE = re.compile(r"""\s([^\s=/>]+)\s*=\s*(["'])(.*?)\2""", re.S)
 _ATTR_RE = re.compile(r"""\s([^\s=/>]+)\s*=\s*(["'])(.*?)\2""", re.S)
 _WS_NL_RE = re.compile(r"[ \t\r\n]*[\r\n][ \t\r\n]*")
 _DOCTYPE_RE = re.compile(rb"<!DOCTYPE", re.I)
@@ -105,10 +109,11 @@ def check_ttml_budget(raw: bytes) -> None:
 
 def _parse_tree(raw: bytes):
     """Hardened lxml parse (same parser as XLIFF uploads). Refuses a DOCTYPE/DTD."""
-    from app.filters.xml_guard import make_hardened_parser
+    from app.filters.xml_guard import check_tag_budget, make_hardened_parser
 
     if _DOCTYPE_RE.search(raw):
         raise TtmlParseError("TTML file declares a DOCTYPE / DTD; refused (entity/XXE vector).")
+    check_tag_budget(raw, what="This TTML file")  # #792
     try:
         root = etree.fromstring(raw, parser=make_hardened_parser())
     except etree.XMLSyntaxError as exc:
@@ -143,6 +148,17 @@ def _escape(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _lang_values(tok: str) -> list[tuple]:
+    """(value_start, value_end, value) of the ``xml:lang`` attributes of a start tag, found by
+    walking the attributes, so ``xml:lang='en'`` written inside another attribute's value is
+    not one (#801.3)."""
+    return [
+        (am.start(3), am.end(3), am.group(3))
+        for am in _ANY_ATTR_RE.finditer(tok)
+        if am.group(1) == "xml:lang"
+    ]
+
+
 class _Doc:
     """Decoded text plus the TTML <p> spans: (start_tag_end, end_tag_start, preserve,
     prefix) offsets into ``text`` for every TTML-namespace <p>, in document order."""
@@ -153,6 +169,18 @@ class _Doc:
         if upload:
             self.text, self.enc = read_text_upload(raw, sig=True, declared=True)
             check_ttml_budget(raw)
+            if self.enc not in ("utf-8", "utf-16") and _declared_codec(raw) in (
+                None,
+                "utf-8",
+                "utf-16",
+            ):
+                # XML 1.0 (4.3.3): bytes that are not UTF-8 or UTF-16 must name their encoding;
+                # a missing or false (UTF-8) declaration is refused, never guessed (#801.2)
+                raise UnsupportedEncodingError(
+                    "This TTML file is not UTF-8 and does not declare its encoding "
+                    '(<?xml version="1.0" encoding="..."?>). Re-save it as UTF-8, or add the '
+                    "declaration."
+                )
         else:
             self.text, self.enc = decode_text_lossless(raw, sig=True, declared=True), "utf-8"
         # lxml sees the decoded text (declaration already rewritten to UTF-8 when converted)
@@ -172,10 +200,8 @@ class _Doc:
                 tags[stack.pop()][3] = m.start()
                 continue
             nm = _NAME_RE.match(tok)
-            for lm in _LANG_ATTR_RE.finditer(tok):
-                self.lang_ranges.append(
-                    (m.start() + lm.start(3), m.start() + lm.end(3), lm.group(3))
-                )
+            for vs, ve, val in _lang_values(tok):
+                self.lang_ranges.append((m.start() + vs, m.start() + ve, val))
             tags.append([m.start(), m.end(), nm.group(1) if nm else "", m.end()])
             if not tok.endswith("/>"):
                 stack.append(len(tags) - 1)
@@ -262,13 +288,18 @@ def _tokenize(fragment: str, preserve: bool):
         local = _local(name)
         n += 1
         if local == "br":
-            if not tok.endswith("/>"):  # <br></br>: consume the matching end tag
-                while i < len(toks) and not toks[i].group(0).startswith("</"):
+            if not tok.endswith("/>"):  # <br></br>: consume through the MATCHING end tag
+                depth = 1  # a <br> may hold <metadata>, <set> or animation children (#801.1)
+                while i < len(toks) and depth:
+                    t2 = toks[i].group(0)
+                    if not t2.startswith(("<!", "<?")):
+                        if t2.startswith("</"):
+                            depth -= 1
+                        elif not t2.endswith("/>"):
+                            depth += 1
+                    pos = toks[i].end()
                     i += 1
-                close = toks[i].group(0) if i < len(toks) else ""
-                pos = toks[i].end() if i < len(toks) else pos
-                i += 1
-                inline[str(n)] = ("br", tok + fragment[m.end() : pos - len(close)] + close, "")
+                inline[str(n)] = ("br", fragment[m.start() : pos], "")
             else:
                 inline[str(n)] = ("br", tok, "")
             parts.append(("br", ph_point("x", n)))
@@ -314,9 +345,9 @@ def _tokenize(fragment: str, preserve: bool):
 
 
 def _render(text: str, inline: dict, br_name: str) -> str:
-    """Translated unit text -> <p> content. Tolerant like the XLIFF rebuild: an unknown
-    or repeated token and a stray close are dropped (never written as literal ⟦⟧), an
-    unclosed span is closed at the end, and a typed newline becomes a <br/>."""
+    """Translated unit text -> <p> content. Tolerant like the XLIFF rebuild: a repeated
+    token and a stray close are dropped, an unclosed span is closed at the end, and a typed
+    newline becomes a <br/>. A token that names no code of the unit is text (#814.1)."""
     from app.filters.xml_text import xml_target_text
 
     text = xml_target_text(text)
@@ -330,7 +361,7 @@ def _render(text: str, inline: dict, br_name: str) -> str:
             out.append(f"<{br_name}/>".join(lines))
 
     pos = 0
-    for m in _PLACEHOLDER_RE.finditer(text):
+    for m in code_tokens(text, inline):
         put_text(text[pos : m.start()])
         pos = m.end()
         inner = m.group(0)[1:-1]
@@ -367,16 +398,16 @@ def _relang_tags(fragment: str, source_lang: str | None, lang: str) -> str:
     if not src:
         return fragment
 
-    def fix_attr(lm):
-        if lm.group(3).strip().lower() != src:
-            return lm.group(0)
-        return lm.group(1) + lm.group(2) + lang + lm.group(2)
-
     def fix_tag(m):
         tok = m.group(0)
         if tok.startswith(("<!", "<?", "</")):
             return tok
-        return _LANG_ATTR_RE.sub(fix_attr, tok)
+        out, pos = [], 0
+        for vs, ve, val in _lang_values(tok):
+            if val.strip().lower() == src:
+                out += [tok[pos:vs], lang]
+                pos = ve
+        return "".join(out) + tok[pos:]
 
     return _TOKEN_RE.sub(fix_tag, fragment)
 

@@ -11,6 +11,8 @@ rebuild a format-preserving file on export.
 Documented in: docs/architecture/translation-pipeline.md
 """
 
+import contextlib
+import logging
 import time
 from uuid import uuid4
 
@@ -41,6 +43,33 @@ _INSERT_CHUNK = 1000
 
 class UnsupportedFormat(Exception):
     pass
+
+
+_LOG = logging.getLogger(__name__)
+
+#: The refusal a native engine crash on a parse becomes (the export path's wording).
+ENGINE_CRASH_MESSAGE = (
+    "The file could not be read. Upload it again, or contact support if it keeps failing."
+)
+
+
+@contextlib.contextmanager
+def _engine_panic_refused(fmt: str):
+    """T3 gate: a Rust panic inside the Bilingua wheel surfaces as pyo3's PanicException,
+    which derives from BaseException, so every door's `except Exception` (web 303, /api 422,
+    CLI, zip batch) would miss it and the upload would answer 500. Mapped here, at the one
+    parse seam, to a BilinguaParseError (a ValueError) with code `panic`: the same clean
+    refusal every door already shows for an unreadable file, like the export path's
+    ExportUnreadableBlob. Logged by format only, never the file or the panic text."""
+    try:
+        yield
+    except BaseException as exc:
+        if type(exc).__name__ != "PanicException":
+            raise
+        _LOG.error("bilingua panic on parse of a %s upload", fmt)
+        from app.filters.bilingua_adapter import BilinguaParseError
+
+        raise BilinguaParseError(ENGINE_CRASH_MESSAGE, "panic") from exc
 
 
 class NotADocumentProject(Exception):
@@ -180,15 +209,27 @@ def _bilingual_locales(fmt: str, data: bytes, skeleton: dict, locales: list[str]
 
 
 def _htmlhelp_kwargs(
-    session, project, fmt: str, hhp: bytes | None, *, source_fallback: bool = False
+    session,
+    project,
+    fmt: str,
+    hhp: bytes | None,
+    *,
+    source_fallback: bool = False,
+    hh_decode: int | None = None,
 ) -> dict:
     """Decision 21: a .hhc/.hhk with no declared code page is read in
     the code page of the HTML Help project's language (.hhp `Language=`): the .hhp from
     the same upload (`hhp`, a ZIP batch) or, failing that, one already in the project.
-    {} otherwise, so the #509 rule (UTF-8, declared charset, Windows-1252) applies."""
+    {} otherwise, so the #509 rule (UTF-8, declared charset, Windows-1252) applies.
+    `hh_decode`: a repair's decode version (#796/#797), so an unstamped document gets the
+    hint the pre-fix code gave; None (a fresh upload) is the current version."""
     if fmt not in ("hhc", "hhk"):
         return {}
-    from app.filters.htmlhelp_filter import hhp_code_page
+    from app.filters.htmlhelp_filter import HH_DECODE_VERSION
+    from app.filters.htmlhelp_filter import hhp_code_page as _hhp_cp
+
+    def hhp_code_page(raw: bytes):
+        return _hhp_cp(raw, HH_DECODE_VERSION if hh_decode is None else hh_decode)
 
     cp = hhp_code_page(hhp) if hhp else None
     if cp is None and getattr(project, "id", None) is not None:
@@ -253,7 +294,7 @@ def ingest_document(
             return sdl_package.ingest_package(
                 session, project, filename, data, mode, created_by=created_by, context=context
             )
-    filt = get_filter(fmt)
+    filt = get_filter(fmt, new_import=True)  # the one first parse: Bilingua switch applies here
     if filt is None:
         raise UnsupportedFormat(fmt or "unknown")
 
@@ -261,18 +302,19 @@ def ingest_document(
     # runs in the project's AI scope, so an opted-out project's pages never leave.
     # Decision 22: an undeclared non-UTF-8 text file is read in the code
     # page of the project's SOURCE language, with a warning when its letters look wrong.
-    from app.filters.base import apply_code_page_hint, source_code_page
+    from app.filters.base import apply_code_page_hint, is_bilingua_skeleton, source_code_page
     from app.services import ai_optout
 
     pid, src_locale = getattr(project, "id", None), getattr(project, "source_locale", "") or ""
-    with ai_optout.scope(project_id=pid), source_code_page(src_locale) as cp_hint:
-        parsed = filt.parse(
-            data,
-            provider=project.default_provider,
-            **_table_kwargs(session, project, filt, columns),
-            **_htmlhelp_kwargs(session, project, fmt, hhp, source_fallback=True),
-            **_comment_kwargs(project, filt),
-        )
+    with _engine_panic_refused(fmt):  # noqa: SIM117 (opt-out scan reads the scope line)
+        with ai_optout.scope(project_id=pid), source_code_page(src_locale) as cp_hint:
+            parsed = filt.parse(
+                data,
+                provider=project.default_provider,
+                **_table_kwargs(session, project, filt, columns),
+                **_htmlhelp_kwargs(session, project, fmt, hhp, source_fallback=True),
+                **_comment_kwargs(project, filt),
+            )
     # Batch 4 gate: a macro-enabled Office package named .docx/.xlsx/.pptx (or a
     # template / show form) is refused; macros come in only under .docm/.xlsm/.pptm etc.
     from app.filters.zip_guard import MacroExtensionMismatch, refuse_disguised_macro
@@ -281,7 +323,23 @@ def ingest_document(
         refuse_disguised_macro(data, fmt)
     except MacroExtensionMismatch as exc:
         raise UnsupportedFormat(str(exc)) from exc
-    skeleton = apply_code_page_hint(parsed.skeleton, cp_hint)
+    if is_bilingua_skeleton(parsed.skeleton):
+        # A Bilingua import writes its own encoding keys and warnings; the Python code-page
+        # hint (read_gen, text_code_page, text_encoding warnings) describes Python decoders.
+        skeleton = parsed.skeleton
+    else:
+        skeleton = apply_code_page_hint(parsed.skeleton, cp_hint)
+        # Shadow mode (bilingua_shadow_formats): also parse with Bilingua in the background
+        # and log counts and hashes only. Reads the upload and a copy of the Python units,
+        # writes nothing, never raises (app/services/bilingua_shadow.py). The job goes to the
+        # shadow pool through ai_optout.submit, so the project's AI scope (and any cost sink)
+        # travels to the worker thread in a copied context (#364).
+        from app.services import bilingua_shadow
+
+        shadow_job = bilingua_shadow.prepare(fmt, data, skeleton, src_locale)
+        if shadow_job is not None:
+            with ai_optout.scope(project_id=pid):
+                ai_optout.submit(bilingua_shadow.POOL, bilingua_shadow.run_job, shadow_job)
     unit_texts = [u["text"] for u in skeleton["units"]]
     # #571: every format answers to one segment cap and one line-length cap, BEFORE the
     # Document row or any Segment is written (a filter may already have stopped earlier).
@@ -307,9 +365,12 @@ def ingest_document(
         # paragraph view, Advanced) sees the same unit list and their alt text is left
         # as it is on export. Segmented mode keeps them as their own segments.
         # #733: page metadata units (`meta:*`) are appended the same way and stay out too.
-        from app.filters.a11y import is_appended_style
+        # #667: a unit whose style marks it in its own place (a Markdown line holding an
+        # image) is body prose and stays in (rule 2, stamped so repair keeps the rule).
+        from app.filters.a11y import FT_UNITS_VERSION, full_text_units
 
-        skeleton["units"] = [u for u in skeleton["units"] if not is_appended_style(u.get("style"))]
+        skeleton["units"] = full_text_units(skeleton["units"], FT_UNITS_VERSION)
+        skeleton["ft_units"] = FT_UNITS_VERSION
         unit_texts = [u["text"] for u in skeleton["units"]]
     skeleton["mode"] = mode
     if skeleton_extra:
@@ -607,10 +668,18 @@ def zip_batch_summary(result: dict, max_chars: int | None = None) -> str:
 def _reingest_htmlhelp_kwargs(session, project, doc) -> dict:
     """Decision 21 on a repair: the code page the import used (stamped on the skeleton),
     else the project's .hhp, else nothing (the #509 rule)."""
+    from app.filters.htmlhelp_filter import HH_DECODE_KEY, decode_version
+
+    # #796/#797: a repair re-reads the file with the decode version the import used
+    # (no stamp: the pre-fix decode).
+    version = {"hh_decode": decode_version((doc.skeleton or {}).get(HH_DECODE_KEY))}
     cp = (doc.skeleton or {}).get("hhp_code_page")
     if doc.fmt in ("hhc", "hhk") and isinstance(cp, int):
-        return {"hhp_code_page": cp}
-    return _htmlhelp_kwargs(session, project, doc.fmt, None)
+        return {"hhp_code_page": cp, **version}
+    if doc.fmt == "hhp":
+        return version
+    kwargs = _htmlhelp_kwargs(session, project, doc.fmt, None, hh_decode=version["hh_decode"])
+    return {**kwargs, **version} if doc.fmt in ("hhc", "hhk") else kwargs
 
 
 def reingest_document(doc_id: int) -> bool:
@@ -646,36 +715,51 @@ def reingest_document(doc_id: int) -> bool:
             data = blobstore.get().get(blobstore.document_key(doc))
         except OSError:
             return False
-        filt = get_filter(doc.fmt)
+        filt = get_filter(doc.fmt, skeleton=getattr(doc, "skeleton", None))
         if filt is None:
             return False
         # AI opt-out (DPAI-08): a parse may OCR page images through a vision model; it
         # runs in the project's AI scope, so an opted-out project's pages never leave.
-        from app.filters.base import apply_code_page_hint, document_code_page
+        from app.filters.base import (
+            READ_GEN_KEY,
+            apply_code_page_hint,
+            document_code_page,
+            is_bilingua_skeleton,
+        )
         from app.services import ai_optout
+
+        bilingua_doc = is_bilingua_skeleton(getattr(doc, "skeleton", None))
 
         # Decision 22: re-read in the code page the import used (none stamped: the #509 rule).
         pid = getattr(project, "id", None)
-        with ai_optout.scope(project_id=pid), document_code_page(doc.skeleton) as cp_hint:
-            parsed = filt.parse(
-                data,
-                provider=project.default_provider,
-                **_table_kwargs(
-                    session, project, filt, None, stamp=(doc.skeleton or {}).get("table") or {}
-                ),
-                **_reingest_htmlhelp_kwargs(session, project, doc),
-                **_comment_kwargs(project, filt),
-            )
+        with _engine_panic_refused(doc.fmt):  # noqa: SIM117 (opt-out scan reads the scope line)
+            with ai_optout.scope(project_id=pid), document_code_page(doc.skeleton) as cp_hint:
+                parsed = filt.parse(
+                    data,
+                    provider=project.default_provider,
+                    **_table_kwargs(
+                        session, project, filt, None, stamp=(doc.skeleton or {}).get("table") or {}
+                    ),
+                    **({} if bilingua_doc else _reingest_htmlhelp_kwargs(session, project, doc)),
+                    **_comment_kwargs(project, filt),
+                )
+        if bilingua_doc != is_bilingua_skeleton(parsed.skeleton):
+            # A repair never moves a document between engines.
+            return False
         if cp_hint is not None:
             apply_code_page_hint(parsed.skeleton, cp_hint)
+        if (doc.skeleton or {}).get(READ_GEN_KEY):  # 11-07 reading rules stay on (base.py)
+            parsed.skeleton[READ_GEN_KEY] = doc.skeleton[READ_GEN_KEY]
         parsed_units = parsed.skeleton.get("units", [])
         check_unit_texts([u["text"] for u in parsed_units])  # #571: same caps as a fresh upload
         if doc.mode == TransMode.FULL_TEXT:
             # As ingest_document: accessibility units stay out of a full-text body (the
             # export paragraph-count guard quarantines a body that carries them).
-            from app.filters.a11y import is_appended_style
+            # #667: under the full-text rule the document was imported with (its stamp is
+            # kept): an unstamped document keeps rule 1, so its paragraphs do not move.
+            from app.filters.a11y import ft_units_version, full_text_units
 
-            parsed_units = [u for u in parsed_units if not is_appended_style(u.get("style"))]
+            parsed_units = full_text_units(parsed_units, ft_units_version(doc.skeleton))
         unit_texts = [u["text"] for u in parsed_units]
         seg_locale = getattr(project, "source_locale", "") or ""
         # Resolve the SEGMENTATION PROFILE exactly as ingest_document does (P6): a
@@ -709,7 +793,11 @@ def reingest_document(doc_id: int) -> bool:
         # list while its segments came from the new one, and export rebuilt the file from
         # units that no longer matched the segments.
         skel["units"] = parsed_units
-        if filt.fmt == "docx" and skel.get("docx_walk") != parsed.skeleton.get("docx_walk"):
+        if (
+            not bilingua_doc
+            and filt.fmt == "docx"
+            and skel.get("docx_walk") != parsed.skeleton.get("docx_walk")
+        ):
             # #349: this repair re-walks with the current table walk, so the stored
             # unit numbering carries its stamp; otherwise export would rebuild the new
             # segments under the old numbering.
@@ -725,7 +813,14 @@ def reingest_document(doc_id: int) -> bool:
             "md_walk",
             "md_fm_keys",
             "hhp_code_page",
+            "hh_decode",
             "text_code_page",
+            "text_bom",  # #799.4 / #800.4: BOM read version the parse used
+            "xliff_tokens",  # #794 gate: the repair re-numbered with the current tokenizer
+            # T3: a Bilingua document's stamp is rewritten from the fresh parse (the units may
+            # have moved under a newer wheel, and a stale stamp would refuse every export);
+            # its source_encoding is recomputed by the same parse.
+            *(("bilingua", "source_encoding") if bilingua_doc else ()),
         ):
             if parsed.skeleton.get(key):
                 skel[key] = parsed.skeleton[key]

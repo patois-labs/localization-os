@@ -13,7 +13,7 @@ import sys
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(_ROOT)
 sys.path.insert(0, _ROOT)
-from tests._bootstrap import init_env
+from tests._bootstrap import bilingua_switch_off, init_env
 
 init_env("loctms_htmlhelp_")
 
@@ -532,7 +532,183 @@ def test_api_and_cli_round_trip():
     print("  [surfaces] API upload/download and CLI upload/export round trip (cp1251) OK")
 
 
+def test_cjk_export_reads_back_796_797():
+    from app.filters.htmlhelp_filter import HH_DECODE_KEY, hhp_code_page
+
+    src = (
+        b'<HTML><HEAD><meta http-equiv="Content-Type" content="text/html; charset=windows-1252">'
+        b'</HEAD><BODY><OBJECT type="text/sitemap"><param name="Name" value="Start"></OBJECT>'
+        b"</BODY></HTML>"
+    )
+    # #796: characters outside the strict gb2312 / shift_jis / euc_kr / big5 subsets
+    for loc, text in (("ko-KR", "똠"), ("zh-CN", "喆"), ("ja-JP", "①設定"), ("zh-TW", "€元")):
+        out = HHC_F.build_localized(src, {"0": text}, loc)
+        parsed = HHC_F.parse(out)
+        assert [u.text for u in parsed.units] == [text], (loc, [u.text for u in parsed.units])
+        assert parsed.skeleton.get(HH_DECODE_KEY) == 2, parsed.skeleton
+        # a document stored before the fix (no stamp) is read exactly as it always was
+        try:
+            old = HHC_F.parse(out, hh_decode=1)
+            assert [u.text for u in old.units] != [text] and HH_DECODE_KEY not in old.skeleton, loc
+        except (EmptyDocumentError, UnsupportedEncodingError):
+            pass  # the old decode read the bytes as Windows-1252: no letters, or refused
+        # an unchanged re-export of the new reading keeps the text
+        again = HHC_F.build_localized(out, {"0": text}, loc, hh_decode=2)
+        assert [u.text for u in HHC_F.parse(again).units] == [text], loc
+    # #797: a localized project file reads back in the code page of its own Language=
+    for loc, title, cp in (("ko-KR", "똠 도움말", 949), ("zh-CN", "喆 帮助", 936)):
+        out = HHP_F.build_localized(HHP.encode("cp1252"), {"0": title}, loc)
+        assert hhp_code_page(out) == cp, (loc, hhp_code_page(out))
+        parsed = HHP_F.parse(out)
+        assert parsed.units[0].text == title, (loc, parsed.units[0].text)
+        assert parsed.skeleton.get(HH_DECODE_KEY) == 2
+        if loc == "zh-CN":
+            old = HHP_F.parse(out, hh_decode=1)
+            assert old.units[0].text != title and HH_DECODE_KEY not in old.skeleton
+        assert HHP_F.build_localized(out, {"0": title}, loc) == out
+    # a project with a byte 1252 lacks is no longer refused for its code page hint
+    assert hhp_code_page(b"[OPTIONS]\r\nLanguage=0x412 Korean\r\nTitle=\x81\x41\r\n") == 949
+    # the stored stamp reaches the export (no stamp: version 1)
+    from types import SimpleNamespace
+
+    from app.services.export import _hh_decode
+
+    assert _hh_decode(SimpleNamespace(skeleton={HH_DECODE_KEY: 2})) == 2
+    assert _hh_decode(SimpleNamespace(skeleton={})) == 1
+    print("  [hhp/hhc] 796/797: localized CJK export reads back, old decode kept for unstamped OK")
+
+
+def test_gate_versioned_decode_service_paths():
+    """#796/#797 gate: through ingest, repair and export. A document stored before the fix
+    (no hh_decode stamp) exports and repairs exactly as before, a new upload is version 2,
+    and a re-upload of a version 1 export reads back."""
+    from sqlmodel import Session, select
+
+    from app.db import engine, init_db
+    from app.filters.htmlhelp_filter import HH_DECODE_KEY
+    from app.models import Document, Project, Segment, TargetLocale, TransMode
+    from app.ports import blobstore
+    from app.services import ingest
+    from app.services.export import build_translated_file
+
+    def sitemap(charset: str, name: bytes, local: bytes = b"a.htm") -> bytes:
+        meta = (
+            b'<meta http-equiv="Content-Type" content="text/html; charset='
+            + charset.encode()
+            + b'">'
+            if charset
+            else b""
+        )
+        return (
+            b"<HTML><HEAD>" + meta + b'</HEAD><BODY><OBJECT type="text/sitemap">'
+            b'<param name="Name" value="' + name + b'"><param name="Local" value="' + local + b'">'
+            b"</OBJECT></BODY></HTML>"
+        )
+
+    init_db()
+    loc = "ja-JP"
+    with Session(engine) as s:
+        p = Project(name="hh-gate", org_id=1, source_locale="en-US", default_provider="mock")
+        s.add(p)
+        s.commit()
+        s.refresh(p)
+        s.add(TargetLocale(project_id=p.id, locale=loc))
+        s.commit()
+        pid = p.id
+
+    def upload(name: str, data: bytes) -> int:
+        # Python filter path (documents imported before Bilingua, or no wheel)
+        with Session(engine) as s, bilingua_switch_off():
+            doc = ingest.ingest_document(s, s.get(Project, pid), name, data, TransMode.SEGMENTED)
+            return doc.id
+
+    def units_of(doc_id: int) -> list:
+        with Session(engine) as s:
+            segs = s.exec(
+                select(Segment)
+                .where(Segment.document_id == doc_id, Segment.target_locale == loc)
+                .order_by(Segment.order_index)
+            ).all()
+            return [g.source_text for g in segs]
+
+    def unstamp(doc_id: int) -> None:
+        with Session(engine) as s:
+            d = s.get(Document, doc_id)
+            sk = dict(d.skeleton or {})
+            sk.pop(HH_DECODE_KEY, None)
+            d.skeleton = sk
+            s.add(d)
+            s.commit()
+
+    def export(doc_id: int, target: str) -> bytes:
+        with Session(engine) as s:
+            for g in s.exec(
+                select(Segment).where(Segment.document_id == doc_id, Segment.target_locale == loc)
+            ).all():
+                g.target_text = target
+                g.status = "translated"
+                s.add(g)
+            s.commit()
+            out = build_translated_file(s, s.get(Document, doc_id), loc)
+            return out
+
+    # 1. a new upload is version 2: a declared shift_jis label reads as Windows 932
+    # (an NEC-row character; the strict codec of the old decode falls back to Windows-1252)
+    nec = sitemap("shift_jis", "① Start".encode("cp932"), "①.htm".encode("cp932"))
+    new_id = upload("nec.hhc", nec)
+    assert units_of(new_id) == ["① Start"], units_of(new_id)
+    with Session(engine) as s:
+        assert s.get(Document, new_id).skeleton.get(HH_DECODE_KEY) == 2
+
+    # 2. the same document stored before the fix (no stamp) exports with the old decode
+    blob = blobstore.get().get(blobstore.document_key(Session(engine).get(Document, new_id)))
+    want_v1 = HHC_F.build_localized(blob, {"0": "Start"}, loc, hh_decode=1)
+    want_v2 = HHC_F.build_localized(blob, {"0": "Start"}, loc, hh_decode=2)
+    assert want_v1 != want_v2
+    assert export(new_id, "Start") == want_v2
+    unstamp(new_id)
+    assert export(new_id, "Start") == want_v1
+
+    # 3. repair of an unstamped document: the old reading and the old .hhp hint
+    # (a later Japanese .hhp holding a byte Windows-1252 lacks gave no hint before the fix)
+    kata = sitemap("", "テスト".encode("cp932"))  # valid Windows-1252 bytes too
+    old_id = upload("kata.hhc", kata)
+    assert units_of(old_id) == ["ƒeƒXƒg"], units_of(old_id)
+    hhp = b"[OPTIONS]\r\nLanguage=0x411 Japanese\r\nTitle=" + "　ヘルプ".encode("cp932") + b"\r\n"
+    upload("project.hhp", hhp)
+    unstamp(old_id)
+    assert ingest.reingest_document(old_id)
+    assert units_of(old_id) == ["ƒeƒXƒg"], units_of(old_id)
+    with Session(engine) as s:
+        assert HH_DECODE_KEY not in (s.get(Document, old_id).skeleton or {})
+    with Session(engine) as s:  # a repair only runs on an untranslated document
+        for g in s.exec(select(Segment).where(Segment.document_id == new_id)).all():
+            g.target_text = ""
+            s.add(g)
+        s.commit()
+    assert ingest.reingest_document(new_id)
+    with Session(engine) as s:
+        assert HH_DECODE_KEY not in (s.get(Document, new_id).skeleton or {})
+    assert units_of(new_id) != ["① Start"], units_of(new_id)  # the pre-fix reading
+    # a version 2 repair takes the project's .hhp hint the fix now reads
+    v2_id = upload("kata2.hhc", kata)
+    assert units_of(v2_id) == ["テスト"], units_of(v2_id)  # the .hhp is there now
+    assert ingest.reingest_document(v2_id)
+    assert units_of(v2_id) == ["テスト"], units_of(v2_id)
+
+    # 4. a version 1 export re-uploaded reads back as text (version 2)
+    src = sitemap("windows-1252", b"Start")
+    v1_id = upload("plain.hhc", src)
+    unstamp(v1_id)
+    out = export(v1_id, "①設定")
+    assert b"shift_jis" in out.lower(), out
+    back = upload("reup.hhc", out)
+    assert units_of(back) == ["①設定"], units_of(back)
+    print("  [gate] 796/797: unstamped export+repair unchanged, new upload v2, v1 export re-reads")
+
+
 def main():
+    test_cjk_export_reads_back_796_797()
     test_registration()
     test_hhc_parse_and_identity()
     test_hhc_translated_round_trip()
@@ -544,6 +720,7 @@ def main():
     test_hhp()
     test_hostile_inputs()
     test_api_and_cli_round_trip()
+    test_gate_versioned_decode_service_paths()
     print("HTMLHELP FILTER OK")
 
 

@@ -507,22 +507,20 @@ def test_html_tokenizer_stays_linear():
     print("  html tokenizer linear ok")
 
 
-def test_upload_parse_runs_off_the_event_loop():
-    _auth(False)
-    from app.filters.text_filter import TextFilter
-
+def _upload_parse_threads(cls) -> list:
+    """Upload a .txt by web form and API with `cls.parse` spied; where each call ran."""
     seen = []
-    orig = TextFilter.parse
+    orig = cls.parse
 
-    def spy(self, data, provider=None):
+    def spy(self, *args, **kwargs):
         try:
             asyncio.get_running_loop()
             seen.append("event loop")
         except RuntimeError:
             seen.append("worker thread")
-        return orig(self, data, provider)
+        return orig(self, *args, **kwargs)
 
-    TextFilter.parse = spy
+    cls.parse = spy
     try:
         pid = _project()
         c = TestClient(app)
@@ -542,8 +540,24 @@ def test_upload_parse_runs_off_the_event_loop():
         )
         assert r.status_code == 200, (r.status_code, r.text[:200])
     finally:
-        TextFilter.parse = orig
+        cls.parse = orig
+    return seen
+
+
+def test_upload_parse_runs_off_the_event_loop():
+    _auth(False)
+    from app.filters import bilingua_adapter
+    from app.filters.text_filter import TextFilter
+    from tests._bootstrap import bilingua_switch_off
+
+    # Python filter path (documents imported before Bilingua, or no wheel)
+    with bilingua_switch_off():
+        seen = _upload_parse_threads(TextFilter)
     assert seen == ["worker thread", "worker thread"], seen
+    if bilingua_adapter._module() is not None and "txt" in settings.bilingua_formats():
+        # the Bilingua path (the default with the wheel): its parse runs off the event loop too
+        seen = _upload_parse_threads(bilingua_adapter.BilinguaFilter)
+        assert seen == ["worker thread", "worker thread"], seen
     print("  upload parse runs in a worker thread ok")
 
 
@@ -565,8 +579,9 @@ def test_pdf_render_is_bounded_by_page_size():
 
     pdfium.PdfPage.render = spy
     try:
-        PdfFilter().parse(_pdf([(3000, 3000)]))  # the probe's 551-byte blank page
-        PdfFilter().parse(_pdf([(595, 842)]))  # a blank A4 page
+        with _Override(PDF_ISOLATE=False):  # the spy patches this process's PDFium
+            PdfFilter().parse(_pdf([(3000, 3000)]))  # the probe's 551-byte blank page
+            PdfFilter().parse(_pdf([(595, 842)]))  # a blank A4 page
     finally:
         pdfium.PdfPage.render = orig
     (big_w, big_h), (a4_w, a4_h) = rendered
@@ -949,7 +964,10 @@ def test_pdf_rotated_crop_bitmap_bounds():
         buf = io.BytesIO()
         doc.save(buf)
         doc.close()
-        with _Override(PDF_OCR_MAX_PIXEL_DIM=128), patch.object(pdfium.PdfPage, "render", spy):
+        with (
+            _Override(PDF_OCR_MAX_PIXEL_DIM=128, PDF_ISOLATE=False),
+            patch.object(pdfium.PdfPage, "render", spy),
+        ):
             PdfFilter().parse(buf.getvalue())
     assert len(rendered) == 3 and all(max(size) <= 128 for size in rendered), rendered
 
@@ -1113,6 +1131,53 @@ def test_empty_upload_is_refused_on_api_web_and_ingest():
     print("  empty/whitespace upload refused on /api, web and ingest ok")
 
 
+def test_package_part_tag_budget_792():
+    """#792 gate: libxml2 is quadratic in the attributes of one start tag (40,000 plain
+    attributes, 0.4 MB, took 9 s). Every package format (DOCX, XLSX, PPTX, ODF, IDML, EPUB,
+    VSDX, xcloc, XLIFF and Trados packages) calls zip_guard.check before its XML library
+    opens a part, so the per-tag budget is checked there; ordinary parts pass, and text that
+    only looks like attributes is not counted."""
+    from app.filters import get_filter, zip_guard
+    from app.filters.base import InputLimitError
+    from app.filters.xml_guard import MAX_TAG_ATTRIBUTES, tag_budget_exceeded
+
+    attrs = "".join(f' a{i}="v"' for i in range(40000))
+    hostile = f'<?xml version="1.0"?><office:document-content{attrs}/>'.encode()
+
+    def package(content: bytes) -> bytes:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("mimetype", "application/vnd.oasis.opendocument.text")
+            zf.writestr("content.xml", content)
+        return buf.getvalue()
+
+    for fmt in ("odt", "docx", "pptx", "idml", "epub"):
+        t0 = time.time()
+        try:
+            get_filter(fmt).parse(package(hostile))
+        except InputLimitError as exc:
+            assert "start tag" in str(exc), (fmt, exc)
+        else:
+            raise AssertionError(f"{fmt}: a part with 40,000 attributes on one tag was read")
+        assert time.time() - t0 < 3, f"{fmt}: the refusal must come before the parse"
+    # UTF-16 parts (with or without a BOM) are counted too
+    for wide in (hostile.decode().encode("utf-16"), hostile.decode().encode("utf-16-be")):
+        assert tag_budget_exceeded(wide)
+    # a normal package, a long text run, escaped markup in text and a wide (but real) tag
+    ok = MAX_TAG_ATTRIBUTES - 1
+    normal = (
+        b"<r"
+        + "".join(f' a{i}="v"' for i in range(ok)).encode()
+        + b">"
+        + b'&lt;a href="x"&gt;' * 50000
+        + b"t" * 200000
+        + b"</r>"
+    )
+    assert not tag_budget_exceeded(normal) and not tag_budget_exceeded(normal.decode())
+    zip_guard.check(package(normal), "OpenDocument file")
+    print("  [792 gate] package parts with 40,000 attributes on one tag refused fast ok")
+
+
 def main():
     failures = []
     for test in (
@@ -1127,6 +1192,7 @@ def main():
         test_pdf_rotated_crop_bitmap_bounds,
         test_offload_busy_and_context,
         test_export_safety_refusals,
+        test_package_part_tag_budget_792,
     ):
         try:
             test()

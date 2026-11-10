@@ -690,6 +690,259 @@ def test_multiscript_mixed_document() -> None:
     print(f"  mixed document: 10 scripts on {n_pages} page(s), all round-trip in full")
 
 
+# --- #808: hostile files, U+FFFE, C0 controls, extraction version -------------------------
+def _raw_pdf(objs: list) -> bytes:
+    out = bytearray(b"%PDF-1.4\n")
+    offs = []
+    for i, body in enumerate(objs, 1):
+        offs.append(len(out))
+        out += b"%d 0 obj\n" % i + body + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1)
+    for o in offs:
+        out += b"%010d 00000 n \n" % o
+    out += b"trailer\n<</Size %d /Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, xref)
+    return bytes(out)
+
+
+def _raw_stream(d: bytes, data: bytes) -> bytes:
+    return b"<<%s /Length %d>>\nstream\n" % (d, len(data)) + data + b"\nendstream"
+
+
+def _text_raw_pdf(content: bytes, tounicode: bytes | None = None) -> bytes:
+    font = b"<</Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding"
+    objs = [
+        b"<</Type /Catalog /Pages 2 0 R>>",
+        b"<</Type /Pages /Kids [3 0 R] /Count 1>>",
+        b"<</Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources <</Font <</F1 5 0 R>>>> /Contents 4 0 R>>",
+        _raw_stream(b"", content),
+        font + (b" /ToUnicode 6 0 R>>" if tounicode else b">>"),
+    ]
+    if tounicode:
+        objs.append(_raw_stream(b"", tounicode))
+    return _raw_pdf(objs)
+
+
+def _fanout_pdf(levels: int = 30) -> bytes:
+    """Form k draws form k+1 four times (the issue's 6 KB hostile file)."""
+    objs = [
+        b"<</Type /Catalog /Pages 2 0 R>>",
+        b"<</Type /Pages /Kids [3 0 R] /Count 1>>",
+        b"<</Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources <</XObject <</F0 5 0 R>>>> /Contents 4 0 R>>",
+        _raw_stream(b"", b"/F0 Do"),
+    ]
+    for k in range(levels):
+        last = k == levels - 1
+        res = b"<<>>" if last else b"<</XObject <</F %d 0 R>>>>" % (6 + k)
+        body = b"0 0 1 1 re f" if last else b"/F Do /F Do /F Do /F Do"
+        objs.append(
+            _raw_stream(
+                b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources " + res, body
+            )
+        )
+    return _raw_pdf(objs)
+
+
+def _page_tree_dag_pdf(levels: int = 60) -> bytes:
+    """Each /Pages node lists the next one twice, ending in an empty branch: 2^60 paths
+    for PDFium to walk looking for page 0 (Bilingua gate_attacks page_tree_dag)."""
+    objs = [b"<</Type /Catalog /Pages 2 0 R>>", b"<</Type /Pages /Kids [3 0 R] /Count 1>>"]
+    for k in range(3, 3 + levels):
+        objs.append(b"<</Type /Pages /Kids [%d 0 R %d 0 R]>>" % (k + 1, k + 1))
+    objs.append(b"<</Type /Pages /Kids []>>")
+    return _raw_pdf(objs)
+
+
+def _one_line_pdf(n: int = 300_000) -> bytes:
+    """One baseline of n one-character text objects, right to left (0.8 MB with Flate):
+    under the #571 object cap, but PDFium's text page orders it quadratically."""
+    import zlib
+
+    c = bytearray(b"BT /F1 1 Tf\n")
+    for i in range(n):
+        c += b"1 0 0 1 %d 700 Tm (a) Tj\n" % (n - i)
+    c += b"ET"
+    z = zlib.compress(bytes(c))
+    return _raw_pdf(
+        [
+            b"<</Type /Catalog /Pages 2 0 R>>",
+            b"<</Type /Pages /Kids [3 0 R] /Count 1>>",
+            b"<</Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources <</Font <</F1 5 0 R>>>> /Contents 4 0 R>>",
+            _raw_stream(b"/Filter /FlateDecode", z),
+            b"<</Type /Font /Subtype /Type1 /BaseFont /Helvetica>>",
+        ]
+    )
+
+
+def test_hostile_pdf_is_killed_and_nothing_stays_locked() -> None:
+    """#808.3: a hostile file that keeps PDFium busy is refused at the wall-clock limit, the
+    child process is killed, and neither the PDFium lock nor a worker slot stays taken."""
+    import time
+
+    from app.filters.base import InputLimitError
+
+    assert config.PDF_ISOLATE, "PDF_ISOLATE must default on"
+    saved = (config.PDF_CALL_TIMEOUT_S, config.PDF_TOTAL_TIMEOUT_S)
+    config.PDF_CALL_TIMEOUT_S, config.PDF_TOTAL_TIMEOUT_S = 4, 6
+    try:
+        for name, blob in (
+            ("form fan-out", _fanout_pdf()),
+            ("page-tree DAG", _page_tree_dag_pdf()),
+            ("300k text objects on one line", _one_line_pdf()),
+        ):
+            t0 = time.monotonic()
+            try:
+                _FILTER.parse(blob)
+                raise AssertionError(f"{name}: parsed instead of being stopped")
+            except InputLimitError:
+                pass  # the wall-clock kill, or the child's memory/CPU limit on Linux
+            took = time.monotonic() - t0
+            assert took < 20, f"{name}: refused only after {took:.0f} s"
+            # nothing is held: the lock is free and a normal parse works at once
+            assert pdf_filter._PDFIUM_LOCK.acquire(blocking=False)
+            pdf_filter._PDFIUM_LOCK.release()
+            assert [u.text for u in _FILTER.parse(text_pdf()).units], name
+            print(f"  hostile {name}: refused after {took:.1f} s, lock free, next parse ok")
+    finally:
+        config.PDF_CALL_TIMEOUT_S, config.PDF_TOTAL_TIMEOUT_S = saved
+    # every worker slot came back
+    sem = pdf_filter._worker_slots()
+    got = [sem.acquire(blocking=False) for _ in range(config.PDF_WORKERS)]
+    assert all(got), got
+    for _ in got:
+        sem.release()
+
+
+def test_child_death_is_refused_and_frees_its_slot() -> None:
+    """#808 gate: a child that dies after the document opened (its memory or CPU limit on
+    Linux, a crash) is refused as a limit, never read as an empty document, and its worker
+    slot comes back."""
+    from app.filters.base import InputLimitError
+
+    assert config.PDF_ISOLATE
+    orig = pdf_filter._ChildBackend.preflight
+
+    def _dies(self, pno, objects_left):
+        self._proc.kill()
+        self._proc.wait(timeout=10)
+        return orig(self, pno, objects_left)
+
+    pdf_filter._ChildBackend.preflight = _dies
+    try:
+        try:
+            _FILTER.parse(text_pdf())
+            raise AssertionError("a dead PDF reader produced a document")
+        except InputLimitError:
+            pass
+    finally:
+        pdf_filter._ChildBackend.preflight = orig
+    sem = pdf_filter._worker_slots()
+    got = [sem.acquire(blocking=False) for _ in range(config.PDF_WORKERS)]
+    assert all(got), got
+    for _ in got:
+        sem.release()
+    assert [u.text for u in _FILTER.parse(text_pdf()).units]
+    print("  #808: a dead PDF reader is refused as a limit and frees its slot")
+
+
+def test_isolated_ocr_render_is_bounded() -> None:
+    """#808 gate: the render bound (#272) holds in the child process too, not only with
+    PDF_ISOLATE=0 (verify_request_limits spies on PDFium in process)."""
+    blob = _raw_pdf(
+        [
+            b"<</Type /Catalog /Pages 2 0 R>>",
+            b"<</Type /Pages /Kids [3 0 R] /Count 1>>",
+            b"<</Type /Page /Parent 2 0 R /MediaBox [0 0 3000 3000]>>",
+        ]
+    )
+    sizes = []
+    orig = ocr.ocr_image
+
+    def _capture(png, provider=None):
+        sizes.append(Image.open(io.BytesIO(png)).size)
+        return ""
+
+    ocr.ocr_image = _capture
+    try:
+        _FILTER.parse(blob)
+    finally:
+        ocr.ocr_image = orig
+    assert len(sizes) == 1 and max(sizes[0]) <= config.PDF_OCR_MAX_PIXEL_DIM, sizes
+    print(f"  #808: isolated OCR render bounded at {sizes[0]}")
+
+
+_HYPHEN_PAGE = (
+    b"BT /F1 11 Tf 14 TL 72 740 Td (A line ending with a hyphen-) Tj T* "
+    b"(ated word, then a well-known page 12-) Tj T* (14 of the book.) Tj ET"
+)
+
+
+def test_fffe_hyphen_and_c0_cleaning() -> None:
+    """#808.1/.2: a line-end hyphen joins the word (U+FFFE dropped), an unmapped glyph that
+    PDFium writes as U+FFFE or a C0 control is dropped, and the stored text carries the
+    extraction version. The same file parsed at version 1 keeps the old text."""
+    expect = "A line ending with a hyphenated word, then a well-known page 12- 14 of the book."
+    r = _FILTER.parse(_text_raw_pdf(_HYPHEN_PAGE))
+    assert [u.text for u in r.units] == [expect], [u.text for u in r.units]
+    assert r.skeleton["pdf_extract"] == 2
+    old = _FILTER.parse(_text_raw_pdf(_HYPHEN_PAGE), extract_version=1)
+    assert "hyphen￾ated" in old.units[0].text, old.units[0].text
+    assert "pdf_extract" not in old.skeleton
+    assert pdf_filter.pdf_extract_version(old.skeleton) == 1
+    assert pdf_filter.pdf_extract_version(r.skeleton) == 2
+
+    # a font whose ToUnicode maps `x` to U+0000 (PDFium writes U+FFFE): the glyph is dropped
+    page = (
+        b"BT /F1 11 Tf 14 TL 72 740 Td (The oxce has an unmapped glyph x) Tj T* "
+        b"(and the following line ends it.) Tj ET"
+    )
+    r = _FILTER.parse(_text_raw_pdf(page, b"1 beginbfchar <78> <0000> endbfchar"))
+    assert [u.text for u in r.units] == [
+        "The oce has an unmapped glyph and the following line ends it."
+    ]
+
+    # a glyph mapped to a C0 control (U+0005): removed from the unit
+    r = _FILTER.parse(_text_raw_pdf(page, b"1 beginbfchar <78> <0005> endbfchar"))
+    assert all(ord(c) >= 32 for u in r.units for c in u.text), [u.text for u in r.units]
+    assert "The oce has" in r.units[0].text
+    old = _FILTER.parse(
+        _text_raw_pdf(page, b"1 beginbfchar <78> <0005> endbfchar"), extract_version=1
+    )
+    assert any(ord(c) < 32 for u in old.units for c in u.text)
+
+    # tab / LF / CR survive the cleaner
+    assert pdf_filter._clean_text("a\tb\r\nc\x01d￾e") == "a\tb\r\ncde"
+    print("  #808: line-end hyphen joined, unmapped glyphs and C0 dropped, version stamped")
+
+
+def test_garbage_page_goes_to_ocr() -> None:
+    """#808.2: a page of unmapped glyphs has no printable text, so it is sent to OCR (the
+    garbage used to count toward OCR_MIN_CHARS). Version 1 keeps the old decision."""
+    page = b"BT /F1 11 Tf 72 740 Td (xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) Tj ET"
+    blob = _text_raw_pdf(page, b"1 beginbfchar <78> <0000> endbfchar")
+    seen = []
+    orig = ocr.ocr_image
+
+    def _stub(png, provider=None):
+        seen.append(len(png))
+        return "Recognised text from the scan."
+
+    ocr.ocr_image = _stub
+    try:
+        r = _FILTER.parse(blob)
+        assert r.skeleton["ocr_pages"] == 1 and seen, (r.skeleton["pages"], seen)
+        assert [u.text for u in r.units] == ["Recognised text from the scan."]
+        seen.clear()
+        old = _FILTER.parse(blob, extract_version=1)
+        assert old.skeleton["ocr_pages"] == 0 and not seen
+    finally:
+        ocr.ocr_image = orig
+    print("  #808: garbage-only page sent to OCR (version 1 unchanged)")
+
+
 def main() -> None:
     init_db()
     c = TestClient(app)
@@ -751,6 +1004,11 @@ def main() -> None:
     test_escape_is_load_bearing()
     test_build_reparses_to_same_paragraphs()
     test_multiscript_mixed_document()
+    test_fffe_hyphen_and_c0_cleaning()
+    test_garbage_page_goes_to_ocr()
+    test_hostile_pdf_is_killed_and_nothing_stays_locked()
+    test_child_death_is_refused_and_frees_its_slot()
+    test_isolated_ocr_render_is_bounded()
 
     print("PDF OK")
 

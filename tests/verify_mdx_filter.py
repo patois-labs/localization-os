@@ -154,10 +154,14 @@ def test_translate():
         },
     )
     assert len(units) == 2
-    assert out == b"# Bonjour {name}\n\nAppuyez <Kbd>C</Kbd> puis <Kbd>Ctrl</Kbd> .\n", out
+    expected = b"# Bonjour {name}\n\nAppuyez <Kbd>C</Kbd> puis <Kbd>Ctrl</Kbd> "
+    assert out == expected + "⟦x9⟧".encode() + b".\n", out  # #814.1: names no code: text
     # escaping: a brace / < the translation adds; code spans untouched; existing escapes kept
     out = F.build(b"Plain text.\n", {"0": "a {b} <c> `{d}` \\{e"})
     assert out == b"a \\{b\\} \\<c> `{d}` \\{e\n", out
+    # #790: an EVEN run of backslashes leaves the brace/< live: escape it; an odd run is kept
+    out = F.build(b"Plain text.\n", {"0": "x \\\\{a} \\\\<E/> \\\\\\{k} \\\\\\\\}"})
+    assert out == b"x \\\\\\{a\\} \\\\\\<E/> \\\\\\{k\\} \\\\\\\\\\}\n", out
     # the md prefix is kept
     out = F.build(b"> - **Bold** item\n", {"0": "**Gras** element"})
     assert out == b"> - **Gras** element\n", out
@@ -165,6 +169,80 @@ def test_translate():
     out = F.build(b"\xef\xbb\xbfOne\r\nTwo\r\n", {"1": "Deux"})
     assert out == b"\xef\xbb\xbfOne\r\nDeux\r\n", out
     print("  [translate] tokens rematerialised, escapes, prefixes, line endings OK")
+
+
+def test_gate_790_structure():
+    """#790 gate (round-trip fuzz): a translation must open no expression, fence or ESM block.
+    - a backslash-escaped backtick opens no code span, so a brace after it is escaped
+      (pre-fix ``\\`{x}` `` left ``{x}`` live: a JS expression);
+    - a line-start ``` / ~~~ is escaped (pre-fix it opened a fence that swallowed the file);
+    - a line-start ``import `` / ``export `` is written with a character reference (pre-fix
+      it became an ESM block: JavaScript in the compiled page)."""
+    src = b"# Title\n\nHello world.\n\n<Note>\n\nInside.\n\n</Note>\n\nLast line.\n"
+    n = len(F.parse(src).units)
+    for bad in ("w \\`{` w", "\\`{alert(1)}`", "x \\\\\\`{y}`"):
+        out = F.build(src, {"1": bad})
+        assert b"\\{" in out, (bad, out)
+        assert len(F.parse(out).units) == n, (bad, out)
+    # an opener is a whole backtick run: ``<z` has none (pre-fix `<z` read as a span, <z live)
+    out = F.build(src, {"1": "w ``<z` w"})
+    assert b"``\\<z`" in out and len(F.parse(out).units) == n, out
+    out = F.build(src, {"1": "a `{b}` c ``{d}`` \\``{e}`"})  # real code spans stay as they are
+    assert b"`{b}` c ``{d}`` \\``{e}`" in out, out
+    # a table row splits cells first: no code span crosses a `|`
+    tab = b"| A | B |\n|---|---|\n| c | d |\n"
+    out = F.build(tab, {"0": "| w`{ | w` |"})
+    assert out.startswith(b"| w`\\{ | w` |\n"), out
+    assert len(F.parse(out).units) == 2, out
+    for bad in ("``` w", "~~~js", "  ``` code"):
+        out = F.build(src, {"1": bad})
+        assert len(F.parse(out).units) == n, (bad, out)
+        assert b"\n" + bad.encode() + b"\n" not in out, (bad, out)
+    esm = (("import x from 'y'", b"&#105;mport x"), ("export const a = 1", b"&#101;xport const"))
+    for bad, ref in esm:
+        for k in ("1", "2"):  # a paragraph, and a paragraph inside a component
+            out = F.build(src, {k: bad})
+            assert ref in out, (bad, out)
+            assert len(F.parse(out).units) == n, (bad, out)
+    # the plain Markdown filter shares the fence guard
+    out = MD.build(b"Hello\n\nmore\n", {"0": "```js"})
+    assert out == b"\\```js\n\nmore\n", out
+    print("  [#790 gate] escaped backtick, fence and ESM openers in a translation are inert OK")
+
+
+def test_fuzz_790_extras():
+    """#790 structure-fuzz extras (Bilingua ca9a02fa, so the two engines agree):
+    - four columns of indent a translated line start adds are removed (pre-fix the line
+      became an indented code block: Markdown lost the unit, MDX rendered it as code);
+    - in a changed line with codes a stray backtick is escaped (pre-fix two backticks on
+      either side of `{count}` paired into a code span and the expression became text);
+    - an odd backslash run right before a code gets one more backslash (pre-fix `\\<Badge>`
+      escaped the component into text)."""
+    src = b"Plain line.\n\nText.\n"
+    for name, flt in (("md", MD), ("mdx", F)):
+        for bad, want in (("    x code", "x code"), ("\tdeep", "deep"), ("   ok", "   ok")):
+            out = flt.build(src, {"0": bad})
+            assert out == want.encode() + b"\n\nText.\n", (name, bad, out)
+            assert len(flt.parse(out).units) == 2, (name, bad, out)
+    csrc = b"Hello {count} world.\n"
+    t = F.parse(csrc).units[0].text
+    tok = t[t.index("⟦") : t.index("⟧") + 1]
+    out = F.build(csrc, {"0": f"w ``{tok}`` z"})
+    assert out == b"w \\`\\`{count}\\`\\` z\n", out
+    assert "⟦" in F.parse(out).units[0].text, out
+    out = F.build(csrc, {"0": f"w `a` {tok} z"})  # a span inside one text run is kept
+    assert out == b"w `a` {count} z\n", out
+    out = F.build(b"Hello `x` world.\n", {"0": "w ``a`` z"})  # no codes: left alone
+    assert out == b"w ``a`` z\n", out
+    bsrc = b"Hello <Badge>new</Badge> world.\n"
+    t = F.parse(bsrc).units[0].text
+    out = F.build(bsrc, {"0": t.replace("Hello ", "w \\")})
+    assert out == b"w \\\\<Badge>new</Badge> world.\n", out
+    assert "⟦" in F.parse(out).units[0].text, out
+    out = F.build(bsrc, {"0": t.replace("Hello ", "w \\\\")})  # even: already literal
+    assert out == b"w \\\\<Badge>new</Badge> world.\n", out
+    assert F.build(bsrc, {"0": t}) == bsrc
+    print("  [#790 fuzz] indent, stray backticks and backslashes around codes OK")
 
 
 def test_attrs():
@@ -310,7 +388,8 @@ def test_block_start():
     """#704: the engine drops the backslash of an escaped line start (live de-DE/fr-FR:
     "1984\\. That was" -> "1984. Das war", which CommonMark renders as <ol start="1984">).
     A translated line never opens a block (ordered list, ATX heading, bullet, quote) its
-    source line did not: the builds escape the marker. Heading text is left alone."""
+    source line did not: the builds escape the marker. #790 (structure fuzz, as Bilingua):
+    heading text too (pre-fix `## 1. x` read back as the heading `x`)."""
     src = (
         b"1984\\. That was the year.\n\n\\# Not a heading\n\n- Item one\n\n"
         b"## Heading two\n\nPlain line.\n\n> Quoted line.\n\nKeep 1984\\. here.\n"
@@ -326,7 +405,7 @@ def test_block_start():
     }
     want = (
         "1984\\. Das war das Jahr.\n\n\\# Keine Überschrift\n\n- 1\\. Punkt eins\n\n"
-        "## 1. Überschrift zwei\n\n\\- Einfache Zeile.\n\n> \\> Zitierte Zeile.\n\n"
+        "## 1\\. Überschrift zwei\n\n\\- Einfache Zeile.\n\n> \\> Zitierte Zeile.\n\n"
         "Behalte 1984\\. hier.\n"
     )
     for name, flt in (("md", MD), ("mdx", F)):
@@ -334,6 +413,8 @@ def test_block_start():
         assert len(texts) == 7, (name, texts)
         got = flt.build(src, tr).decode()
         assert got == want, (name, got)
+        back = [u.text for u in flt.parse(got.encode()).units]
+        assert back[3] == "1\\. Überschrift zwei", (name, back)  # pre-fix: "Überschrift zwei"
     # an escape the engine kept, a number with no delimiter, a source that already starts
     # with a marker-looking run: unchanged
     keep = {
@@ -562,6 +643,8 @@ def main():
     test_walk()
     test_tokens()
     test_translate()
+    test_gate_790_structure()
+    test_fuzz_790_extras()
     test_attrs()
     test_markdown_parity()
     test_cjk_emphasis()

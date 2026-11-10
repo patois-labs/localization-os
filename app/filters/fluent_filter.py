@@ -106,15 +106,16 @@ def check_ftl_budget(text: str) -> None:
 class _Run:
     """One translatable stretch of a pattern."""
 
-    __slots__ = ("end", "indent", "label", "placeables", "start", "text")
+    __slots__ = ("end", "indent", "label", "own_line", "placeables", "start", "text")
 
-    def __init__(self, start, end, text, placeables, label, indent):
+    def __init__(self, start, end, text, placeables, label, indent, own_line=False):
         self.start = start
         self.end = end
         self.text = text  # what the translator sees (dedented, placeables as written)
         self.placeables = placeables  # placeable source strings, longest first
         self.label = label
         self.indent = indent
+        self.own_line = own_line  # the run starts its line (the value is on its own line)
 
 
 def _is_select(el, ast) -> bool:
@@ -134,13 +135,29 @@ def _brace_literal(el, ast) -> str | None:
 
 
 def _indent_of(src: str, start: int, end: int) -> str:
-    """Indentation for continuation lines: the run's own, else its line's plus four."""
+    """Indentation for continuation lines.
+
+    A run that starts its line (only spaces before it) uses that line's indent, so a merge
+    does not add indent
+    every time (#811). Otherwise the run's own, else its line's plus four.
+    """
+    bol = max(src.rfind("\n", 0, start), src.rfind("\r", 0, start)) + 1
+    before = src[bol:start]
+    if before and not before.strip(" "):
+        return before
     m = re.search(r"\n([ ]+)\S", src[start:end])
     if m:
         return m.group(1)
     bol = max(src.rfind("\n", 0, start), src.rfind("\r", 0, start)) + 1
     line = src[bol:start]
     return line[: len(line) - len(line.lstrip(" "))] + "    "
+
+
+def _starts_line(src: str, start: int) -> bool:
+    """Only spaces before `start` on its line (a value that begins on its own line)."""
+    bol = max(src.rfind(chr(10), 0, start), src.rfind(chr(13), 0, start)) + 1
+    before = src[bol:start]
+    return not before.strip(" ")
 
 
 def _walk_pattern(pattern, label, src, ast, out: list) -> None:
@@ -171,6 +188,7 @@ def _walk_pattern(pattern, label, src, ast, out: list) -> None:
                 sorted(placeables, key=len, reverse=True),
                 label,
                 _indent_of(src, start, end),
+                _starts_line(src, start),
             )
         )
         run.clear()
@@ -257,7 +275,8 @@ def _encode(new: str, run: _Run, newline: str) -> str:
         j = m.start() if m else n
         if j > i:
             before = pieces[-1] if pieces else ""
-            at_start = bool(before.endswith("\n"))
+            # g13: the first piece is at a line start when the value sits on its own line
+            at_start = before.endswith("\n") if pieces else run.own_line
             pieces.append(_escape_text(new[i:j], at_start))
         if m:
             pieces.append(m.group(0))

@@ -17,6 +17,7 @@ Hermetic + offline. Fixtures are hand-written below. Final line: "ASCIIDOC FILTE
 """
 
 import os
+import re
 import sys
 import time
 
@@ -303,9 +304,9 @@ def test_translated():
         {str(para.p_index): "C'est le ⟦g1⟧premier⟦/g1⟧ (⟦x2⟧)\n\nfin"},
     ).decode("utf-8")
     assert "C'est le *premier* ({product-name}) fin\n" in out3, out3
-    # unknown tokens are dropped, never leaked
+    # a token that names no code of the unit is text (#814.1, g12), not dropped
     out4 = _round(DOC, {str(para.p_index): "x ⟦x9⟧ y"}).decode("utf-8")
-    assert "x  y" in out4 and "⟦" not in out4
+    assert "x ⟦x9⟧ y" in out4, out4
     # CRLF file: untouched line endings stay CRLF
     crlf = DOC.replace(b"\n", b"\r\n")
     outc = _round(crlf, mapping)
@@ -556,6 +557,84 @@ def test_block_syntax_guard():
     print("  block-syntax guard: translated paragraphs stay paragraphs")
 
 
+def test_cell_injection_788():
+    """#788: a nested-table cell escapes `|` as well as `!`; a cell that starts its line gets
+    the {empty} guard when the translation opens with block syntax or a directive."""
+    src = b"|===\na|\n!===\n!Inner one !Inner two\n!===\n|===\n"
+    units = _units(src)
+    assert [u.text for u in units] == ["Inner one", "Inner two"], [u.text for u in units]
+    out = _round(src, {"0": "A | B ! C", "1": "ok"}).decode()
+    assert "!A \\| B \\! C" in out, out
+    again = _units(out.encode())
+    assert len(again) == 2, [u.text for u in again]
+    # a plain table keeps escaping only its own separator
+    out = _round(b"|===\n|One |Two\n|===\n", {"0": "a | b ! c"}).decode()
+    assert "|a \\| b ! c" in out, out
+    # a cell that starts a line: directives and block syntax are guarded
+    src = b"|===\n|Head\nBody cell\n|===\n"
+    for bad in ("ifdef::x[]", "include::secret.adoc[]", "// hidden", "== Title"):
+        units = _units(src)
+        last = len(units) - 1
+        out = _round(src, {str(last): bad}).decode()
+        assert "{empty}" + bad in out and "\n" + bad not in out, (bad, out)
+    print("  #788: nested cell escapes |, line-start cells guarded with {empty}")
+
+
+def test_gate_788_dlist():
+    """#788 gate (round-trip fuzz): a `::` / `;;` run the translation adds, followed by a blank
+    or the end, is written as {two-colons} / {two-semicolons}. Pre-fix ``x:: w`` turned a
+    paragraph (or an admonition) into a description list: the re-read file had one unit more."""
+    src = b"Intro paragraph text.\n\nNOTE: Admonition text.\n\n* Item\n"
+    n = len(_units(src))
+    for k in ("0", "1", "2"):
+        for bad in ("x:: w", "::: w", "w ::", "a;; b", "y:::: z", "x ::::: y"):
+            out = _round(src, {k: bad}).decode()
+            again = _units(out.encode())
+            assert len(again) == n, (k, bad, out, [u.text for u in again])
+            assert not re.search(r"\S(?::{2,4}|;;)(?:[ \t]|$)", out, re.M), (k, bad, out)
+    out = _round(src, {"0": "a::b and std::vector"}).decode()
+    assert "a::b and std::vector" in out, out  # no blank after: not a list, left alone
+    out = _round(src, {"0": "x:: w"}).decode()
+    assert "x{two-colons} w" in out, out
+    print("  [#788 gate] a description-list delimiter in a translation is written inert OK")
+
+
+def test_fuzz_788_extras():
+    """#788 structure-fuzz extras (Bilingua ca9a02fa, so the two engines agree):
+    - a translated mark next to a code's mark of the same character is a character
+      reference (pre-fix `*strong*` + `* w` read back as `*strong**`, the mark in the unit);
+    - a translated `[x]` right before a mark is too (pre-fix it became the mark's role and
+      the `[x]` was lost);
+    - a term ending in `:` gets `{empty}` (pre-fix `w:` + `::` read back as the term `w`);
+    - a title ending in its own marker gets `{empty}` (pre-fix `== w ==` read back as `w`)."""
+    src = b"A paragraph with *strong* words.\n"
+    t = _units(src)[0].text
+    out = _round(src, {"0": t.replace(" words.", "* w")})
+    assert out == b"A paragraph with *strong*&#42; w\n", out
+    assert _units(out)[0].text.endswith("⟧&#42; w"), _units(out)[0].text
+    out = _round(src, {"0": t.replace("A paragraph with ", "w [x]")})
+    assert out.startswith(b"w [x&#93;*"), out
+    assert "[x&#93;⟦" in _units(out)[0].text, _units(out)[0].text
+    # what the source already had next to the code is kept
+    from app.filters.asciidoc_filter import _mark_refs
+
+    imap = {"1": ["*", "*"]}
+    close = "⟦/g1⟧"
+    assert _mark_refs("*x", close, None, imap, "a ⟦g1⟧b" + close + "*y") == "*x"
+    assert _mark_refs("*x", close, None, imap, "a ⟦g1⟧b" + close + " y") == "&#42;x"
+    term = b"Term one:: Its description.\n"
+    assert _round(term, {"0": "w:"}) == b"w:{empty}:: Its description.\n"
+    assert _round(term, {"0": "w :::"}) == b"w {two-colons}:{empty}:: Its description.\n"
+    for tr in ("w:", "w :::", "w;"):
+        again = [u.text for u in _units(_round(term, {"0": tr}))]
+        assert len(again) == 2 and again[1] == "Its description.", (tr, again)
+    title = b"== Section heading\n\nText.\n"
+    assert _round(title, {"0": "w =="}) == b"== w =={empty}\n\nText.\n"
+    assert _round(title, {"0": "w=="}) == b"== w==\n\nText.\n"
+    assert _units(_round(title, {"0": "w =="}))[0].text.startswith("w ==")
+    print("  [#788 fuzz] marks next to code marks, terms and titles keep their structure OK")
+
+
 def test_cjk_constrained_marks():
     """#695: a constrained mark (`` `code` ``, ``*b*``, ``_i_``, ``#m#``, ``+p+``) glued to a
     word character in the translation (Japanese/Chinese have no spaces) is written in the
@@ -670,6 +749,9 @@ def main():
     test_translated()
     test_header_meta_733()
     test_block_syntax_guard()
+    test_cell_injection_788()
+    test_gate_788_dlist()
+    test_fuzz_788_extras()
     test_cjk_constrained_marks()
     test_cjk_links()
     test_lang()

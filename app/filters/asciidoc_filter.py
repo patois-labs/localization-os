@@ -61,7 +61,8 @@ from app.filters.base import (
     read_text_upload,
     register,
 )
-from app.services.segment import _PLACEHOLDER_RE, ph_close, ph_open, ph_point, strip_placeholders
+from app.filters.token_lit import code_tokens
+from app.services.segment import ph_close, ph_open, ph_point, strip_placeholders
 
 _BOM = b"\xef\xbb\xbf"
 _LINE_RE = re.compile(r"([^\r\n]*)(\r\n|\r|\n|$)")
@@ -256,7 +257,60 @@ def _unit_of(raw: str) -> tuple[str, dict]:
     return text, tok.map
 
 
-def _render(translation: str, imap: dict, cell_sep: str | None, attrs: dict | None = None) -> str:
+_MARK_CHARS = frozenset("*_`#+^~")
+
+
+def _tok_markup(tok: str | None, imap: dict) -> str:
+    """The markup a token is written as (a pair's open or close piece, a point's raw)."""
+    if tok is None:
+        return ""
+    inner = tok[1:-1]
+    closing = inner.startswith("/")
+    val = imap.get(inner.lstrip("/")[1:])
+    if isinstance(val, list):
+        return val[1] if closing else val[0]
+    return "" if closing or val is None else str(val)
+
+
+def _src_side(source: str, tok: str, before: bool) -> str:
+    """The character the source unit has right before / after `tok` ('' at an edge or
+    another token)."""
+    at = source.find(tok)
+    if at < 0:
+        return ""
+    c = source[at - 1 : at] if before else source[at + len(tok) : at + len(tok) + 1]
+    return "" if c in ("⟦", "⟧") else c
+
+
+def _mark_refs(piece: str, prev: str | None, nxt: str | None, imap: dict, source: str) -> str:
+    """#788 (structure fuzz, as Bilingua render.rs): a translated mark character next to a
+    code's own mark of the same character would join its run (`*p*` + `*` reads as
+    `*p**`), and a translated `[...]` right before a mark would become the mark's attribute
+    list; that character is written as a character reference, which prints the same. What
+    the source already had next to the code is kept."""
+    if not piece:
+        return piece
+    m = _tok_markup(prev, imap)
+    c = m[-1:]
+    if c in _MARK_CHARS and piece.startswith(c) and _src_side(source, prev, False) != c:
+        piece = f"&#{ord(c)};" + piece[1:]
+    m = _tok_markup(nxt, imap)
+    c = m[:1]
+    if c and c in _MARK_CHARS:
+        last = piece[-1:]
+        if (last == c or (last == "]" and "[" in piece)) and _src_side(source, nxt, True) != last:
+            piece = piece[:-1] + f"&#{ord(last)};"
+    return piece
+
+
+def _render(
+    translation: str,
+    imap: dict,
+    cell_sep: str | None,
+    attrs: dict | None = None,
+    nested: bool = False,
+    source: str = "",
+) -> str:
     """Write a translated unit back as AsciiDoc: tokens back to their markup, any line
     break folded to a space (a blank line would end the block), a table separator in the
     translated words escaped. A constrained mark the translation glued to a word
@@ -267,8 +321,11 @@ def _render(translation: str, imap: dict, cell_sep: str | None, attrs: dict | No
     marks: list[tuple[int, int, str]] = []  # (open piece, close piece, mark)
     links: list[int] = []  # pieces that start a URL link (#698)
     pos = 0
-    for m in _PLACEHOLDER_RE.finditer(t):
-        out.append(_text_part(t[pos : m.start()], cell_sep))
+    toks = code_tokens(t, imap)  # #814.1: a token naming no code of the unit is text
+    for k, m in enumerate(toks):
+        piece = _text_part(t[pos : m.start()], cell_sep, nested)
+        prev = toks[k - 1].group(0) if k else None
+        out.append(_mark_refs(piece, prev, m.group(0), imap, source))
         pos = m.end()
         inner = m.group(0)[1:-1]
         closing = inner.startswith("/")
@@ -292,7 +349,8 @@ def _render(translation: str, imap: dict, cell_sep: str | None, attrs: dict | No
             if _URL_START.match(val) or _ATTR_REF.fullmatch(val):
                 links.append(len(out))
             out.append(val)
-    out.append(_text_part(t[pos:], cell_sep))
+    last = toks[-1].group(0) if toks else None
+    out.append(_mark_refs(_text_part(t[pos:], cell_sep, nested), last, None, imap, source))
     _unconstrain(out, marks)
     return _explicit_links(out, links, attrs or {})
 
@@ -416,10 +474,43 @@ def _unconstrain(out: list[str], marks: list[tuple[int, int, str]]) -> str:
     return "".join(out)
 
 
-def _text_part(s: str, cell_sep: str | None) -> str:
+def _guard_kind(text: str, slot: dict, rendered: str) -> str:
+    """#788 (structure fuzz, as Bilingua lib.rs merge):
+    - a term that ends in `:` or `;` would join the delimiter after it (`w:` + `::` reads as
+      the term `w` with a `:::` delimiter): `{empty}` goes before the delimiter;
+    - a section title that ends in its own marker (`== w ==`) would lose it (the reader takes
+      it as the closing marker): `{empty}` goes after it."""
+    kind = slot.get("kind")
+    if kind == "term" and rendered.endswith((":", ";")):
+        return rendered + "{empty}"
+    if kind == "heading":
+        line = text[text.rfind("\n", 0, slot["start"]) + 1 : slot["start"]]
+        marker = line[: len(line) - len(line.lstrip("="))]
+        body = rendered.rstrip(" \t")
+        if marker and body.endswith(marker) and body[: -len(marker)].endswith((" ", "\t")):
+            return body + "{empty}" + rendered[len(body) :]
+    return rendered
+
+
+_DLIST_DELIM = re.compile(r"(:{2,}|;{2,})(?=[ \t]|$)")
+
+
+def _inert_dlist(m: re.Match) -> str:
+    """#788 gate: `x:: w` (also `:::`, `::::`, `;;`) would turn a paragraph, admonition or term
+    into a description list item; AsciiDoc's built-in {two-colons} / {two-semicolons} print
+    the same characters without being a delimiter."""
+    run = m.group(1)
+    pair = "{two-colons}" if run[0] == ":" else "{two-semicolons}"
+    return pair * (len(run) // 2) + run[0] * (len(run) % 2)
+
+
+def _text_part(s: str, cell_sep: str | None, nested: bool = False) -> str:
     s = _SOFT_BREAK.sub(" ", s)
+    s = _DLIST_DELIM.sub(_inert_dlist, s)
     if cell_sep:
-        s = re.sub(r"(?<!\\)" + re.escape(cell_sep), "\\\\" + cell_sep, s)
+        # #788: a nested table sits inside an outer `|` cell, it must not split that cell
+        chars = re.escape(cell_sep) + ("|" if nested and cell_sep != "|" else "")
+        s = re.sub(r"(?<!\\)([" + chars + r"])", r"\\\1", s)
     return s
 
 
@@ -442,13 +533,18 @@ def _slots(text: str) -> list[dict]:
     attr_cont = False  # attribute entry value continues (`` \``)
     i = 0
 
-    def add(start: int, end: int, sep: str | None = None):
+    def add(
+        start: int, end: int, sep: str | None = None, nested_cell: bool = False, kind: str = ""
+    ):
         while start < end and text[start].isspace():
             start += 1
         while end > start and text[end - 1].isspace():
             end -= 1
         if start < end:
-            slots.append({"start": start, "end": end, "sep": sep})
+            slot = {"start": start, "end": end, "sep": sep, "nested": nested_cell}
+            if kind:  # #790/#788 structure fuzz: a build-side guard per kind (no unit change)
+                slot["kind"] = kind
+            slots.append(slot)
             check_segment_cap(len(slots))
 
     def flush():
@@ -503,7 +599,7 @@ def _slots(text: str) -> list[dict]:
                     table = None
                 continue
             if tm and tm.group(1) == "!" and nested is None:
-                nested = {"close": rs, "sep": "!", "style": ""}
+                nested = {"close": rs, "sep": "!", "style": "", "nested": True}
                 continue
             _cells(text, s, body, cur, add)
             continue
@@ -545,7 +641,7 @@ def _slots(text: str) -> list[dict]:
                 tail = re.search(r"[ \t]+" + re.escape(marker) + r"[ \t]*$", body)
                 if tail and tail.start() >= sm.end():
                     core_end = s + tail.start()
-            add(s + sm.end(), core_end)
+            add(s + sm.end(), core_end, kind="heading")
             if len(marker) == 1 and not seen_block:
                 header = True
             seen_block = True
@@ -565,7 +661,7 @@ def _slots(text: str) -> list[dict]:
         dm = _DLIST.match(rs) if para is not None or not body[:1].isspace() else None
         if dm:  # a description list term (it also ends the previous item's text)
             flush()
-            add(s + dm.start(2), s + dm.end(2))
+            add(s + dm.start(2), s + dm.end(2), kind="term")
             rest = s + dm.end()
             if rest < s + len(rs):
                 para = {"start": rest, "end": e}
@@ -604,7 +700,7 @@ def _cells(text: str, s: int, body: str, table: dict, add) -> None:
     seps = [k for k, c in enumerate(body) if c == sep and (k == 0 or body[k - 1] != "\\")]
     if not seps:
         if table["style"] != "l":
-            add(s, s + len(body), sep)
+            add(s, s + len(body), sep, table.get("nested", False))
         return
     bounds = [(-1, seps[0])] + [(seps[j], seps[j + 1]) for j in range(len(seps) - 1)]
     bounds.append((seps[-1], len(body)))
@@ -622,7 +718,7 @@ def _cells(text: str, s: int, body: str, table: dict, add) -> None:
                 nxt_style = ""
         # j == 0: text before the first separator continues the previous cell.
         if table["style"] != "l":
-            add(s + start, s + end, sep)
+            add(s + start, s + end, sep, table.get("nested", False))
         if nxt_style is not None:
             table["style"] = nxt_style
 
@@ -706,13 +802,14 @@ class AsciiDocFilter(Filter):
             else:
                 if attrs is None:
                     attrs = _doc_attrs(text)
-                rendered = _render(new, imap, slot["sep"], attrs)
+                rendered = _render(new, imap, slot["sep"], attrs, slot.get("nested", False), unit)
                 at_line_start = slot["start"] == 0 or text[slot["start"] - 1] in "\r\n"
-                if at_line_start and slot["sep"] is None and _BLOCK_START.match(rendered):
+                if at_line_start and _BLOCK_START.match(rendered):  # #788: cells too
                     # A translation that opens with block syntax (a "== " title, a list
                     # marker, ".Title", "[attr]", "NOTE: ", "//", a delimiter...) would turn
                     # the paragraph into another block; {empty} is AsciiDoc's own guard.
                     rendered = "{empty}" + rendered
+                rendered = _guard_kind(text, slot, rendered)
                 out.append(rendered)
             pos = slot["end"]
         out.append(text[pos:])
@@ -795,7 +892,7 @@ def _meta_render(translation: str, imap: dict) -> str:
     value can never end in Asciidoctor's " \" line continuation."""
     out: list[str] = []
     pos = 0
-    for m in _PLACEHOLDER_RE.finditer(translation):
+    for m in code_tokens(translation, imap):  # #814.1: other tokens are text
         out.append(translation[pos : m.start()])
         pos = m.end()
         inner = m.group(0)[1:-1]

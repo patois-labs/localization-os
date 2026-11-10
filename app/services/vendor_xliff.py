@@ -512,9 +512,11 @@ def parse_return_xliff(data) -> dict:
     from app import config
     from app.filters.base import InputLimitError
     from app.filters.xliff_filter import check_markup_budget
+    from app.filters.xml_guard import check_tag_budget
 
     try:
         check_markup_budget(raw, what="This return XLIFF")
+        check_tag_budget(raw, what="This return XLIFF")  # #792 gate
     except InputLimitError as exc:
         raise XliffParseError(str(exc)) from exc
     try:

@@ -406,6 +406,21 @@ DEFAULTS = {
     # admin-uploaded custom ruleset lives at DATA_DIR/segmentation.srx.
     "srx_enabled": "0",
     "srx_file": "",
+    # --- Bilingua parsing engine (docs/architecture/translation-pipeline.md) ---
+    # `bilingua_formats`: comma list of LocOS canonical formats (md,json,po,...) whose NEW
+    # uploads are parsed by the Bilingua engine instead of the Python filter. `all` (the
+    # default) = every format the adapter knows (bilingua_adapter._FORMATS),
+    # so a format the adapter learns later is on too. Empty = every format keeps its Python
+    # filter, byte-identical to before. When the bilingua package is not installed (a machine
+    # with no wheel) the setting changes nothing. A document
+    # keeps the engine that imported it: emptying this list stops NEW Bilingua imports at once
+    # (the kill switch) but never moves an existing document. `bilingua_shadow_formats`: for
+    # these formats an upload is ALSO parsed by Bilingua in the background after the Python
+    # parse and only counts and hashes are logged (never content); nothing stored changes.
+    # The env vars LOC_TMS_BILINGUA_FORMATS / LOC_TMS_BILINGUA_SHADOW_FORMATS override the
+    # stored value (tests), see BILINGUA_ENV.
+    "bilingua_formats": "all",
+    "bilingua_shadow_formats": "",
     # --- image localization (Beta) kill switch (SPEC-image-localization 3.6) ---
     # Default ON so the "(Beta)" module is visible; "0" is the emergency off that
     # removes the nav entry and 404s/refuses every /images route, CLI `image`
@@ -1352,6 +1367,9 @@ ORG_ADMIN_REFUSED_EXTRA: frozenset = frozenset(
         # #424: the custom SRX ruleset is one install file every org ingests with.
         "srx_enabled",
         "srx_file",
+        # Bilingua: which engine parses every org's new uploads is one install-wide choice.
+        "bilingua_formats",
+        "bilingua_shadow_formats",
         # #426: install-wide shared credentials. The mail transport and the connector OAuth
         # apps serve every org (smtp_host and every *_base_url were already covered above).
         "smtp_port",
@@ -1817,12 +1835,83 @@ def external_url(request, path: str) -> str:
     return external_base_url(request) + path
 
 
+#: T3 (Bilingua): the env var that overrides each stored format-list setting when it is set
+#: (even to the empty string, which forces the list off). Read by `get`, so every reader sees it.
+BILINGUA_ENV = {
+    "bilingua_formats": "LOC_TMS_BILINGUA_FORMATS",
+    "bilingua_shadow_formats": "LOC_TMS_BILINGUA_SHADOW_FORMATS",
+}
+_FORMAT_NAME = re.compile(r"[a-z0-9]{1,16}")
+#: The most format names one list may hold. Room for every format the Bilingua adapter routes
+#: (85 on 11-07) with headroom: the save-time validator refuses a longer list and every unknown
+#: name (W6 L1: at 64 the 65th and later names were silently dropped).
+_FORMAT_LIST_MAX = 256
+
+
+def format_list(raw) -> tuple:
+    """A comma/space separated format list as a tuple of distinct lower-case names in order.
+    A name that is not a plain short token is dropped (a stored value is never trusted). Every
+    write door refuses such a value (_v_format_list); only an env override can still carry one,
+    and then what is dropped is logged."""
+    out: list = []
+    bad = 0
+    for part in re.split(r"[,\s;]+", str(raw if raw is not None else "").strip().lower()):
+        if not part:
+            continue
+        if not _FORMAT_NAME.fullmatch(part):
+            bad += 1
+        elif part not in out:
+            out.append(part)
+    if bad or len(out) > _FORMAT_LIST_MAX:
+        log.warning(
+            "format list: %d malformed name(s) and %d name(s) past the limit of %d ignored",
+            bad,
+            max(0, len(out) - _FORMAT_LIST_MAX),
+            _FORMAT_LIST_MAX,
+        )
+    if FORMAT_LIST_ALL in out:
+        # `all` = every format the Bilingua adapter routes (the default of `bilingua_formats`);
+        # an unreadable adapter table gives (): every format stays on its Python filter
+        return _adapter_formats()
+    return tuple(out[:_FORMAT_LIST_MAX])
+
+
+#: The word that stands for every format the Bilingua adapter routes, in a format list.
+FORMAT_LIST_ALL = "all"
+
+
+def _adapter_formats() -> tuple:
+    """The Bilingua adapter's canonical formats in its table order, () when unreadable."""
+    try:
+        from app.filters import bilingua_adapter
+
+        return tuple(getattr(bilingua_adapter, "_FORMATS", None) or ())
+    except Exception:
+        log.warning("format list: the Bilingua adapter's format table is unreadable; `all` is none")
+        return ()
+
+
+def bilingua_formats() -> tuple:
+    """The formats whose NEW uploads Bilingua parses (`bilingua_formats`; () = none)."""
+    return format_list(get("bilingua_formats"))
+
+
+def bilingua_shadow_formats() -> tuple:
+    """The formats an upload is also parsed by Bilingua in the background, logging counts and
+    hashes only (`bilingua_shadow_formats`; () = none)."""
+    return format_list(get("bilingua_shadow_formats"))
+
+
 def get(key: str, default=None):
     global _probing
     if key == "egress_private_allowlist":
         override = os.environ.get("LOC_TMS_EGRESS_PRIVATE_ALLOWLIST")
         if override is not None:
             return _egress_value(override, "env")
+    if key in BILINGUA_ENV:
+        override = os.environ.get(BILINGUA_ENV[key])
+        if override is not None:
+            return override
     # Host-managed ingress overrides win even over a previously pinned DB value.
     if key in ("security_allowed_hosts", "trusted_proxy_ips"):
         override = os.environ.get("LOC_TMS_" + key.upper())
@@ -2377,6 +2466,56 @@ def _v_apikey_max_age_days(key, value):
         )
 
 
+def _v_format_list(key, value):
+    """A Bilingua format list (`bilingua_formats`, `bilingua_shadow_formats`): blank, or comma
+    separated LocOS canonical format names the Bilingua adapter can parse, or the one word `all`
+    (every such format). A typo is refused at
+    the door on every write path (web, CLI, /api, MCP) instead of silently switching nothing,
+    and so is a list longer than _FORMAT_LIST_MAX (never cut to fit)."""
+    text = str(value if value is not None else "").strip().lower()
+    if not text:
+        return  # blank is always writable: the kill switch
+    names = list(dict.fromkeys(p for p in re.split(r"[,\s;]+", text) if p))
+    if FORMAT_LIST_ALL in names:
+        if names != [FORMAT_LIST_ALL]:
+            raise InvalidSettingValue(
+                f"{key}: `all` stands alone (it already means every format Bilingua parses). "
+                "Nothing was saved."
+            )
+        return
+    malformed = [n for n in names if not _FORMAT_NAME.fullmatch(n)]
+    if malformed:
+        raise InvalidSettingValue(
+            f"{key} must be blank or a comma separated list of format names such as md,json,po "
+            f"({len(malformed)} name(s) are not plain lower-case letters and digits, at most 16)."
+        )
+    if len(names) > _FORMAT_LIST_MAX:
+        # refused, never cut: a list past the limit would silently switch some formats off
+        raise InvalidSettingValue(
+            f"{key} lists {len(names)} formats; at most {_FORMAT_LIST_MAX} can be listed. "
+            "Nothing was saved."
+        )
+    try:
+        from app.filters import bilingua_adapter
+
+        known = set(getattr(bilingua_adapter, "_FORMATS", None) or ())
+    except Exception:
+        known = set()
+    if not known:
+        # the adapter's format table is unreadable: no name can be checked, so none is
+        # accepted (fail closed); blank stays writable above
+        raise InvalidSettingValue(
+            f"{key}: the list of formats Bilingua parses is unavailable on this install, so "
+            "format names cannot be checked. Leave it blank."
+        )
+    unknown = [n for n in names if n not in known]
+    if unknown:
+        raise InvalidSettingValue(
+            f"{key}: Bilingua does not parse {', '.join(unknown)}. "
+            f"Supported: {', '.join(sorted(known))}."
+        )
+
+
 def _v_smtp_port(key, value):
     """#454: blank = the 587 default (the Security form stores it that way); anything else
     must be a whole TCP port. A garbage value used to be stored and then raised inside
@@ -2447,6 +2586,8 @@ VALUE_VALIDATORS = {
     "sso_trust_unverified_email": _v_zero_one,
     "apikey_max_age_days": _v_apikey_max_age_days,
     "retention_days": _v_retention_days,
+    "bilingua_formats": _v_format_list,
+    "bilingua_shadow_formats": _v_format_list,
     "smtp_port": _v_smtp_port,
     "api_rate_limit_per_minute": _v_api_rate_limit,
     "api_read_rate_limit_per_minute": _v_api_rate_limit,

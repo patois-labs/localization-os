@@ -64,7 +64,6 @@ from app.filters.base import (
     register,
 )
 from app.filters.xml_text import xml_target_text
-from app.services.segment import strip_placeholders
 
 MIMETYPE = b"application/epub+zip"
 _CONTAINER = "META-INF/container.xml"
@@ -296,7 +295,7 @@ def _split_ws(s: str) -> tuple[str, str, str]:
 
 def _set_text(el, new: str) -> bool:
     lead, core, trail = _split_ws(el.text or "")
-    clean = xml_target_text(strip_placeholders(str(new)))
+    clean = xml_target_text(str(new))  # #814.1: no codes here, so every token is text
     if clean == core:
         return False
     el.text = lead + clean + trail
@@ -361,7 +360,7 @@ def _stamp_xhtml(raw: bytes, tag: str, direction: str) -> bytes:
     plus xml:lang on the html element: in XHTML it is the attribute that counts."""
     from app.filters import html_filter as h
 
-    tokens = h._tokenize(h.decode_text_lossless(raw, declared=True))
+    tokens = h._tokenize(h.decode_text_lossless(raw, declared=True, rare=True))
     h._declare_language(tokens, tag, direction)
     for ti, name in h._iter_start_tags(tokens):
         if name == "html":

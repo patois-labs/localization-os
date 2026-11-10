@@ -851,8 +851,21 @@ def _parse_rpr(xml: str):
     return etree.fromstring(xml.encode("utf-8"))
 
 
-def _split_on_run_tokens(text: str):
+def _run_token_key(inner: str) -> str | None:
+    """The run number a token's inside names (``r3``, ``/r3``, ``3``), or None for any other
+    letter (``g1``, ``x2``)."""
+    body = inner.lstrip("/")
+    if body[:1] == "r":
+        body = body[1:]
+    return body if body.isdigit() else None
+
+
+def _split_on_run_tokens(text: str, known=None):
     """Split translated text into (rpr_key_or_None, span_text) pairs.
+
+    ``known`` (#814.1): the run numbers of the paragraph. A token that names none of them is
+    not a code of this paragraph, so it stays in the text (source text such as ``⟦x2⟧`` is
+    no longer deleted). None: every token counts, as before.
 
     Text inside a ⟦rN⟧…⟦/rN⟧ pair carries key "N"; text outside any pair carries
     None (fallback formatting). Tolerant of the (mock/LLM) translation dropping,
@@ -893,6 +906,9 @@ def _split_on_run_tokens(text: str):
         pos = m.end()
         tok = m.group(0)
         inner = tok[1:-1]  # strip ⟦ ⟧
+        if known is not None and _run_token_key(inner) not in known:
+            buf.append(tok)  # names no run of this paragraph: text
+            continue
         if inner.startswith("/"):
             # close token — end whatever run we're in
             flush()
@@ -934,7 +950,7 @@ def _set_paragraph_text(para, text: str, inline_map: dict) -> None:
     field — the parse() fallback left it untokenized) is rewritten wholesale: the
     out-of-run text children are removed first so the translation doesn't collide
     with leftover original text."""
-    spans = _split_on_run_tokens(text)
+    spans = _split_on_run_tokens(text, {str(k) for k in inline_map if str(k).isdigit()})
     has_tokens = any(k is not None for k, _ in spans)
 
     if not has_tokens or not inline_map:
@@ -1257,21 +1273,31 @@ def _split_object_tokens(text: str, layout) -> list[tuple]:
     texts, groups, _tail, _atoms, runs = layout
     raw: list[tuple] = []
     pos = 0
+    max_r = max(len(runs), len(texts))
+    bases = {_x_base(len(runs)), _x_base(len(texts))}
+
+    def add_text(s: str) -> None:
+        if raw and raw[-1][0] == "t":
+            raw[-1] = ("t", raw[-1][1] + s)
+        elif s:
+            raw.append(("t", s))
+
     for m in _PLACEHOLDER_RE.finditer(text):
-        if m.start() > pos:
-            raw.append(("t", text[pos : m.start()]))
+        add_text(text[pos : m.start()])
         pos = m.end()
         inner = m.group(0)[1:-1]
         mx = re.fullmatch(r"x(\d+)", inner)
         mr = re.fullmatch(r"r(\d+)", inner)
-        if mx:
+        mc = re.fullmatch(r"/r(\d+)", inner)
+        if mx and any(0 <= int(mx.group(1)) - b < len(groups) for b in bases):
             raw.append(("x", int(mx.group(1))))
-        elif mr:
+        elif mr and 1 <= int(mr.group(1)) <= max_r:
             raw.append(("r", int(mr.group(1))))
-        else:
+        elif mc and 1 <= int(mc.group(1)) <= max_r:
             raw.append(("reset", None))
-    if pos < len(text):
-        raw.append(("t", text[pos:]))
+        else:
+            add_text(m.group(0))  # #814.1: names no code of this paragraph: text
+    add_text(text[pos:])
 
     def fits(n: int) -> bool:
         base = _x_base(n)
@@ -2119,6 +2145,7 @@ class DocxFilter(Filter):
         the comments in the source language. True (the default, and every caller that
         does not pass it) is the pre-#690 behaviour."""
         zip_guard.check(data, "DOCX file")  # #224: refuse a zip bomb before inflating
+        zip_guard.refuse_doctype(data, "DOCX file")  # #814.4: same rule as PPTX and XLSX
         from app.filters import ooxml_strict
         from app.filters.docx_resources import external_resource_warnings
 
@@ -2209,6 +2236,7 @@ class DocxFilter(Filter):
 
     def _rebuild(self, original: bytes, paragraph_texts: dict, walk: int = DOCX_WALK_VERSION):
         zip_guard.check(original, "DOCX file")  # #224: the export re-opens the original
+        zip_guard.refuse_doctype(original, "DOCX file")  # #814.4
         from app.filters import ooxml_strict
         from app.filters.xml_text import XmlTargetError, xml_target_text
 

@@ -67,7 +67,9 @@ _ALLOWED_FILES = {
     "requirements-sqlcipher.lock",
     "scripts/locks/requirements-saml-lxml.lock",
     "scripts/locks/requirements-build.lock",
+    "scripts/locks/requirements-maturin.lock",
     "scripts/saml_smoke.py",
+    "scripts/bilingua_stage.py",
     "scripts/convert_db_encryption.py",
     "scripts/sqlite_to_postgres.py",
     "native/locos_native/Cargo.toml",
@@ -670,6 +672,177 @@ def _base_pins_hold():
     print("      rejects malformed digests, --check fails unpinned and passes pinned")
 
 
+def bilingua_stage_errors(dockerfile, lock, build_lock=""):
+    """Shape of the opt-in Bilingua stage (ADR 0111); [] when it is right."""
+    errors = []
+    m = re.search(r"(?m)^FROM \$\{PYTHON_BASE\} AS bilingua\n(.*?)(?=^FROM |\Z)", dockerfile, re.S)
+    if not m:
+        return ["no `FROM ${PYTHON_BASE} AS bilingua` stage on the runtime Python"]
+    body = m.group(1)
+    if not re.search(r"(?m)^ARG WITH_BILINGUA=0$", body):
+        errors.append("the bilingua stage must default WITH_BILINGUA to 0")
+    if "must be 0 or 1" not in body:
+        errors.append("the bilingua stage must refuse a WITH_BILINGUA other than 0 or 1")
+    if 'if [ "$WITH_BILINGUA" = 1 ]' not in body:
+        errors.append("the bilingua build must run only when WITH_BILINGUA=1")
+    for need in (
+        "--locked",
+        "--require-hashes",
+        "--only-binary maturin",
+        "bilingua_stage.py fetch",
+        "bilingua_stage.py smoke",
+        "bilingua_stage.py unpack",
+    ):
+        if need not in body:
+            errors.append(f"the bilingua stage lacks {need!r}")
+    if "FROM scratch AS bilingua-src" not in dockerfile or "--from=bilingua-src" not in body:
+        errors.append("the source must come from the named context stage bilingua-src")
+    if "COPY --from=rust " not in body:
+        errors.append("the toolchain must be copied from the pinned rust stage")
+    if not re.search(r"(?m)^ARG WITH_BILINGUA=0\nCOPY --from=bilingua /out/site/ ", dockerfile):
+        errors.append("the runtime stage must default WITH_BILINGUA to 0 and copy /out/site")
+    # the runtime import check: for a source build, and on x86_64 where the lock installs the wheel
+    runtime_import = re.compile(
+        r'(?m)^RUN if \[ "\$WITH_BILINGUA" = 1 \] \|\| \[ "\$\(uname -m\)" = x86_64 \]; '
+        r'then /opt/venv/bin/python -c "import bilingua[;"]'
+    )
+    if not runtime_import.search(dockerfile):
+        errors.append("the runtime stage must import bilingua when WITH_BILINGUA=1 and on x86_64")
+    if not re.search(r"(?m)^maturin==\d[\w.]*( --hash=sha256:[0-9a-f]{64})+$", lock):
+        errors.append("scripts/locks/requirements-maturin.lock needs a hash-pinned maturin line")
+    pins = [ln for ln in lock.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    if len(pins) != 1:
+        errors.append("scripts/locks/requirements-maturin.lock must pin maturin and nothing else")
+    if "-r /bilingua-tools/requirements-maturin.lock" not in body:
+        errors.append("the bilingua stage must install maturin from requirements-maturin.lock")
+    # Gate T7: maturin has its own lock so the SQLCipher build (which installs the whole
+    # build lock) does not carry it.
+    if re.search(r"(?mi)^maturin\b", build_lock):
+        errors.append("maturin must stay out of scripts/locks/requirements-build.lock")
+    return errors
+
+
+def _fake_wheel(wdir, tamper=False, extra=None, extra_listed=None, drop=None, no_record=False):
+    """A tiny bilingua wheel in wdir with a correct RECORD unless a fault is asked for."""
+    import base64
+    import hashlib
+    import zipfile
+
+    files = {
+        "bilingua/__init__.py": b"X = 1\n",
+        "bilingua-0.9.1.dist-info/METADATA": b"Name: bilingua\nVersion: 0.9.1\n",
+        "bilingua-0.9.1.dist-info/WHEEL": b"Wheel-Version: 1.0\n",
+    }
+    if extra_listed:
+        files[extra_listed[0]] = extra_listed[1]
+
+    def row(name, data):
+        digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+        return f"{name},sha256={digest},{len(data)}"
+
+    record = "\n".join(
+        [row(n, d) for n, d in files.items()] + ["bilingua-0.9.1.dist-info/RECORD,,"]
+    )
+    if tamper:
+        files["bilingua/__init__.py"] = b"X = 2\n"
+    if extra:
+        files[extra[0]] = extra[1]
+    if drop:
+        files.pop(drop)
+    wdir.mkdir(parents=True)
+    with zipfile.ZipFile(wdir / "bilingua-0.9.1-cp311-abi3-linux_x86_64.whl", "w") as zf:
+        for name, data in files.items():
+            zf.writestr(name, data)
+        if not no_record:
+            zf.writestr("bilingua-0.9.1.dist-info/RECORD", record + "\n")
+    return wdir
+
+
+def _bilingua_stage_holds():
+    import argparse
+
+    lock = (_ROOT / "scripts/locks/requirements-maturin.lock").read_text(encoding="utf-8")
+    build_lock = (_ROOT / "scripts/locks/requirements-build.lock").read_text(encoding="utf-8")
+    errors = bilingua_stage_errors(DOCKERFILE, lock, build_lock)
+    assert not errors, errors
+    assert bilingua_stage_errors(DOCKERFILE, lock, build_lock + lock), "maturin in build lock"
+    assert bilingua_stage_errors(
+        DOCKERFILE.replace("requirements-maturin.lock; \\", "requirements-build.lock; \\"),
+        lock,
+        build_lock,
+    ), "maturin installed from the wrong lock"
+    default = re.search(r"(?m)^ARG WITH_BILINGUA=(\d)$", DOCKERFILE)
+    assert default and default.group(1) == "0", "WITH_BILINGUA must default to 0"
+    mutants = {
+        "default on": DOCKERFILE.replace("ARG WITH_BILINGUA=0", "ARG WITH_BILINGUA=1"),
+        "stage removed": DOCKERFILE.replace("AS bilingua\n", "AS bilingua2\n"),
+        "unlocked cargo": DOCKERFILE.replace(
+            "maturin build --release --locked", "maturin build --release"
+        ),
+        "no smoke": DOCKERFILE.replace("bilingua_stage.py smoke", "true"),
+        "no runtime import": DOCKERFILE.replace('python -c "import bilingua;', 'python -c "pass;'),
+        "runtime import only for source builds": DOCKERFILE.replace(
+            ' || [ "$(uname -m)" = x86_64 ]; then /opt/venv/bin/python',
+            "; then /opt/venv/bin/python",
+        ),
+    }
+    for name, mutant in mutants.items():
+        assert mutant != DOCKERFILE, name
+        assert bilingua_stage_errors(mutant, lock), f"bilingua stage mutation not caught: {name}"
+    assert bilingua_stage_errors(DOCKERFILE, "setuptools==1.0 --hash=sha256:" + "0" * 64 + "\n")
+    assert bilingua_stage_errors(DOCKERFILE, lock + "setuptools==1.0 --hash=sha256:" + "0" * 64)
+    # The fetch helper: checksum and unpack logic on local bytes only (no network).
+    import hashlib
+    import io
+    import tarfile
+
+    from scripts import bilingua_stage as stage
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        data = b"[workspace]\n"
+        info = tarfile.TarInfo("bilingua-0.9.1/Cargo.toml")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    raw = buf.getvalue()
+    with tempfile.TemporaryDirectory() as tmp:
+        stage.unpack_tarball(raw, hashlib.sha256(raw).hexdigest(), Path(tmp) / "ok")
+        assert (Path(tmp) / "ok" / "Cargo.toml").read_bytes() == b"[workspace]\n"
+        for bad in ("0" * 64, "XYZ", ""):
+            try:
+                stage.unpack_tarball(raw, bad, Path(tmp) / "bad")
+            except SystemExit:
+                continue
+            raise AssertionError(f"tarball accepted with checksum {bad!r}")
+        # Gate T7: the built wheel is unpacked, not pip-installed, so its RECORD is checked
+        # first: every member listed with a matching sha256 and size, no unlisted member,
+        # no missing one, no .data directory (scripts/headers a plain unpack would misplace).
+        wheel_ok = _fake_wheel(Path(tmp) / "w-ok")
+        stage.unpack(argparse.Namespace(wheels=str(wheel_ok), dest=str(Path(tmp) / "site")))
+        assert (Path(tmp) / "site" / "bilingua" / "__init__.py").read_bytes() == b"X = 1\n"
+        bad_wheels = {
+            "tampered member": {"tamper": True},
+            "unlisted member": {"extra": ("bilingua/evil.py", b"import os\n")},
+            "missing member": {"drop": "bilingua/__init__.py"},
+            "data dir": {"extra_listed": ("bilingua-0.9.1.data/scripts/x", b"#!/bin/sh\n")},
+            "no RECORD": {"no_record": True},
+            "unsafe name": {"extra_listed": ("../escape.py", b"x\n")},
+        }
+        for name, kw in bad_wheels.items():
+            wdir = _fake_wheel(Path(tmp) / f"w-{name.replace(' ', '-')}", **kw)
+            dest = Path(tmp) / f"site-{name.replace(' ', '-')}"
+            try:
+                stage.unpack(argparse.Namespace(wheels=str(wdir), dest=str(dest)))
+            except SystemExit:
+                assert not dest.exists() or not any(dest.rglob("*.py")), name
+                continue
+            raise AssertionError(f"wheel RECORD check missed: {name}")
+    print(
+        f"  bilingua stage: WITH_BILINGUA=0 default, hash-pinned maturin,"
+        f" {len(mutants) + 1} mutations caught"
+    )
+
+
 def _docs_name_the_mechanism():
     deploy = (_ROOT / "docs/DEPLOY.md").read_text(encoding="utf-8")
     assert "### Base image pins" in deploy and "pin_base_images.py --check" in deploy
@@ -898,6 +1071,7 @@ def main():
     _ownership_holds()
     _worker_supervisor_holds()
     _base_pins_hold()
+    _bilingua_stage_holds()
     _docs_name_the_mechanism()
     print("DOCKER IMAGE OK")
 

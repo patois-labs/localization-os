@@ -614,6 +614,9 @@ def _xml_view(text: str, extra: frozenset):
         return None
     from lxml import etree
 
+    from app.filters.xml_guard import check_tag_budget
+
+    check_tag_budget(text, what="This file")  # #792 gate: before lxml, fail closed
     parser = etree.XMLParser(
         resolve_entities="internal",
         no_network=True,

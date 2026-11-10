@@ -154,8 +154,9 @@ def test_escaping():
     assert out == "\\begin{document}\nzwei Absätze\n\\end{document}\n".encode(), out
     # a translation that drops or invents tokens keeps the markup balanced
     data = b"\\begin{document}\nA \\textbf{bold} word.\n\\end{document}\n"
+    # (a token that names no code of the unit is text: #814.1, g12)
     out = F.build(data, {"0": "Ein ⟦g1⟧fettes⟦/g1⟧ Wort ⟦x7⟧."})
-    assert b"Ein \\textbf{fettes} Wort ." in out, out
+    assert "Ein \\textbf{fettes} Wort ⟦x7⟧.".encode() in out, out
     # gate: a dropped, missing or out-of-order close never unbalances the braces
     data = b"\\begin{document}\nA \\textbf{bold \\emph{very} word} end.\n\\end{document}\n"
     assert units(data) == ["A ⟦g1⟧bold ⟦g2⟧very⟦/g2⟧ word⟦/g1⟧ end."], units(data)

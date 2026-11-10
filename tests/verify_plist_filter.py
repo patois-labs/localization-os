@@ -164,9 +164,9 @@ def test_stringsdict_units_tokens_and_splice():
     assert len(before) == len(after)
     changed = [i for i, (a, b) in enumerate(zip(before, after, strict=True)) if a != b]
     assert len(changed) == 3, changed
-    # a token the engine invented is dropped, never shipped as a literal
+    # a token that names no specifier is text (#814.1, g12: kept; quality.tag_damage flags it)
     out = filt.build(data, {"1": f"{PH} Datei \u27e6x9\u27e7"}).decode("utf-8")
-    assert "<string>%lld Datei </string>" in out and "\u27e6" not in out, out
+    assert "<string>%lld Datei \u27e6x9\u27e7</string>" in out and out.count("\u27e6") == 1, out
     print("  [stringsdict] units, placeholder tokens and in-place splice OK")
 
 

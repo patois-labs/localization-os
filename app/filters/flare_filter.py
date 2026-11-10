@@ -58,8 +58,9 @@ from app.filters.base import (
     register,
 )
 from app.filters.html_guard import check_build, strict_escape
+from app.filters.token_lit import code_tokens
 from app.filters.xml_text import xml_target_text
-from app.services.segment import _PLACEHOLDER_RE, ph_point, strip_placeholders
+from app.services.segment import ph_point, strip_placeholders
 
 _LABEL = "Flare project"
 _BOM = b"\xef\xbb\xbf"
@@ -186,6 +187,10 @@ def _check_xml(text: str, name: str, structured: bool) -> None:
     if structured:
         from lxml import etree
 
+        from app.filters.xml_guard import tag_budget_exceeded
+
+        if tag_budget_exceeded(text):  # #792 gate: before lxml
+            raise _refuse(f"file {_shown(name)} has a start tag with far too many attributes.")
         parser = etree.XMLParser(
             resolve_entities=False, no_network=True, load_dtd=False, huge_tree=False
         )
@@ -236,8 +241,9 @@ def _xml_named_refs(text: str) -> str:
 
 
 def _clean(new: str) -> str:
-    """A target for a plain-text slot: no placeholder noise, XML 1.0 characters only."""
-    return xml_target_text(strip_placeholders(str(new)))
+    """A target for a plain-text slot: XML 1.0 characters only. The slot has no codes, so
+    a token in it is text (#814.1: kept, not deleted)."""
+    return xml_target_text(str(new))
 
 
 def _has_letter(text: str) -> bool:
@@ -256,11 +262,12 @@ def _collapse_variables(tokens: list[str]) -> None:
     token, so its cached content is never a unit (variables are never translated in topics)."""
     i = 0
     n = len(tokens)
+    no_close = False  # a failed forward search: no later start tag can find an end tag (#806)
     while i < n:
         tok = tokens[i]
         if _hf._is_tag_token(tok):
             closing, name, self_closing = _hf._parse_tag(tok)
-            if name == "madcap:variable" and not closing and not self_closing:
+            if name == "madcap:variable" and not closing and not self_closing and not no_close:
                 j = i + 1
                 while j < n:
                     if _hf._is_tag_token(tokens[j]):
@@ -273,6 +280,8 @@ def _collapse_variables(tokens: list[str]) -> None:
                     for k in range(i + 1, j + 1):
                         tokens[k] = _hf._TextToken("")
                     i = j
+                else:
+                    no_close = True
         i += 1
 
 
@@ -448,7 +457,7 @@ def _toc_items(tokens: list[str]) -> list[dict]:
 def _toc_title(new: str, pmap: dict) -> str:
     out, pos = [], 0
     new = xml_target_text(str(new))
-    for m in _PLACEHOLDER_RE.finditer(new):
+    for m in code_tokens(new, pmap):  # #814.1: a token naming no code is text
         out.append(_xml_escape(new[pos : m.start()], True))
         pos = m.end()
         inner = m.group(0)[1:-1]

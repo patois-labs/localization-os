@@ -204,10 +204,11 @@ def test_translated_round_trip_utf16():
 
 def test_placeholders_dropped_token_and_unknown():
     data = SAMPLE.encode("utf-8")
-    # token reorder keeps the raw source text; an invented token is dropped
+    # token reorder keeps the raw source text; a pair token for a point code is dropped; a
+    # token that names no code of the unit is text (#814.1, g12)
     out = F.build(data, {"9": "⟦x2⟧ / ⟦x1⟧ ⟦x7⟧ ⟦g1⟧x⟦/g1⟧"}).decode("utf-8")
-    assert '"%d / %s  x"' in out, out
-    print("  [rc] placeholder tokens rematerialize, unknown tokens dropped OK")
+    assert '"%d / %s ⟦x7⟧ x"' in out, out
+    print("  [rc] placeholder tokens rematerialize, unknown tokens kept as text OK")
 
 
 def test_accelerators():
@@ -324,6 +325,33 @@ def test_rc_exe_string_rules():
     loc = F.build_localized(data, {}, "fr-FR").decode()
     assert 'BLOCK "040C04B0"' in loc, loc
     print("  [rc] continuation whitespace, non-escapes, block-id case follow rc.exe OK")
+
+
+def test_printf_vanish_and_escape_pad_791():
+    # a translation whose only letters form a printf placeholder is refused, not written
+    src = b'STRINGTABLE { 1 "%\\aE" }\n'
+    assert len(F.parse(src).units) == 1
+    for bad in ("~%E~", "%d", "~%s~"):
+        try:
+            F.build(src, {"0": bad})
+        except InputLimitError as exc:
+            assert "placeholder" in str(exc), exc
+        else:
+            raise AssertionError(f"{bad!r} should be refused")
+    ok = F.build(src, {"0": "50%d Rabatt"}).decode()
+    assert '"50%d Rabatt"' in ok, ok
+    assert len(F.parse(ok.encode()).units) == 1
+    # a short escape then a translated digit: padded so rc.exe does not merge them
+    src2 = b'STRINGTABLE { 1 "\\x4 a" 2 L"\\x4 a" 3 "\\1 a" 4 L"\\1 a" }\n'
+    units = F.parse(src2).units
+    assert len(units) == 4, [u.text for u in units]
+    out = F.build(src2, {str(i): u.text.replace(" a", "1 a", 1) for i, u in enumerate(units)})
+    exp = b'STRINGTABLE { 1 "\\x041 a" 2 L"\\x00041 a" 3 "\\0011 a" 4 L"\\00000011 a" }\n'
+    assert out == exp, out
+    # wide octal escapes are read up to 7 digits (one escape, not an escape plus digits)
+    wsrc = b'STRINGTABLE { 1 L"a\\1234567b" }\n'
+    assert F.parse(wsrc).units[0].text.count("\u27e6") == 1, F.parse(wsrc).units[0].text
+    print("  [rc] 791: printf-swallowed text refused, short escapes padded, wide octal 7 digits OK")
 
 
 def test_include_never_followed():
@@ -443,6 +471,7 @@ if __name__ == "__main__":
     test_declared_code_page()
     test_language_stamping()
     test_rc_exe_string_rules()
+    test_printf_vanish_and_escape_pad_791()
     test_include_never_followed()
     test_hostile_inputs()
     test_end_to_end_upload_export()

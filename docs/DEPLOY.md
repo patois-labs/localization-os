@@ -34,7 +34,7 @@ start command. No image may serve before this gate passes.
 `docker-compose.yml` passes `RELEASE`/`RELEASE_COMMIT` through to the image as
 build args (`args: RELEASE: ${RELEASE:-}` / `RELEASE_COMMIT: ${RELEASE_COMMIT:-}`).
 Skip the two `export` lines and the build still succeeds, but with both unset the
-image falls back to the `version` in `pyproject.toml` (for example `1.1.0`), so
+image falls back to the `version` in `pyproject.toml` (for example `1.2.0`), so
 `/health` and `python -m app.cli version` report the wrong release.
 
 On first boot the login wall is ON and **no accounts exist yet** - your first
@@ -340,7 +340,10 @@ layers with their profile locks installed. Freeze artifacts are retained as evid
 The test tools are mounted separately, without changing the image's runtime packages.
 
 Platform markers exclude `pywin32` and Postgres's `tzdata` on Linux and exclude
-`uvloop` on Windows. Keep `uvicorn[standard]` in the direct requirements: it requests
+`uvloop` on Windows. `bilingua` carries `(sys_platform == "linux" and platform_machine == "x86_64") or (sys_platform == "win32" and platform_machine == "AMD64")`
+because only its x86_64 Linux (glibc 2.28 or newer) and Windows x64 wheels are published (ADR 0111); a
+freeze writes it without the marker, so re-add the marker and the two wheel hashes after a refresh (never
+the sdist hash: pip would then try a Rust source build on a machine with no wheel). Keep `uvicorn[standard]` in the direct requirements: it requests
 httptools, watchfiles, and the platform-dependent event loop along with its other
 extras. This is a package/version guarantee, not a byte-for-byte image guarantee:
 these locks have no hashes, and OS packages and base-image tags are separate inputs.
@@ -667,6 +670,12 @@ Supported-profile checklist for profiles B/C:
   (4000 px). `PDF_OCR_MAX_TOTAL_PIXELS` (2500000000) caps the sum of rendered page
   pixels per document, about 1000 A4 scans at 150 dpi. All low-text pages are checked
   before the first render or OCR call; text-only pages do not consume this budget.
+  PDFium runs in a child process per PDF (#808): a step longer than `PDF_CALL_TIMEOUT_S`
+  (60 s) or more than `PDF_TOTAL_TIMEOUT_S` (150 s) in all stops the child and refuses the
+  file (413). On Linux each child is also capped at `PDF_WORKER_MEMORY_MB` (1024) of address
+  space and runs at nice 10; `PDF_WORKERS` (4) children run at once per app process, so the
+  worst case is about PDF_WORKERS x PDF_WORKER_MEMORY_MB. `PDF_ISOLATE=0` reads PDFs inside
+  the app process again (tests only; no timeout then).
   An image for image localization is refused from its header, before any decode, when a
   side exceeds 8000 px or it holds more than `IMAGE_MAX_TOTAL_PIXELS` (25000000, 25
   megapixels) pixels in total.

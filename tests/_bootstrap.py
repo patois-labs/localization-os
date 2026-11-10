@@ -25,9 +25,36 @@ under it); init_env() returns it for that case:
 """
 
 import atexit
+import contextlib
 import os
 import shutil
 import tempfile
+
+_BILINGUA_SWITCH_ENV = ("LOC_TMS_BILINGUA_FORMATS", "LOC_TMS_BILINGUA_ASSUME_NEW")
+
+
+@contextlib.contextmanager
+def bilingua_switch_off():
+    """Make "old" documents the way they were made: with the Bilingua switch OFF.
+
+    A suite that manufactures a pre-change document by importing it (an old reading rule set
+    for the block, then ingest) must get a Python document, as every real old document is. When
+    the suite runs with the switch on (LOC_TMS_BILINGUA_FORMATS, or the parity runner's
+    LOC_TMS_BILINGUA_ASSUME_NEW), that ingest would make a Bilingua document, which by design no
+    Python versioned rule ever reads (W5/W6 L3). Inside this block the switch is off (formats set
+    but empty = off; no assume-new); on exit the suite's own switch values are back, so the
+    repair and export that follow run with the switch on, as on a real install."""
+    saved = {k: os.environ.get(k) for k in _BILINGUA_SWITCH_ENV}
+    os.environ["LOC_TMS_BILINGUA_FORMATS"] = ""
+    os.environ.pop("LOC_TMS_BILINGUA_ASSUME_NEW", None)
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 def _cleanup(tmp: str) -> None:

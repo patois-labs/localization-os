@@ -395,11 +395,15 @@ def normalize_608(text: str) -> str:
 def unsupported_chars(text: str) -> list[str]:
     """Characters of `text` (tokens excluded) that CEA-608 cannot represent."""
     plain = _TOKEN_RE.sub("", normalize_608(text)).replace("\n", "")
-    seen = []
+    seen: set[str] = set()
+    bad: list[str] = []
     for c in plain:
         if c not in _ENC and c not in seen:
-            seen.append(c)
-    return seen
+            seen.add(c)
+            bad.append(c)
+            if len(bad) >= 8:  # only eight are ever shown: stop (a set, not a list scan; #803.2)
+                break
+    return bad
 
 
 def _atoms(line: str, tokens: dict):
@@ -557,12 +561,17 @@ def _pac_words(rnum: int, attr: int, col: int, rest) -> tuple[list[str], int]:
 
 def _encode_line(line: _Line, text: str):
     """(words, None) or (None, reason) for a translated caption line."""
+    _rows, tokens = line.texts()
+    # #803.3: a code the caption does not have is refused (dropped silently it would delete
+    # text the translator typed); checked first and in order, as Bilingua's encode_line does
+    unknown = [m.group(0) for m in _TOKEN_RE.finditer(text) if int(m.group(1)) not in tokens]
+    if unknown:
+        return None, "has inline codes this caption does not have: " + " ".join(unknown[:8])
     text = normalize_608(text)
     bad = unsupported_chars(text)
     if bad:
         shown = " ".join(repr(c) for c in bad[:8])
         return None, f"characters CEA-608 cannot show: {shown}"
-    _rows, tokens = line.texts()
     n = len(line.rows)
     max_rows = max(n, line.depth if line.mode == "rollup" else POPON_MAX_ROWS)
     rows = _layout(text, n, max_rows, tokens)
@@ -647,4 +656,37 @@ class SccFilter(Filter):
                 + ". Shorten or transliterate these captions and export again."
             )
         body = "".join(replaced.get(i, c) + e for i, (c, e, _l) in enumerate(entries))
-        return (b"\xef\xbb\xbf" if bom else b"") + body.encode("utf-8", "surrogateescape")
+        out = (b"\xef\xbb\xbf" if bom else b"") + body.encode("utf-8", "surrogateescape")
+        if replaced:
+            self._check_reads_back(out, entries)
+        return out
+
+    @staticmethod
+    def _check_reads_back(out: bytes, entries) -> None:
+        """#803.1: the data channel carries from one line to the next, so a code the translation
+        moved or dropped can leave a line (or the next one) on channel 2, where it is no longer a
+        caption. Re-read the output and refuse, naming each caption that was lost."""
+        _b, after = _read(out, upload=False)
+        lost = []
+        for k, (i, line, _text) in enumerate(_units(entries)):
+            again = after[i][2]
+            if again is None or not again.unit or not again.rows or not again.text().strip():
+                ch2 = again is not None and any(
+                    c.kind == "char" and c.ch != 1 for r in again.rows for c in r.cells
+                )
+                why = (
+                    "would be read back on data channel 2"
+                    if ch2
+                    else "would no longer read back as a caption"
+                )
+                lost.append(f"caption {k + 1} at {line.tc}: {why}")
+        if lost:
+            more = f" (and {len(lost) - 10} more)" if len(lost) > 10 else ""
+            raise CaptionTargetError(  # the same message as Bilingua's bilingua-scc merge
+                "The SCC file was not exported: after translation these captions would not "
+                "read back as channel 1 captions and would be lost. "
+                + "; ".join(lost[:10])
+                + more
+                + ". An inline code can switch the data channel: keep the inline codes where "
+                "they were and export again."
+            )

@@ -66,8 +66,43 @@ def is_a11y_style(style: str | None) -> bool:
 
 def is_appended_style(style: str | None) -> bool:
     """A unit appended after a page's body units: accessibility attributes and (#733) page
-    metadata. A full-text document leaves them out, as it does not hold them in its one body."""
+    metadata. A full-text document leaves them out, as it does not hold them in its one body.
+    This is the LEGACY full-text rule (it also catches the in-body styles below); full-text
+    documents choose their rule through `full_text_units`."""
     return bool(style) and str(style).startswith((A11Y_STYLE_PREFIX, META_STYLE_PREFIX))
+
+
+# #667: styles that mark a BODY unit in its own place, not a unit appended after the body. A
+# Markdown line that holds an image is a prose line (its alt text is translated with it); the
+# style only gives the Editor its note. Full-text rule 1 dropped these lines from the body, so
+# their prose was never translated.
+IN_BODY_STYLES = frozenset({"a11y:md-image"})
+
+# #667: which units a FULL_TEXT document keeps in its one body, stamped as skeleton["ft_units"]
+# by ingest. No stamp = rule 1 (every `a11y:*` / `meta:*` unit is left out, in-body styles
+# too); rule 2 keeps the in-body styles. A stored document keeps the rule it was imported
+# under on export (its stored unit list) and on repair, so its paragraph count never moves.
+FT_UNITS_LEGACY = 1
+FT_UNITS_VERSION = 2
+
+
+def ft_units_version(skeleton) -> int:
+    """The full-text unit rule a stored skeleton was cut under (no or unreadable stamp: 1)."""
+    raw = (skeleton or {}).get("ft_units") if isinstance(skeleton, dict) else None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return FT_UNITS_LEGACY
+    return raw if raw in (FT_UNITS_LEGACY, FT_UNITS_VERSION) else FT_UNITS_LEGACY
+
+
+def full_text_units(units, version: int) -> list:
+    """The units a FULL_TEXT body holds under full-text rule `version` (see FT_UNITS_*)."""
+
+    def dropped(style) -> bool:
+        if version >= FT_UNITS_VERSION and style in IN_BODY_STYLES:
+            return False
+        return is_appended_style(style)
+
+    return [u for u in units if not dropped(u.get("style"))]
 
 
 def target_tag(locale) -> str:

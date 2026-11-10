@@ -269,11 +269,22 @@ def test_hostile_inputs():
             raise AssertionError("segment cap must be refused")
     finally:
         config.MAX_DOCUMENT_SEGMENTS = old
-    # a traversal-style name is only ever a zip entry name: carried, never extracted
-    trav = _zip([("../../evil.xlf", WS, D)])
-    out = get_filter("xlz").build(trav, {"0": "x"})
-    assert [m[0] for m in _members(out)] == ["../../evil.xlf"]
-    assert not os.path.exists(os.path.join(_ROOT, "..", "..", "evil.xlf"))
+    # #795: a member name that leaves the archive is refused, never delivered back
+    for bad in ("../../evil.xlf", "/evil.xlf", "..\\evil.xlf", "c:evil.xlf", "a\x01.xlf"):
+        trav = _zip([(bad, WS, D)])
+        for fn in (
+            lambda trav=trav: get_filter("xlz").parse(trav),
+            lambda trav=trav: get_filter("xlz").build(trav, {"0": "x"}),
+        ):
+            try:
+                fn()
+            except InputLimitError as exc:
+                assert "unsafe path" in str(exc), exc
+            else:
+                raise AssertionError(f"{bad!r} must be refused")
+    # names that differ only in case or slash direction collide on Windows/macOS
+    _refused("xlz", _zip([("a.xlf", WS, D), ("A.XLF", WS, D)]), "case-only twin names")
+    _refused("xlz", _zip([("d/a.xlf", WS, D), ("d\\a.xlf", WS, D)]), "slash-direction twins")
     print("  [hostile] non-zip, empty, duplicate, bomb, encrypted, DOCTYPE, caps OK")
 
 

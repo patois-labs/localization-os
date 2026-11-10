@@ -604,13 +604,14 @@ def icu_rebuild(parts, translations, target: str | None) -> str:
             pieces[n] = "#"
     if mine is not None and _tokens_ok(mine, toks) and _icu_safe(mine):
         text = mine
-    return _TOKEN_RE.sub(lambda m: pieces.get(int(m.group(1)), ""), text)
+    # #814.1: a token that names no piece of the message is text
+    return _TOKEN_RE.sub(lambda m: pieces.get(int(m.group(1)), m.group(0)), text)
 
 
 def _tokens_ok(text: str, toks: list) -> bool:
+    # #814.1: a token number outside the message names no piece: it is text, not a reason
+    # to throw the translation away
     found = [int(x) for x in _TOKEN_RE.findall(text)]
-    if any(n < 1 or n > len(toks) for n in found):
-        return False
     need = [n for n, p in enumerate(toks, 1) if isinstance(p, Complex)]
     return all(found.count(n) == 1 for n in need)
 
@@ -642,10 +643,14 @@ def _protect(s: str, rx) -> tuple[str, list]:
 
 
 def _restore(text: str, raws: list) -> str | None:
-    found = [int(x) for x in _TOKEN_RE.findall(text)]
-    if any(n < 1 or n > len(raws) for n in found):
-        return None
-    return _TOKEN_RE.sub(lambda m: raws[int(m.group(1)) - 1], text)
+    """The placeholders put back. A token number that names no placeholder of the message
+    is text (#814.1: kept; it used to throw the whole translation away)."""
+
+    def sub(m):
+        n = int(m.group(1))
+        return raws[n - 1] if 1 <= n <= len(raws) else m.group(0)
+
+    return _TOKEN_RE.sub(sub, text)
 
 
 # --------------------------------------------------------------------------------------
@@ -733,6 +738,12 @@ def rebuild(text: str, root, dialect: str, paragraph_texts: dict, target: str | 
 _ARB_SUFFIX = re.compile(r"^([A-Za-z0-9_]+?)(Zero|One|Two|Few|Many|Other)$")
 
 
+def _nl_at(text: str, nl: int) -> str:
+    """The line break that ends at the LF at index `nl`: CRLF when a CR comes right before
+    it (#813.2)."""
+    return "\r\n" if nl > 0 and text[nl - 1] == "\r" else "\n"
+
+
 def _arb_suffix_plural_edits(text: str, root, edits: list, target: str) -> list:
     """#729 (decision 18, gate): suffix-style ARB plurals, one message per category
     (`itemCountOne`, `itemCountOther`) instead of one ICU plural, get a message for each
@@ -764,7 +775,7 @@ def _arb_suffix_plural_edits(text: str, root, edits: list, target: str) -> list:
         value = replaced.get((other.start, other.end), text[other.start : other.end])
         line_start = text.rfind("\n", root.start, key_at)
         indent = text[line_start + 1 : key_at]
-        sep = "\n" + indent if line_start != -1 and not indent.strip() else " "
+        sep = _nl_at(text, line_start) + indent if line_start != -1 and not indent.strip() else " "
         rep = "".join(f"{json.dumps(stem + c.capitalize())}: {value},{sep}" for c in missing)
         out.append((key_at, key_at, rep))
     return out
@@ -780,7 +791,7 @@ def _arb_locale_edit(text: str, root, target: str):
         key_start = _WS.match(text, root.start + 1).end()  # the first key's opening quote
         line_start = text.rfind("\n", root.start, key_start)
         indent = text[line_start + 1 : key_start] if line_start != -1 else ""
-        sep = "\n" + indent if line_start != -1 else " "
+        sep = _nl_at(text, line_start) + indent if line_start != -1 else " "
         rep = f'"@@locale": {json.dumps(loc, ensure_ascii=False)},{sep}'
         return (key_start, key_start, rep)
     return (root.start, root.end, "{" + f'"@@locale": {json.dumps(loc, ensure_ascii=False)}' + "}")

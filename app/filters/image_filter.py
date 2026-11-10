@@ -109,6 +109,11 @@ def _parse_tag(tok: str):
     return closing, name, self_closing
 
 
+def _local(name: str) -> str:
+    """#807: the local part of an element name; `x:script` is a script to every XML reader."""
+    return name.rsplit(":", 1)[-1]
+
+
 _XML_PREDEFINED = {"amp": "&", "lt": "<", "gt": ">", "quot": '"', "apos": "'"}
 _ENTITY_RE = re.compile(r"&(?:#([0-9]{1,7})|#[xX]([0-9a-fA-F]{1,6})|(amp|lt|gt|quot|apos));")
 
@@ -147,7 +152,7 @@ def _svg_units(tokens: list[str], capped: bool = False) -> list[dict]:
     for ti, tok in enumerate(tokens):
         if tok.startswith("<") and tok.endswith(">"):
             closing, name, self_closing = _parse_tag(tok)
-            if name in _SKIP_CONTAINERS:
+            if _local(name) in _SKIP_CONTAINERS:
                 if closing:
                     skip_depth = max(0, skip_depth - 1)
                 elif not self_closing:
@@ -186,7 +191,7 @@ def _svg_a11y_units(tokens: list[str], capped: bool = False, already: int = 0) -
         if not (tok.startswith("<") and tok.endswith(">")):
             continue
         closing, name, self_closing = _parse_tag(tok)
-        if name in _A11Y_OPAQUE and not self_closing:
+        if _local(name) in _A11Y_OPAQUE and not self_closing:
             opaque = max(0, opaque - 1) if closing else opaque + 1
             continue
         if opaque or closing or self_closing or name not in _A11Y_CONTAINERS:

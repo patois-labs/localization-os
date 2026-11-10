@@ -265,6 +265,13 @@ class AppleStringsFilter(KeyValueFilter):
         return entries
 
     def _encode_value(self, new: str, entry: Entry, text: str, enc: ResourceEncoding) -> str:
+        if chr(0) in new:  # #813.5: a raw NUL makes the file unreadable; Bilingua refuses too
+            from app.filters.xml_text import XmlTargetError  # export: a clean 409 refusal
+
+            raise XmlTargetError(
+                "A translation holds a NUL character (U+0000), which a .strings file cannot "
+                f"hold (key {entry.key!r}). Remove it and export again."
+            )
         if entry.extra.get("quoted"):
             return escape(new)
         return '"' + escape(new) + '"'  # an unquoted word becomes a quoted string

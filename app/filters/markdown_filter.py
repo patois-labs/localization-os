@@ -13,7 +13,9 @@ stays stable across the round-trip.
 Accessibility: an image's alt text (``![alt](src)``) is part of its line's text, so it
 is already translated with the line; such a line is marked with the ``a11y:md-image``
 style so the Editor tells the linguist to translate the alt text and keep the ``(...)``
-target. An image with an EMPTY alt is reported in ``skeleton["a11y_images"]`` (the
+target. The line stays an ordinary body unit, so a full-text document keeps it in its body
+(#667, ``a11y.full_text_units`` rule 2; documents imported before keep rule 1, which left it
+out). An image with an EMPTY alt is reported in ``skeleton["a11y_images"]`` (the
 Editor's missing-alt prompt). Markdown has no document language declaration.
 
 Emphasis marks stay text the engine writes; a translated line whose emphasis CommonMark
@@ -122,6 +124,7 @@ def _is_skip_line(line: str) -> bool:
 # under, so stored paragraph indices never address the other walk's units. 3 = #735 (link
 # reference definitions, footnote labels, indented code and HTML comment blocks).
 MD_WALK_LEGACY = 1
+_UTF8_BOM = b"\xef\xbb\xbf"
 MD_WALK_VERSION = 3
 _KNOWN_MD_WALKS = (1, 2, 3)
 
@@ -730,7 +733,9 @@ class MarkdownFilter(Filter):
     exts = ("markdown", "mdown", "mkd")
 
     def parse(self, data: bytes, provider: str | None = None) -> ParseResult:
-        text, enc = read_text_upload(data)  # #509: Windows-1252 converted, else refused
+        text, enc = read_text_upload(
+            data, sig=True
+        )  # #813.1: a BOM is not part of the first line; #509: Windows-1252 converted, else refused
         lines = text.splitlines()
         units: list[TextUnit] = []
         n_images = 0
@@ -793,7 +798,7 @@ class MarkdownFilter(Filter):
         md_walk: int = MD_WALK_VERSION,
         fm_keys: frozenset | None = None,
     ) -> bytes:
-        text = decode_text_lossless(original)
+        text = decode_text_lossless(original, sig=True)  # #813.1
         lines = text.splitlines()
         # #677: keep every line's own ending (CRLF, the final newline or its absence) and the
         # whitespace after the translated text (two trailing spaces are a Markdown hard line
@@ -826,7 +831,10 @@ class MarkdownFilter(Filter):
                     new = fix_cjk_emphasis(core, new)
                     new = fix_cjk_autolinks(core, new)  # #700
                     new = restore_cell_escapes(core, new)  # #710: table cell `\|`
-                    if "#" not in prefix:  # #704 (heading text is inline: no block start)
-                        new = escape_block_start(core, new)
+                    # #704; #790 (structure fuzz): heading text too, the prefix would take a
+                    # translated `1. ` / `# ` (`## 1. x` reads back as `x`); escaped, it prints
+                    # the same
+                    new = escape_block_start(core, new)
                 out[li] = prefix + new + tail + out[li][len(bare) :]
-        return encode_text_lossless("".join(out))
+        body = encode_text_lossless("".join(out))
+        return _UTF8_BOM + body if bytes(original).startswith(_UTF8_BOM) else body

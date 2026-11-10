@@ -281,10 +281,11 @@ def test_chrome():
         .replace("Hallo $USER$, du hast $1 offene Tabs", "Hello $USER$, you have $1 open tabs")
         == CHROME
     ), "only the two message strings changed"
-    # an invented token falls back to the source message
+    # a token that names no placeholder is text (#814.1, g12): the translation is kept, not
+    # thrown away for the source message (quality.tag_damage reports the token)
     bad = json.loads(get_filter("json").build(CHROME.encode(), {"1": "Hallo ⟦x9⟧"}))
-    assert bad["greet"]["message"] == "Hello $USER$, you have $1 open tabs", bad
-    print("  Chrome messages.json: message only, $X$/$1 protected, unknown token falls back OK")
+    assert bad["greet"]["message"] == "Hallo ⟦x9⟧", bad
+    print("  Chrome messages.json: message only, $X$/$1 protected, unknown token kept as text OK")
 
 
 def test_formatjs():
@@ -624,7 +625,24 @@ def test_gate_fixes():
     print("  [gate] NaN JSON, linear ARB rebuild, msgraph localized plural ARB OK")
 
 
+def test_arb_crlf_added_lines_813():
+    src = ARB.replace("\n", "\r\n").replace('  "@@locale": "en",\r\n', "").encode("utf-8")
+    tr = all_tr("arb", ARB.replace('  "@@locale": "en",\n', ""))
+    out = get_filter("arb").build_localized(src, tr, "ru-RU")
+    assert b"\n" not in out.replace(b"\r\n", b""), out[:200]
+    assert out.startswith(b'{\r\n  "@@locale": "ru_RU",\r\n  '), out[:80]
+    cz = ARB.replace("\n", "\r\n").replace(
+        '"items"', '"itemCountOne": "one",\r\n  "itemCountOther": "many",\r\n  "items"'
+    )
+    out2 = get_filter("arb").build_localized(
+        cz.encode("utf-8"), all_tr("arb", cz.replace("\r\n", "\n")), "cs"
+    )
+    assert b"\n" not in out2.replace(b"\r\n", b""), out2[:300]
+    print("  ARB: added @@locale / plural lines follow the file's CRLF (#813.2) OK")
+
+
 def main():
+    test_arb_crlf_added_lines_813()
     test_gate_fixes()
     test_registration()
     test_detection()

@@ -203,6 +203,11 @@ def test_tokens_cannot_lose_or_inject_code():
     # JSP: translated text can never become EL; ERB/ASPX "<%" is escaped as markup.
     out = _build("jsp", "<p>Hi ${u}</p>", {"0": f"Salut {X1} ${{evil}} #{{evil}}"})
     assert "\\${evil}" in out and "\\#{evil}" in out and "Salut ${u}" in out, out
+    # #789: a run ending in backslashes must not turn the next EL island into literal text
+    out = _build("jsp", "<p>Hi ${u}</p>", {"0": f"Salut \\\\{X1}"})
+    assert out == "<p>Salut &#92;&#92;${u}</p>", out
+    out = _build("jsp", "<p>Hi ${u} x</p>", {"0": f"Salut \\ {X1} fin\\"})
+    assert out == "<p>Salut \\ ${u} fin\\</p>", out
     out = _build("erb", "<p>Hi <%= u %></p>", {"0": f"Salut {X1} <%= `id` %>"})
     assert "&lt;%= `id` %&gt;" in out, out
     out = _build("shtml", "<p>Hi</p>", {"0": '<!--#exec cmd="id" -->'})

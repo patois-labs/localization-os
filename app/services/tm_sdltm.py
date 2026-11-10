@@ -140,6 +140,10 @@ def _parse_segment_xml(raw) -> etree._Element:
     raw = _XML_DECL.sub("", raw, count=1)
     if not raw.strip():
         raise _Skip(SKIP_EMPTY, "segment is empty")
+    from app.filters.xml_guard import tag_budget_exceeded
+
+    if tag_budget_exceeded(raw):  # #792 gate: quadratic in lxml, refused before it
+        raise _Skip(SKIP_BAD_XML, "segment XML has a tag with far too many attributes")
     try:
         root = etree.fromstring(raw, parser=_xml_parser())  # entities, DTD and network off
     except (etree.XMLSyntaxError, ValueError) as exc:

@@ -221,12 +221,13 @@ def test_simplified_and_inline_attr_inside_text_unit():
 
 def test_token_damage():
     data = BASIC.encode("utf-8")
-    # dropped point token is appended; stray / duplicate / unknown tokens dropped; unclosed pair closed
+    # dropped point token is appended; duplicate tokens dropped; unclosed pair closed; a token
+    # that names no code of the unit (x9, /g3) is text (#814.1, g12)
     tr = {"0": "Hallo ⟦g1⟧Laden ⟦x9⟧⟦/g3⟧", "1": "⟦x2⟧⟦x2⟧ Preis"}
     out = F.build(data, tr).decode("utf-8")
     assert (
-        '<h1 title="Main {@id} heading">Hallo <b>Laden </b><xsl:value-of select="user/name"/></h1>'
-        in out
+        '<h1 title="Main {@id} heading">Hallo <b>Laden ⟦x9⟧⟦/g3⟧</b>'
+        '<xsl:value-of select="user/name"/></h1>' in out
     ), out
     assert '<p><xsl:value-of select="price"/> Preis&nbsp;</p>' in out, out
     etree.fromstring(out.encode(), _SAFE)
@@ -496,6 +497,28 @@ def test_script_and_style_are_code():
     print("  [code] script/style result elements never units; bytes kept")
 
 
+def test_build_is_linear_786():
+    """#786: the build rescanned every edit for each text unit (63 s at this size)."""
+    import time
+
+    n = 16000
+    xsl = (
+        '<?xml version="1.0"?>\n<xsl:stylesheet version="1.0" '
+        'xmlns:xsl="http://www.w3.org/1999/XSL/Transform"><xsl:template match="/">'
+        "<html><body>\n"
+        + "".join(f'<p title="T {i}">Hello <b>{i}</b> there</p>\n' for i in range(n))
+        + "</body></html></xsl:template></xsl:stylesheet>\n"
+    ).encode()
+    r = F.parse(xsl)
+    tr = {str(u.p_index): u.text + " X" for u in r.units}
+    t0 = time.time()
+    out = F.build(xsl, tr)
+    took = time.time() - t0
+    assert took < 15, took
+    assert out.count(b" X") >= n
+    print("  [786] translated build of 16000 paragraphs is linear OK")
+
+
 def main():
     test_registration()
     test_script_and_style_are_code()
@@ -510,6 +533,7 @@ def main():
     test_illegal_xml_chars_in_translation()
     test_prefix_doe_and_inline_runs()
     test_api_and_cli_round_trip()
+    test_build_is_linear_786()
     print("XSLT FILTER OK")
 
 

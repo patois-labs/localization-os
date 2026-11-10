@@ -5,7 +5,7 @@
   plain       `{...}` without a backslash is text; SRT `<i>` / `<font>` stay unit text.
   restore     build writes every block back verbatim; the rebuilt file re-parses the same.
   gate        the live ja-JP drop of `{\\i0}` and an added token are reported by tag_damage.
-  markers     an unknown / repeated marker is dropped; #713 blank lines with tokens.
+  markers     a repeated marker is dropped, an unknown one kept; #713 blank lines with tokens.
   identity    no-op build and a build with the unit texts unchanged are byte-identical.
   legacy      a pre-#738 translation holding raw blocks is written once, as before; an
               untouched legacy unit exports as the source cue.
@@ -142,13 +142,14 @@ def test_gate_sees_dropped_and_added():
 
 def test_markers():
     f = _f()
-    # unknown, paired and repeated markers are dropped
+    # a repeated marker is dropped; one that names no token of the cue is text (#813.7: it
+    # was deleted, as in WebVTT; Bilingua keeps it too)
     out = f.build(SRT, {"3": "a⟦g1⟧b⟦/g1⟧c⟦x9⟧d⟦x1⟧e⟦x1⟧f⟦x2⟧g⟦x3⟧h"})
-    assert _cue(out, 3) == "abcd{\\b1}ef{\\b0}g{\\i1}h", _cue(out, 3)
+    assert _cue(out, 3) == "a⟦g1⟧b⟦/g1⟧c⟦x9⟧d{\\b1}ef{\\b0}g{\\i1}h", _cue(out, 3)
     # #713: a blank line never splits the cue; tokens survive
     out = f.build(SRT, {"4": "Bleib ⟦x1⟧⟦x2⟧nah⟦x3⟧\n\n\n⟦x4⟧am Grat.⟦x5⟧"})
     assert _cue(out, 4) == "Bleib {\\fs20}{\\c&HFF&}nah{\\r}\n{\\i1}am Grat.{\\i0}", _cue(out, 4)
-    print("  [markers] unknown / repeated markers dropped; #713 blank lines OK")
+    print("  [markers] repeated markers dropped, unknown kept; #713 blank lines OK")
 
 
 def test_legacy_translation():

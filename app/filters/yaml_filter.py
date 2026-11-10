@@ -463,6 +463,12 @@ def _render_block(new: str, sc: _Scalar, region: str) -> str | None:
     first_text = next((ln for ln in lines if ln.strip()), "")
     if not first_text or first_text[0] == " ":
         return None
+    # 785: a white-space-only line before the first text would set the block's indentation
+    # (YAML reads it from
+    # the leading blank lines) and end the block early; double-quote instead.
+    first_at = next(i for i, ln in enumerate(lines) if ln.strip())
+    if any(ln for ln in lines[:first_at]):
+        return None
     if "\n" in body and sc.style == ">":
         header = header.replace(">", "|", 1)
     elif "\n" not in body and sc.style == ">" and body != body.strip():

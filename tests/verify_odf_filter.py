@@ -278,12 +278,14 @@ def test_tolerant():
     content = member(out, "content.xml").decode()
     # the footnote (x2) was dropped by the translation but is kept at the end
     p = content.split('text:style-name="P1">')[1].split("</text:p>", 1)[0]
-    assert p.startswith("Nur Text fremd  "), p
-    assert "⟦" not in content
+    # #814.1 (g12): tokens that name no code of the unit (g9, x7, /g4) are text; x1 names the
+    # span code with the wrong kind and is dropped
+    assert p.startswith("Nur Text ⟦g9⟧fremd⟦/g9⟧  ⟦x7⟧ ⟦/g4⟧ Ende"), p
+    assert content.count("⟦") == 4, content
     assert 'text:id="ftn1"' in content and "A footnote about" in content
     assert "Speichern" not in content and "Save" not in p
     assert dict(units("odt", out))[2] == "A footnote about %1$s."
-    print("  [tolerant] stray/unknown tokens dropped, footnote kept OK")
+    print("  [tolerant] stray tokens dropped, unknown kept as text, footnote kept OK")
 
 
 ODS_CONTENT = (

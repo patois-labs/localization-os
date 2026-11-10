@@ -46,12 +46,15 @@ from app.filters.base import (
     read_text_upload,
     register,
 )
+from app.filters.token_lit import code_tokens, token_number
+from app.filters.xml_guard import check_tag_budget
 from app.services.segment import _PLACEHOLDER_RE, ph_close, ph_open, ph_point
 
 ITS_NS = "http://www.w3.org/2005/11/its"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 DOCBOOK_NS = "http://docbook.org/ns/docbook"
 DITA_ARCH_NS = "http://dita.oasis-open.org/architecture/2005/"
+_USE_CONREF_TARGET = "-dita-use-conref-target"
 
 MAX_DEPTH = 120  # element nesting; real DITA/DocBook stays far below this
 MAX_RULES = 100  # rules in one user-supplied or in-document rules set
@@ -113,6 +116,7 @@ def _parse_tree(text: str, what: str = "This XML file"):
             f"{what} declares a DTD internal subset; refused (it is where entities are "
             "declared, an entity-expansion / XXE vector). Remove the [ ... ] block."
         )
+    check_tag_budget(text, what=what)  # #792
     try:
         root = etree.fromstring(text.encode("utf-8"), parser=_parser())
     except etree.XMLSyntaxError as exc:
@@ -478,6 +482,13 @@ def _eval_props(root, els: list, nodes: list[Node], dialect: RuleSet | None, ext
     note_x: dict = {}
     attr_tr: dict = {}  # (node, expanded attr name) -> bool
     attr_note: dict = {}
+    # #809.3 (as Bilingua its.rs): why an element is "no" when it is not an explicit
+    # translate="no": "name" = the dialect lists it by name (DITA image), "conref" = its content
+    # is pulled from elsewhere. Its OWN attributes stay translatable (DITA 1.3 2.4.2.3) unless a
+    # translate attribute, an ITS rule or ITS markup also says "no"; a descendant of a conref
+    # element is replaced with it, so its attributes are not.
+    soft_no: dict = {}
+    dialect_attrs: set = set()  # (node, attr) the dialect marked translatable
 
     for el, nd in by_el.items():
         nd.local = _lname(el)
@@ -485,6 +496,7 @@ def _eval_props(root, els: list, nodes: list[Node], dialect: RuleSet | None, ext
             ln = nd.local
             if ln in dialect.no_translate:
                 tr_x[nd] = False
+                soft_no[nd] = "name"
             if ln in dialect.inline:
                 wt_x[nd] = "yes"
             if ln in dialect.nested:
@@ -493,13 +505,20 @@ def _eval_props(root, els: list, nodes: list[Node], dialect: RuleSet | None, ext
                 pre_x[nd] = True
             for an, owners in dialect.attrs.items():
                 if an in el.attrib and ("*" in owners or ln in owners):
+                    if (el.get(an) or "").strip() == _USE_CONREF_TARGET:
+                        continue  # DITA 1.3 2.4.2.3: taken from the conref target, no text
                     attr_tr[(nd, an)] = True
+                    dialect_attrs.add((nd, an))
             if dialect is DITA:
                 t = el.get("translate")
                 if t in ("yes", "no"):
                     tr_x[nd] = t == "yes"
-                if el.get("conref") is not None or el.get("conkeyref") is not None:
+                    soft_no.pop(nd, None)
+                if (el.get("conref") is not None or el.get("conkeyref") is not None) and not (
+                    tr_x.get(nd) is False and nd not in soft_no
+                ):
                     tr_x[nd] = False  # content is pulled from elsewhere at publish time
+                    soft_no[nd] = "conref"
 
     rules = list(extra)
     for its_rules in root.iter(f"{{{ITS_NS}}}rules"):
@@ -533,6 +552,7 @@ def _eval_props(root, els: list, nodes: list[Node], dialect: RuleSet | None, ext
                     continue
                 if rule.kind == "translate":
                     tr_x[nd] = rule.value == "yes"
+                    soft_no.pop(nd, None)
                 elif rule.kind == "withinText":
                     wt_x[nd] = rule.value
                 elif rule.kind == "preserveSpace":
@@ -546,6 +566,7 @@ def _eval_props(root, els: list, nodes: list[Node], dialect: RuleSet | None, ext
                 key = (nd, h.attrname)
                 if rule.kind == "translate":
                     attr_tr[key] = rule.value == "yes"
+                    dialect_attrs.discard(key)  # a rule that names the attribute decides
                 elif rule.kind == "locNote":
                     attr_note[key] = _note_for(rule, h.getparent())
 
@@ -560,6 +581,7 @@ def _eval_props(root, els: list, nodes: list[Node], dialect: RuleSet | None, ext
         v = el.get(its_tr)
         if v in ("yes", "no"):
             tr_x[nd] = v == "yes"
+            soft_no.pop(nd, None)
         v = el.get(its_wt)
         if v in ("yes", "no", "nested"):
             wt_x[nd] = v
@@ -571,6 +593,7 @@ def _eval_props(root, els: list, nodes: list[Node], dialect: RuleSet | None, ext
             pre_x[nd] = v == "preserve"
         if etree.QName(el).namespace == ITS_NS:
             tr_x[nd] = False
+            soft_no.pop(nd, None)
 
     stack = [(root, by_el[root], True, False, "")]
     while stack:  # iterative top-down inheritance (depth is capped, but stay frugal)
@@ -583,7 +606,35 @@ def _eval_props(root, els: list, nodes: list[Node], dialect: RuleSet | None, ext
             if isinstance(c.tag, str):
                 stack.append((c, by_el[c], nd.tr, nd.pre, nd.note))
 
+    # translate="no" on the element or an ancestor (ITS markup, a rule, the dialect's translate
+    # attribute) or a conref on an ancestor: what a dialect attribute may not live under.
+    explicit_no: dict = {}
+    for el, nd in by_el.items():  # document order: a parent comes before its children
+        parent = el.getparent()
+        pn = by_el.get(parent) if parent is not None else None
+        v = tr_x.get(nd)
+        if v is True:
+            explicit_no[nd] = False
+        elif v is False and soft_no.get(nd) != "name":
+            explicit_no[nd] = True
+        else:
+            explicit_no[nd] = explicit_no.get(pn, False) if pn is not None else False
+
+    def attr_blocked(el, nd) -> bool:
+        v = tr_x.get(nd)
+        if v is True:
+            return False
+        if v is False and nd not in soft_no:
+            return True
+        parent = el.getparent()
+        return parent is not None and explicit_no.get(by_el.get(parent), False)
+
+    els_of = {nd: el for el, nd in by_el.items()}
     for (nd, aname), yes in attr_tr.items():
+        # ITS: nothing under translate="no" is translatable, a dialect attribute (DITA
+        # navtitle) included
+        if yes and (nd, aname) in dialect_attrs and attr_blocked(els_of[nd], nd):
+            continue
         if yes:
             nd.tr_attrs[aname] = attr_note.get((nd, aname), nd.note)
 
@@ -631,6 +682,7 @@ class Unit:
     lead: str = ""
     trail: str = ""
     cdata: bool = False
+    owner: Node | None = None  # the container the run belongs to (content units)
     # attr
     node: Node | None = None
     vs: int = 0
@@ -765,6 +817,7 @@ class _Planner:
                 lead=lead,
                 trail=trail,
                 cdata=flags["cdata"] == 1 and flags["other"] == 0,
+                owner=owner,
             )
             self.add(unit)
         owner.plan.append(("run", run, unit))
@@ -872,6 +925,38 @@ def plan_document(
 # --- emitter -------------------------------------------------------------------------------
 
 
+def same_lang(a: str, b: str) -> bool:
+    """Whether two language tags name the same language for a restamp (Bilingua skel.rs
+    same_lang): the primary subtag must match, and the script and the region too when both
+    tags have one (en and en-US match; en-GB and en-US, zh-Hans and zh-Hant do not). Case
+    and _ against - are ignored."""
+
+    def parts(s: str):
+        it = iter(s.strip().replace("_", "-").lower().split("-"))
+        primary = next(it, "")
+        script = region = None
+        for p in it:
+            alpha = p.isascii() and p.isalpha()
+            if script is None and region is None and len(p) == 4 and alpha:
+                script = p
+            elif region is None and (
+                (len(p) == 2 and alpha) or (len(p) == 3 and p.isascii() and p.isdigit())
+            ):
+                region = p
+            else:
+                break
+        return primary, script, region
+
+    pa, sa, ra = parts(a)
+    pb, sb, rb = parts(b)
+    return (
+        bool(pa)
+        and pa == pb
+        and (sa is None or sb is None or sa == sb)
+        and (ra is None or rb is None or ra == rb)
+    )
+
+
 def _esc_text(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -896,6 +981,48 @@ class _Emitter:
             self.tx[id(u)] = xml_target_text(str(new))
         self.lang = lang  # (attr raw name, value, add_if_missing) for the root start tag
         self.out: list[str] = []
+        self.restamp: set = set()
+        if lang:
+            self._plan_restamp(lang[0])
+
+    def _plan_restamp(self, attr: str) -> None:
+        """#809.2 (as Bilingua skel.rs): a NESTED element that declares the source language
+        and holds a unit whose target differs from its source is restamped with the target
+        language. Foreign passages (another language, another region or script) stay. The
+        source language is the root's own, else the first one the file declares."""
+        doc = self.plan.doc
+        parent: dict = {}
+        for nd in doc.nodes:
+            for it in nd.items:
+                if isinstance(it, Node):
+                    parent[id(it)] = nd
+        holders: set = set()
+        for u in self.plan.units:
+            if id(u) not in self.tx:
+                continue
+            nd = u.node if u.kind == "attr" else u.owner
+            while nd is not None and nd is not doc.root and id(nd) not in holders:
+                holders.add(id(nd))
+                nd = parent.get(id(nd))
+        values = {}
+        for nd in doc.nodes:
+            for m in _ATTR.finditer(self.text[nd.s0 : nd.s1]):
+                if m.group(1) == attr:
+                    values[id(nd)] = m.group(2) if m.group(2) is not None else m.group(3)
+        source = values.get(id(doc.root))
+        if source is None:
+            source = next((values[id(nd)] for nd in doc.nodes if id(nd) in values), None)
+        if source is None:
+            return
+        for nd in doc.nodes:
+            if (
+                nd is not doc.root
+                and nd.role != "inline"
+                and id(nd) in holders
+                and id(nd) in values
+                and same_lang(values[id(nd)], source)
+            ):
+                self.restamp.add(id(nd))
 
     def run(self) -> str:
         d = self.plan.doc
@@ -924,6 +1051,12 @@ class _Emitter:
             elif add:
                 at = len(raw_s) - (2 if raw_s.endswith("/>") else 1)
                 edits.append((at, at, f' {name}="{_esc_attr(value, chr(34))}"'))
+        if self.lang and id(nd) in self.restamp:
+            name, value, _add = self.lang
+            for m in _ATTR.finditer(raw_s):
+                if m.group(1) == name:
+                    g = 2 if m.group(2) is not None else 3
+                    edits.append((m.start(g), m.end(g), _esc_attr(value, '"' if g == 2 else "'")))
         for a, b, rep in sorted(edits, reverse=True):
             raw_s = raw_s[:a] + rep + raw_s[b:]
         return raw_s
@@ -969,14 +1102,18 @@ class _Emitter:
     def render(self, u: Unit, new: str) -> None:
         self.out.append(u.lead)
         if u.cdata:
-            body = _PLACEHOLDER_RE.sub("", new).replace("]]>", "]]]]><![CDATA[>")
+            # #814.1: a token that names no code of the unit is text
+            body = _PLACEHOLDER_RE.sub(
+                lambda m: "" if int(token_number(m.group(0))) in u.refs else m.group(0), new
+            ).replace("]]>", "]]]]><![CDATA[>")
             self.out.append(f"<![CDATA[{body}]]>")
             self.out.append(u.trail)
             return
         used: set[int] = set()
         stack: list[tuple[int, Node]] = []
         pos = 0
-        for m in _PLACEHOLDER_RE.finditer(new):
+        # #814.1: a token that names no code of the unit is text
+        for m in code_tokens(new, lambda num: int(num) in u.refs):
             self.out.append(_esc_text(new[pos : m.start()]))
             pos = m.end()
             inner = m.group(0)[1:-1]
@@ -989,7 +1126,7 @@ class _Emitter:
                     self.out.append(self.text[nd.e0 : nd.e1])
                 continue  # a stray close is dropped; the file stays well-formed
             if ref is None or n in used:
-                continue  # unknown or duplicated token: dropped, never emitted as text
+                continue  # a duplicated token is dropped
             used.add(n)
             kind, obj = ref
             if kind == "pair":
@@ -1102,11 +1239,20 @@ class ItsXmlFilter(Filter):
             lang = ("xml:lang", tag, False)
         elif "lang" in names and plan_dialect == "docbook":
             lang = ("lang", tag, False)
-        elif plan_dialect == "docbook" and DOCBOOK_NS not in root_tag:
+        elif plan_dialect == "docbook" and _root_namespace(text) != DOCBOOK_NS:
             lang = ("lang", tag, True)  # DocBook 4.x common attribute
         else:
             lang = ("xml:lang", tag, plan_dialect in ("dita", "docbook"))
         return self._build(original, paragraph_texts, lang)
+
+
+def _root_namespace(text: str) -> str | None:
+    """The namespace of the root ELEMENT (#809.1: not a substring test on the start tag, which
+    also matched a DocBook 4.x root that only declares the namespace for a prefix)."""
+    try:
+        return etree.QName(_parse_tree(text)).namespace
+    except (XmlFilterError, ValueError):
+        return None
 
 
 def _first_stag(text: str) -> str:

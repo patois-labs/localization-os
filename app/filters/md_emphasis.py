@@ -123,26 +123,29 @@ def _source_kinds(src: str) -> dict[str, int]:
     return out
 
 
-def _try(s: str, o: tuple[int, int], c: tuple[int, int], mark: str, move: bool):
-    """The text with the pair rewritten with ``mark`` (and the inner edge punctuation moved
-    outside when ``move``), or None when CommonMark still would not read it."""
+def _try(s: list[str], o: tuple[int, int], c: tuple[int, int], mark: str, move: bool) -> bool:
+    """Rewrite the pair in `s` (a list of characters) in place with ``mark`` (and the inner edge
+    punctuation moved outside when ``move``); True when CommonMark then reads it. When it does
+    not, `s` is left as it was. The length never changes, so a long line with many pairs is
+    fixed in linear time (#813.4; the old version rebuilt the whole string for every pair)."""
     inner = s[o[1] : c[0]]
-    lead = trail = ""
+    i, j = 0, len(inner)
     if move:
-        i, j = 0, len(inner)
         while i < j and _punct(inner[i]) and inner[i] not in "*_\\`":
             i += 1
         while j > i and _punct(inner[j - 1]) and inner[j - 1] not in "*_\\`":
             j -= 1
-        lead, trail, inner = inner[:i], inner[j:], inner[i:j]
-        if not inner or inner[0].isspace() or inner[-1].isspace():
-            return None
-    new = s[: o[0]] + lead + mark + inner + mark + trail + s[c[1] :]
-    oa = o[0] + len(lead)
-    ca = oa + len(mark) + len(inner)
-    if _can_open(new, oa, oa + len(mark)) and _can_close(new, ca, ca + len(mark)):
-        return new
-    return None
+        core = inner[i:j]
+        if not core or core[0].isspace() or core[-1].isspace():
+            return False
+    old = s[o[0] : c[1]]
+    s[o[0] : c[1]] = inner[:i] + list(mark) + inner[i:j] + list(mark) + inner[j:]
+    oa = o[0] + i
+    ca = oa + len(mark) + (j - i)
+    if _can_open(s, oa, oa + len(mark)) and _can_close(s, ca, ca + len(mark)):
+        return True
+    s[o[0] : c[1]] = old
+    return False
 
 
 def fix_cjk_emphasis(src: str, new: str) -> str:
@@ -161,15 +164,12 @@ def fix_cjk_emphasis(src: str, new: str) -> str:
         for o, c in lst:
             if not (_can_open(new, *o) and _can_close(new, *c)):
                 todo.append((o, c, kind))
-    s = new
+    chars = list(new)
     for o, c, kind in sorted(todo, reverse=True):  # right to left: earlier offsets stay valid
         star = "*" * len(kind)
-        fixed = (_try(s, o, c, star, False) if kind[0] == "_" else None) or _try(
-            s, o, c, star, True
-        )
-        if fixed is not None:
-            s = fixed
-    return s
+        if not (kind[0] == "_" and _try(chars, o, c, star, False)):
+            _try(chars, o, c, star, True)
+    return "".join(chars)
 
 
 # #700: GitHub-flavoured Markdown links a bare URL (extended autolink) only at the line start,
@@ -195,17 +195,39 @@ def _inside(spans: list[tuple[int, int]], a: int) -> bool:
     return any(x <= a < y for x, y in spans)
 
 
+def _glued_before(s: str, a: int) -> bool:
+    """True when the character before a URL at `a` is neither a blank nor a mark that may
+    open a URL."""
+    before = s[a - 1] if a else ""
+    return bool(before) and not before.isspace() and before not in "*_~("
+
+
+# Work budget for the repair (#813.4): one `find` per distinct source URL over the whole
+# translation is
+# urls x length steps; past this the repair is skipped (the unit keeps what the translator wrote).
+_AUTOLINK_BUDGET = 1 << 26
+
+
 def _source_urls(src: str) -> set[str]:
     spans = _masked_spans(src)
     out = set()
+    glued_in_source = set()
     for m in _BARE_URL.finditer(src):
         if _inside(spans, m.start()):
             continue
         url = m.group(0).rstrip(_URL_TRAIL)
         if url.endswith(")") and url.count("(") < url.count(")"):
             url = url[:-1]
+        # a URL the source itself glues to its neighbours (a link text, a CJK sentence) is
+        # not repaired: the
+        # glue is the author's, and wrapping it would rewrite link text (#813.4)
+        end = m.start() + len(url)
+        if _glued_before(src, m.start()) or any(
+            ch not in _URL_TRAIL and ch != ")" for ch in src[end : m.end()]
+        ):
+            glued_in_source.add(url)
         out.add(url)
-    return out
+    return out - glued_in_source
 
 
 def fix_cjk_autolinks(src: str, new: str, mdx: bool = False) -> str:
@@ -215,7 +237,7 @@ def fix_cjk_autolinks(src: str, new: str, mdx: bool = False) -> str:
     if not new or ("://" not in new and "www." not in new):
         return new
     urls = _source_urls(src)
-    if not urls:
+    if not urls or len(urls) * len(new) > _AUTOLINK_BUDGET:
         return new
     spans = _masked_spans(new)
     edits = []
@@ -226,11 +248,10 @@ def fix_cjk_autolinks(src: str, new: str, mdx: bool = False) -> str:
             start = b
             if _inside(spans, a) or any(x < b and a < y for x, y, _ in edits):
                 continue
-            before = new[a - 1] if a else ""
             run = _URL_RUN.match(new, b).group(0)  # what GFM would keep adding
             if run and run[0].isascii() and run[0] not in _URL_TRAIL:
                 continue  # the translation's URL goes on (another path, a ")"): leave it
-            glued_before = bool(before) and not before.isspace() and before not in "*_~("
+            glued_before = _glued_before(new, a)
             glued_after = bool(run.rstrip(_URL_TRAIL))
             if glued_before or glued_after:
                 if url.startswith("www."):
@@ -252,6 +273,7 @@ _BLOCK_START = re.compile(
     r"|(?P<hash>#{1,6})(?=[ \t]|$)"
     r"|(?P<bullet>[-+*])(?=[ \t]|$)"
     r"|(?P<quote>>)"
+    r"|(?P<fence>`{3,}|~{3,})"  # #790 gate: a fence would swallow the rest of the file
 )
 
 
@@ -262,11 +284,29 @@ def _block_start(s: str):
     return _BLOCK_START.match(s, lead)
 
 
+def _indent(s: str) -> int:
+    """The indent of `s` in columns (a tab goes to the next multiple of four)."""
+    w = 0
+    for c in s:
+        if c == " ":
+            w += 1
+        elif c == "\t":
+            w += 4 - w % 4
+        else:
+            break
+    return w
+
+
 def escape_block_start(src: str, new: str) -> str:
     """A translated line-start unit must not open a block its source did not: when `new`
     starts with an ordered-list number, ATX heading, bullet or `>` and `src` does not, the
-    marker is backslash-escaped (``1984\\.``, ``\\#``, ``\\-``, ``\\>``). Unchanged otherwise."""
-    m = _block_start(new or "")
+    marker is backslash-escaped (``1984\\.``, ``\\#``, ``\\-``, ``\\>``). Unchanged otherwise.
+    #790 (structure fuzz, as Bilingua): four or more columns of indent the source line did
+    not have would make the line an indented code block, so the blanks go."""
+    new = new or ""
+    if _indent(new) >= 4 and _indent(src or "") < 4:
+        new = new.lstrip(" \t")
+    m = _block_start(new)
     if m is None or _block_start(src or "") is not None:
         return new
     at = m.start("delim") if m.group("num") is not None else m.start()

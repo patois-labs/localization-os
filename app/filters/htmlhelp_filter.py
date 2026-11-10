@@ -81,6 +81,20 @@ _CP_INFO = CP_INFO
 _SOURCE_OK = set(_DECLARED_OK) | {c for c in (_codec_name(i[0]) for i in _CP_INFO.values()) if c}
 _split_locale = split_locale
 
+# Decode version (#796, #797), stamped on the skeleton as `hh_decode`. 2: a declared gb2312 /
+# shift_jis / euc-kr / ks_c_5601-1987 / big5 label is read as the Windows superset the way
+# browsers and HTML Help Workshop read it (GBK, cp932, cp949, cp950), and a .hhp is read in the
+# code page of its own Language=. 1 (no stamp): the pre-fix decode, so a document imported
+# before the fix is read exactly as it always was (formats-and-tokens: versioned decodes).
+HH_DECODE_VERSION = 2
+HH_DECODE_KEY = "hh_decode"
+_BROWSER_CODEC = {"gb2312": "gbk", "shift_jis": "cp932", "euc_kr": "cp949", "big5": "cp950"}
+
+
+def decode_version(value) -> int:
+    """The decode version of a stored skeleton value: a missing or bad stamp is version 1."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 1 else 1
+
 
 def _build_lcids() -> dict[str, int]:
     out: dict[str, int] = {}
@@ -157,7 +171,14 @@ def _hint_codec(hint_cp: int | None) -> str | None:
     return _codec_name(info[0]) if info else None
 
 
-def _decode(raw: bytes, hint_cp: int | None = None) -> tuple[str, _Enc]:
+def _declared_codec(label: str | None, version: int) -> str | None:
+    codec = _codec_name(label) if label else None
+    return _BROWSER_CODEC.get(codec, codec) if version >= 2 else codec
+
+
+def _decode(
+    raw: bytes, hint_cp: int | None = None, version: int = HH_DECODE_VERSION
+) -> tuple[str, _Enc]:
     """`hint_cp`: the code page of the .hhp project's Language= (decision 21, the maintainer
     2026-10-11). It is used only for a file that declares no charset of its own, in place
     of the Windows-1252 default; a BOM, valid UTF-8 and a declared charset still win."""
@@ -189,7 +210,7 @@ def _decode(raw: bytes, hint_cp: int | None = None) -> tuple[str, _Enc]:
         text = raw.decode("utf-8")
         if text.isascii():
             m = _DECL_RE.search(text[:4096])
-            declared = _codec_name(m.group(2)) if m else None
+            declared = _declared_codec(m.group(2), version) if m else None
             if declared and declared in _SOURCE_OK and declared not in ("utf-8", "utf-16"):
                 return text, _Enc(declared, ansi=True)
             return text, _Enc(hint or "cp1252", ansi=True)
@@ -202,7 +223,7 @@ def _decode(raw: bytes, hint_cp: int | None = None) -> tuple[str, _Enc]:
             "re-save the file as UTF-8 or in its Windows ANSI code page."
         )
     m = _DECL_RE.search(raw[:4096].decode("ascii", "replace"))
-    declared = _codec_name(m.group(2)) if m else None
+    declared = _declared_codec(m.group(2), version) if m else None
     last = None
     for codec in (declared, hint, "cp1252"):
         if not codec or codec not in _SOURCE_OK or codec in ("utf-8", "utf-16"):
@@ -419,11 +440,13 @@ def _escape_attr(s: str, quote: str) -> str:
     return s if quote else f'"{s}"'
 
 
-def _load(raw: bytes, capped: bool, hint_cp: int | None = None) -> tuple[str, _Enc]:
+def _load(
+    raw: bytes, capped: bool, hint_cp: int | None = None, version: int = HH_DECODE_VERSION
+) -> tuple[str, _Enc]:
     raw = bytes(raw)
     if capped:
         check_htmlhelp_budget(raw)
-    text, enc = _decode(raw, hint_cp)
+    text, enc = _decode(raw, hint_cp, version)
     check_line_budget(text)
     return text, enc
 
@@ -506,12 +529,18 @@ class HhcFilter(Filter):
     kind = "Contents"
 
     def parse(
-        self, data: bytes, provider: str | None = None, *, hhp_code_page: int | None = None
+        self,
+        data: bytes,
+        provider: str | None = None,
+        *,
+        hhp_code_page: int | None = None,
+        hh_decode: int = HH_DECODE_VERSION,
     ) -> ParseResult:
         """`hhp_code_page`: the ANSI code page of the help project's language (.hhp
         Language=), used when the file declares none (decision 21); stamped on the
         skeleton when it decided the decode, so every export reads the file the same way."""
-        text, enc = _load(data, capped=True, hint_cp=hhp_code_page)
+        version = decode_version(hh_decode)
+        text, enc = _load(data, capped=True, hint_cp=hhp_code_page, version=version)
         spans, _see, _fonts = _walk_sitemap(text)
         texts = [s.text for s in spans]
         check_unit_texts(texts)
@@ -529,10 +558,20 @@ class HhcFilter(Filter):
             note_source_encoding(skeleton, enc.codec)
         if enc.ansi and hhp_code_page is not None and enc.codec == _hint_codec(hhp_code_page):
             skeleton["hhp_code_page"] = hhp_code_page
+        if version >= 2:
+            skeleton[HH_DECODE_KEY] = version
         return ParseResult(skeleton=skeleton, units=units)
 
-    def _rebuild(self, original, paragraph_texts, target_locale, localized, hint_cp=None):
-        text, enc = _load(original, capped=False, hint_cp=hint_cp)
+    def _rebuild(
+        self,
+        original,
+        paragraph_texts,
+        target_locale,
+        localized,
+        hint_cp=None,
+        version=HH_DECODE_VERSION,
+    ):
+        text, enc = _load(original, capped=False, hint_cp=hint_cp, version=decode_version(version))
         spans, see_also, fonts = _walk_sitemap(text)
         edits, renamed = [], {}
         agreed = None
@@ -572,9 +611,14 @@ class HhcFilter(Filter):
         )
 
     def build(
-        self, original: bytes, paragraph_texts: dict, *, hhp_code_page: int | None = None
+        self,
+        original: bytes,
+        paragraph_texts: dict,
+        *,
+        hhp_code_page: int | None = None,
+        hh_decode: int = HH_DECODE_VERSION,
     ) -> bytes:
-        return self._rebuild(original, paragraph_texts, None, False, hhp_code_page)
+        return self._rebuild(original, paragraph_texts, None, False, hhp_code_page, hh_decode)
 
     def build_localized(
         self,
@@ -583,10 +627,15 @@ class HhcFilter(Filter):
         target_locale: str | None = None,
         *,
         hhp_code_page: int | None = None,
+        hh_decode: int = HH_DECODE_VERSION,
     ) -> bytes:
         if not target_locale:
-            return self.build(original, paragraph_texts, hhp_code_page=hhp_code_page)
-        return self._rebuild(original, paragraph_texts, target_locale, True, hhp_code_page)
+            return self.build(
+                original, paragraph_texts, hhp_code_page=hhp_code_page, hh_decode=hh_decode
+            )
+        return self._rebuild(
+            original, paragraph_texts, target_locale, True, hhp_code_page, hh_decode
+        )
 
 
 @register
@@ -641,12 +690,23 @@ def _walk_hhp(text: str):
     return units, lang
 
 
-def hhp_code_page(data: bytes) -> int | None:
+def hhp_code_page(data: bytes, version: int = HH_DECODE_VERSION) -> int | None:
     """The ANSI code page of an HTML Help project's language: `Language=0x419 Russian` in
     [OPTIONS] -> 1251 (decision 21). None when the file names no language, names one with
-    no ANSI code page we know, or cannot be read."""
+    no ANSI code page we know, or cannot be read. `version`: the decode version of the
+    document the hint is for (a repair of an unstamped .hhc/.hhk gets the pre-fix answer)."""
+    version = decode_version(version)
     try:
-        text, _enc = _load(data, capped=True)
+        text, _enc = _load(data, capped=True, version=version)
+    except UnsupportedEncodingError:
+        if version < 2:
+            return None
+        # A project in a code page the default decode cannot read (a localized Shift_JIS or
+        # Korean project) still has an ASCII Language= line: read it from the raw bytes (#797).
+        text = bytes(data).decode("latin-1")
+    except ValueError:  # a size or line limit
+        return None
+    try:
         _units, lang = _walk_hhp(text)
     except (ValueError, InputLimitError):
         return None
@@ -661,6 +721,11 @@ def hhp_code_page(data: bytes) -> int | None:
     return target_code_page(posix) if posix else None
 
 
+def _own_code_page(data: bytes, version: int) -> int | None:
+    """Decode version 2 (#797): the project file's own Language= code page; version 1 had none."""
+    return hhp_code_page(data) if version >= 2 else None
+
+
 def _hhp_value(new: str, kind: str) -> str:
     new = new.replace("\r", " ").replace("\n", " ").strip()
     return new.replace('"', "'") if kind == "w" else new
@@ -672,8 +737,12 @@ class HhpFilter(Filter):
 
     fmt = "hhp"
 
-    def parse(self, data: bytes, provider: str | None = None) -> ParseResult:
-        text, enc = _load(data, capped=True)
+    def parse(
+        self, data: bytes, provider: str | None = None, *, hh_decode: int = HH_DECODE_VERSION
+    ) -> ParseResult:
+        version = decode_version(hh_decode)
+        # #797: an undeclared non-UTF-8 project is read in the code page of its own Language=
+        text, enc = _load(data, capped=True, hint_cp=_own_code_page(data, version), version=version)
         spans, _lang = _walk_hhp(text)
         texts = [s.text for s in spans]
         check_unit_texts(texts)
@@ -688,10 +757,17 @@ class HhpFilter(Filter):
         }
         if enc.codec != "utf-8":
             note_source_encoding(skeleton, enc.codec)
+        if version >= 2:
+            skeleton[HH_DECODE_KEY] = version
         return ParseResult(skeleton=skeleton, units=units)
 
-    def _rebuild(self, original, paragraph_texts, target_locale, localized):
-        text, enc = _load(original, capped=False)
+    def _rebuild(
+        self, original, paragraph_texts, target_locale, localized, version=HH_DECODE_VERSION
+    ):
+        version = decode_version(version)
+        text, enc = _load(
+            original, capped=False, hint_cp=_own_code_page(original, version), version=version
+        )
         spans, lang = _walk_hhp(text)
         edits = []
         for i, sp in enumerate(spans):
@@ -710,15 +786,22 @@ class HhpFilter(Filter):
             return bytes(original)
         return _finish(text, enc, edits, target_locale, localized, lambda cp: [])
 
-    def build(self, original: bytes, paragraph_texts: dict) -> bytes:
-        return self._rebuild(original, paragraph_texts, None, False)
+    def build(
+        self, original: bytes, paragraph_texts: dict, *, hh_decode: int = HH_DECODE_VERSION
+    ) -> bytes:
+        return self._rebuild(original, paragraph_texts, None, False, hh_decode)
 
     def build_localized(
-        self, original: bytes, paragraph_texts: dict, target_locale: str | None = None
+        self,
+        original: bytes,
+        paragraph_texts: dict,
+        target_locale: str | None = None,
+        *,
+        hh_decode: int = HH_DECODE_VERSION,
     ) -> bytes:
         if not target_locale:
-            return self.build(original, paragraph_texts)
-        return self._rebuild(original, paragraph_texts, target_locale, True)
+            return self.build(original, paragraph_texts, hh_decode=hh_decode)
+        return self._rebuild(original, paragraph_texts, target_locale, True, hh_decode)
 
 
 # Reference codecs so an unknown-name refactor fails at import, not at the first export.

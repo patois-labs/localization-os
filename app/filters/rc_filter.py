@@ -58,6 +58,7 @@ from app.filters.base import (
     note_source_encoding,
     register,
 )
+from app.filters.token_lit import code_tokens
 from app.services.segment import _PLACEHOLDER_RE, is_point_kind, ph_free, ph_point
 
 # ---------------------------------------------------------------------------- encoding
@@ -312,7 +313,8 @@ def _literal_pieces(lit: str) -> tuple[list[tuple[str, str]], bool]:
                     i += len(raw)
                     continue
         elif d in "01234567":
-            m = re.match(r"[0-7]{1,3}", body[i + 1 :])
+            # rc.exe reads up to 3 octal digits in a narrow string and up to 7 in a wide one (#791)
+            m = re.match(r"[0-7]{1,7}" if wide else r"[0-7]{1,3}", body[i + 1 :])
             raw = body[i : i + 1 + m.end()]
         else:
             raw = body[i : i + 2]
@@ -372,19 +374,73 @@ def _escape_text(s: str, wide: bool) -> str:
     return "".join(out)
 
 
+def _max_digits(wide: bool, hexa: bool) -> int:
+    """The most digits rc.exe reads in a hex escape (2, wide 4) or an octal one (3, wide 7)."""
+    if hexa:
+        return 4 if wide else 2
+    return 7 if wide else 3
+
+
+def _pad_escape(code: str, nxt: str, wide: bool) -> str:
+    """#791: a short numeric escape (hex or octal) followed by a character that would read
+    as one more digit
+    gets leading zeros: the same character, and the next one cannot join it."""
+    if len(code) < 2 or code[0] != "\\":
+        return code
+    if code[1] in "xX":
+        digits, head, hexa = code[2:], code[:2], True
+        ok = all(c in "0123456789abcdefABCDEF" for c in digits)
+        joins = nxt in "0123456789abcdefABCDEF"
+    else:
+        digits, head, hexa = code[1:], code[:1], False
+        ok = all(c in "01234567" for c in digits)
+        joins = nxt in "01234567"
+    mx = _max_digits(wide, hexa)
+    if not ok or not joins or len(digits) >= mx:
+        return code
+    return head + "0" * (mx - len(digits)) + digits
+
+
 def _render_literal(text: str, imap: dict, wide: bool) -> str:
     out, pos = [], 0
-    for m in _PLACEHOLDER_RE.finditer(text):
-        out.append(_escape_text(text[pos : m.start()], wide))
+    last = -1  # index in `out` of the escape just written, while nothing follows it
+
+    def text_out(seg: str) -> None:
+        nonlocal last
+        if not seg:
+            return
+        if last >= 0:
+            out[last] = _pad_escape(out[last], seg[0], wide)
+            last = -1
+        out.append(_escape_text(seg, wide))
+
+    for m in code_tokens(text, imap):  # #814.1: a token naming no code of the unit is text
+        text_out(text[pos : m.start()])
         pos = m.end()
         inner = m.group(0)[1:-1]
         if is_point_kind(inner[:1]):
             info = imap.get(inner[1:])
             if info:
                 out.append(info["point"])
-        # unknown or paired tokens are dropped (same tolerance as html/docx/xliff)
-    out.append(_escape_text(text[pos:], wide))
+                last = len(out) - 1
+        # a paired token for a point code is dropped
+    text_out(text[pos:])
     return ('L"' if wide else '"') + "".join(out) + '"'
+
+
+def _check_rendered(unit_no: int, new: str, lit: str) -> None:
+    """#791: translated letters that a printf placeholder (`%E`, `%d`) swallows would leave
+    the literal with no
+    text, and the unit would vanish on the next import. Refuse that build."""
+    if not any(ch.isalnum() for ch in _PLACEHOLDER_RE.sub("", new)):
+        return
+    pieces, _ = _literal_pieces(lit)
+    if not any(k == "t" and any(ch.isalnum() for ch in v) for k, v in pieces):
+        raise InputLimitError(
+            f"String {unit_no + 1}: every letter of the translation would be read as a format "
+            "placeholder (a % right before a letter, such as %E or %d), so the string would be "
+            "lost on the next import. Put a space after the % or rephrase."
+        )
 
 
 # ---------------------------------------------------------------------------- accelerators
@@ -762,7 +818,9 @@ class RcFilter(Filter):
                 continue
             if u["style"] in ("rc:menu", "rc:control"):
                 new = _fix_accelerator(u["text"], new, u["map"])
-            edits.append((u["start"], u["end"], _render_literal(new, u["map"], u["wide"])))
+            lit = _render_literal(new, u["map"], u["wide"])
+            _check_rendered(i, new, lit)
+            edits.append((u["start"], u["end"], lit))
         if target_locale is not None:
             edits += _stamp_edits(script, text, target_locale)  # never overlaps a literal
         if not edits:
