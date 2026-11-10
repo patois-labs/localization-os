@@ -10,4 +10,4 @@
 #
 # The container image (Dockerfile) bundles this so the documented container/
 # enterprise Postgres profile keeps working out of the box.
-psycopg[binary]==3.3.6    # psycopg3 driver for postgresql+psycopg://
+psycopg[binary]==3.3.8    # psycopg3 driver for postgresql+psycopg://
