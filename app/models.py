@@ -1831,6 +1831,14 @@ class WorkflowStep(SQLModel, table=True):
     # `_ADDED_COLUMNS` shim (a new COLUMN on an EXISTING table, which create_all()
     # would never add to a live SQLite file).
     memory_mode: str | None = Field(default=None)
+    # --- add-on step fields (the code is not part of this edition) ---------------
+    # doc_agent_mode: "" (off, the default and every legacy row) or a mode an add-on reads
+    # on an llm_agent step; doc_agent_chunk: segments per call, 2..40, NULL = 10. The
+    # columns stay in the core schema so a database moves between editions unchanged; this
+    # edition never sets them and runs every step per segment. Mirrors the app/db.py shim +
+    # alembic a6d2e9b4c1f7.
+    doc_agent_mode: str = ""
+    doc_agent_chunk: int | None = Field(default=None)
     # --- parallel step routing (SPEC-parallel-routing §5.6, Phase 1) -----------
     # An ANNOTATION over the order_index spine, NOT a DAG edge. Steps that are
     # CONSECUTIVE in order_index and share a non-NULL `parallel_group` slug form a

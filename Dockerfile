@@ -21,8 +21,8 @@
 #   .venv\Scripts\python.exe scripts\pin_base_images.py --check  (exit 1 while unpinned)
 # See docs/DEPLOY.md, "Base image pins". tests/verify_docker_image.py holds the shape.
 # ---------------------------------------------------------------------------
-ARG PYTHON_BASE=python:3.13-slim@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962
-ARG TAILSCALE_BASE=tailscale/tailscale:v1.104.2@sha256:b11583ad2e93e4671128538c88cf11f460444a5d7e449311dd1933a400ab849d
+ARG PYTHON_BASE=python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
+ARG TAILSCALE_BASE=tailscale/tailscale:v1.104.7@sha256:72c1e19e0aedca96b8533bbb0b4368564410ff20b17e53b804eb6c1f04a31be4
 ARG RUST_BASE=rust:1.94.1-slim-trixie@sha256:cf09adf8c3ebaba10779e5c23ff7fe4df4cccdab8a91f199b0c142c53fef3e1a
 
 # ---------------------------------------------------------------------------
@@ -164,7 +164,7 @@ RUN if [ "$WITH_NATIVE" = 1 ]; then \
 # ---------------------------------------------------------------------------
 # Bilingua (ADR 0111): the Rust parsing engine behind the per-format setting `bilingua_formats`
 # (default `all` since 2026-11-09). The normal image gets it from requirements.lock: the
-# published bilingua==0.9.1 manylinux x86_64 wheel, hash-pinned like every other package, so
+# published bilingua==0.10.0 manylinux x86_64 wheel, hash-pinned like every other package, so
 # nothing here is needed. This stage is the from-source alternative: with WITH_BILINGUA=0 (the
 # default) it only makes an empty /out. With WITH_BILINGUA=1 it builds the `bilingua` abi3 wheel
 # (one wheel for Python 3.11+) from SOURCE, unpacks it into /out/site (over the locked wheel) and
@@ -173,7 +173,7 @@ RUN if [ "$WITH_NATIVE" = 1 ]; then \
 # The source comes from exactly ONE of (both set, or neither, fails the build):
 #   A. a build context:  docker build --build-arg WITH_BILINGUA=1 --build-context bilingua-src=../bilingua .
 #      (the folder holds the workspace Cargo.toml and Cargo.lock)
-#   B. a pinned tarball: --build-arg BILINGUA_SRC_URL=https://github.com/patois-labs/bilingua/archive/refs/tags/v0.9.1.tar.gz
+#   B. a pinned tarball: --build-arg BILINGUA_SRC_URL=https://github.com/patois-labs/bilingua/archive/refs/tags/v0.10.0.tar.gz
 #                        --build-arg BILINGUA_SRC_SHA256=<64 hex>   (checked before unpacking)
 # BILINGUA_MANIFEST is the path of the bilingua-py Cargo.toml inside that source. maturin is
 # installed from its own hash lock, scripts/locks/requirements-maturin.lock (no other build reads it).
@@ -257,6 +257,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000
 
 # libpq5 is the only runtime shared lib psycopg needs (the binary wheel links it).
+# zlib1g is in the base already; naming it takes the trixie-security update when the pinned
+# base predates it (CVE-2026-85091, 2026-11-22 image scan).
 # curl is used by the HEALTHCHECK below. fonts-noto-core + fonts-noto-cjk give the typst
 # PDF writer (app/filters/pdf_filter.py) real glyph coverage for EVERY default locale:
 # Noto core covers Latin/Cyrillic/Greek/Arabic/Hebrew/Devanagari/Bengali/Thai and Noto
@@ -267,7 +269,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 ARG APT_UPGRADE=0
 RUN apt-get update \
     && if [ "$APT_UPGRADE" = 1 ]; then DEBIAN_FRONTEND=noninteractive apt-get upgrade -y; fi \
-    && apt-get install -y --no-install-recommends libpq5 postgresql-client curl fonts-noto-core fonts-noto-cjk \
+    && apt-get install -y --no-install-recommends libpq5 postgresql-client curl fonts-noto-core fonts-noto-cjk zlib1g \
     && rm -rf /var/lib/apt/lists/*
 
 # SAML only (WITH_SAML=1, see the builder stage): the xmlsec1 OpenSSL crypto backend the

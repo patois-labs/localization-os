@@ -37,19 +37,33 @@ switched back.
 Bilingua handles every format by default.
 - `bilingua_formats` defaults to `all`: every format in `bilingua_adapter._FORMATS` (85 at the time), so a format
   the adapter learns later is on too. `all` stands alone in the list. Empty is the kill switch.
-- The wheel comes from PyPI: `bilingua==0.9.1` in requirements.txt and hash-pinned in requirements.lock, with the
-  marker `platform_machine == "x86_64" or platform_machine == "AMD64"` because only those wheels are published.
-  Elsewhere the package is skipped and every format stays on its Python filter (`available()` is False). The
-  Dockerfile's source stage stays as the from-source alternative.
+- The wheel comes from PyPI: `bilingua` in requirements.txt and hash-pinned in requirements.lock (the two wheel
+  hashes, never the sdist), with the marker
+  `(sys_platform == "linux" and platform_machine == "x86_64") or (sys_platform == "win32" and platform_machine == "AMD64")`
+  because only the x86_64 Linux (glibc 2.28 or newer) and Windows x64 wheels are published. Elsewhere (for example
+  Intel or Apple silicon macOS, aarch64 Linux) the package is skipped and every format stays on its Python filter
+  (`available()` is False). The Dockerfile's source stage stays as the from-source alternative.
 - The Python filters stay: they read every document imported before the switch and run on machines without the
   wheel. Suites that test their machinery build their documents with the switch off
   (`tests._bootstrap.bilingua_switch_off`).
+
+## Amendment 2026-11-22: wheel 0.10.0
+
+Localization OS 1.3.0 pins `bilingua==0.10.0` (the two PyPI wheels, hash-pinned). Under the `locos` profile 0.10.0
+keeps profile version 1 and every skeleton schema. A comparison of stored documents (0.9.1 against 0.10.0, about
+1,700 real-world files plus the test fixtures) found two files whose units differ: an HTML `<title>` holding `<BR>`
+is now read as text, and a very large .eml is now refused by the input limits. A stored 0.9.1 document like the
+first asks for a re-import at export (so do rare inputs the comparison did not meet: a title or textarea holding
+markup, an XLSX repeated cell reference, a second byte order mark, a beta-namespace XLSX root); one like the second
+is refused by the limits at export as at upload. HTML `<title>` and `<textarea>` text is now written as typed, so a
+translation holding `&`, `<` or `>` there exports differently. Every later wheel bump runs the same comparison first.
 
 ## Consequences
 
 - A document imported before the switch keeps its Python filter; only new imports use Bilingua.
 - A Bilingua release must never move the units of a stored document under the same profile version.
-- On a machine with no wheel (any architecture other than x86_64 and AMD64) the setting changes nothing.
+- On a machine with no wheel (anything but x86_64 Linux with glibc 2.28 or newer and Windows x64) the setting
+  changes nothing.
 - The from-source wheel build needs cargo and network access to crates.io during `docker build` (like `native`).
   maturin has its own lock, so no other build carries it. The build-context source is trusted as the operator
   gives it; the tarball path is checksum-pinned.

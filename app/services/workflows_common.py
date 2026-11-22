@@ -169,6 +169,8 @@ _EDIT_FIELDS = (
     "tm_protect",
     "over_translation_guard",
     "memory_mode",
+    "doc_agent_mode",
+    "doc_agent_chunk",
     "tm_lock_ice",
     "tm_hundreds_enter_lqa",
     "tm_pool_selection",
@@ -325,6 +327,9 @@ def clone_workflow(session: Session, workflow_id: int, bound_customer_id=None) -
                 # tristate is step config like tm_protect and must survive a deep copy too
                 # -- without this a cloned "off" step would silently flip back to "auto".
                 memory_mode=getattr(st, "memory_mode", None),
+                # Add-on step fields (inert in this edition): survive a deep copy unchanged.
+                doc_agent_mode=getattr(st, "doc_agent_mode", ""),
+                doc_agent_chunk=getattr(st, "doc_agent_chunk", None),
                 # Batch 15 T1 (SPEC-tm-match-step-config §7.3): the tm_match config
                 # overrides are step config like tm_protect and must survive a deep copy
                 # (a cloned tm_match step keeps its lock overrides/pool selection).

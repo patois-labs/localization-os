@@ -269,7 +269,7 @@ def setup_ai_save(
 
 
 def _bilingua_module_label() -> str:
-    """The engine's label ("bilingua 0.9.1") when it is importable and usable here, "" when not
+    """The engine's label ("bilingua 0.10.0") when it is importable and usable here, "" when not
     (the settings page then says every format uses the built-in filters). Never raises."""
     try:
         from app.filters import bilingua_adapter

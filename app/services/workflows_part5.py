@@ -36,7 +36,14 @@ from app.services.workflows_common import (
     _rc_ref_of,
     _step_attr,
 )
-from app.services.workflows_common_leaf import _require_whole_number, reject_removed_tm_params
+from app.services.workflows_common_leaf import (
+    _coerce_doc_agent_chunk,
+    _coerce_doc_agent_mode,
+    _require_doc_agent_engine,
+    _require_doc_agent_settable,
+    _require_whole_number,
+    reject_removed_tm_params,
+)
 from app.services.workflows_part2 import (
     _coerce_tm_tristate_bool,
     _coerce_wait_hours,
@@ -201,6 +208,8 @@ def add_step(
     tm_protect=None,
     over_translation_guard=None,
     memory_mode=None,
+    doc_agent_mode="",
+    doc_agent_chunk=None,
     tm_fill_threshold=None,  # removed (ADR 0102): only None / 100 accepted
     tm_fuzzy_lock_mode=None,  # removed (ADR 0102): any value is refused
     tm_lock_ice=None,
@@ -285,6 +294,10 @@ def add_step(
         qe_autofix_max_rounds, "QE auto-fix max rounds", 1, 5, 3
     )
     parallel_group = validate_parallel_group(parallel_group)
+    # Add-on step fields: normalise (a bad value is refused), then the
+    # add-on switch and the engine check run AFTER the dead-field refusal below.
+    doc_agent_mode = _coerce_doc_agent_mode(doc_agent_mode)
+    doc_agent_chunk = _coerce_doc_agent_chunk(doc_agent_chunk)
     refuse_dead_fields(
         step_type,
         {
@@ -316,6 +329,8 @@ def add_step(
             # refusal). Same tristate coercion as tm_protect.
             "over_translation_guard": _coerce_tm_protect(over_translation_guard),
             "memory_mode": _coerce_memory_mode(memory_mode),
+            "doc_agent_mode": doc_agent_mode,
+            "doc_agent_chunk": doc_agent_chunk,
             # External/vendor dispatch (Wave A): refused on any non-external step.
             "vendor_id": _coerce_vendor_id(vendor_id),
             "external_wait_hours": _coerce_wait_hours(external_wait_hours),
@@ -337,6 +352,8 @@ def add_step(
         qe_autofix_provider=qe_autofix_provider,
     )
     _assert_autofix_fixer(qe_autofix, qe_autofix_provider, provider)
+    _require_doc_agent_settable(doc_agent_mode)
+    _require_doc_agent_engine(doc_agent_mode, provider)
     # External step: the vendor is REQUIRED and validated here (selectable + linked to the
     # workflow's customer when it is customer-scoped) so a broken external step can never
     # be saved; the run-time branch is the ultimate fail-closed gate (vendor_for_customer).
@@ -531,6 +548,8 @@ def add_step(
         # recall override. None/"auto" = participate normally (byte-identical to
         # pre-LLMemory on any step); "off" = never inject a memory block here.
         memory_mode=_coerce_memory_mode(memory_mode),
+        doc_agent_mode=doc_agent_mode,
+        doc_agent_chunk=doc_agent_chunk,
         # Batch 15 T1 (SPEC-tm-match-step-config §5.1/§8.A): the six tm_match config
         # overrides. On a tm_match step the five scalars are seeded from the current
         # globals when NULL (a concrete snapshot); pool selection defaults NULL (all
@@ -980,6 +999,8 @@ def copy_to_pairs(
                     # LLMemory step-level opt-out (PROPOSAL-llmemory §6): full step-config
                     # fidelity for ALL callers (same copy-site footgun as tm_protect).
                     memory_mode=getattr(st, "memory_mode", None),
+                    doc_agent_mode=getattr(st, "doc_agent_mode", ""),
+                    doc_agent_chunk=getattr(st, "doc_agent_chunk", None),
                     # Batch 15 T1 (SPEC-tm-match-step-config §7.3): the six tm_match config
                     # overrides clone onto every pair variant too (full fidelity). Pool refs
                     # copy verbatim; run-time validation fails stale/cross-project refs

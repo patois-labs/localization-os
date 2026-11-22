@@ -8,10 +8,16 @@ its Python filters unchanged. Documents that Bilingua imported need the module t
 
 ## 1. Where the wheel comes from
 
-`requirements.txt` pins `bilingua==0.9.1` and `requirements.lock` hash-pins it, both with the marker
-`platform_machine == "x86_64" or platform_machine == "AMD64"`. The published wheels are manylinux 2_28 x86_64 and
-Windows x64. So `pip install -r requirements.lock` installs it on those machines and skips it on any other (for
-example aarch64 Linux or Apple silicon), where every format stays on its Python filter.
+`requirements.txt` pins `bilingua==0.10.0` and `requirements.lock` hash-pins its two wheels (never the sdist),
+both with the marker
+`(sys_platform == "linux" and platform_machine == "x86_64") or (sys_platform == "win32" and platform_machine == "AMD64")`.
+The published wheels are manylinux 2_28 x86_64 (glibc 2.28 or newer) and Windows x64. So
+`pip install -r requirements.lock` installs it on those machines and skips it on any other (for example macOS or
+aarch64 Linux), where every format stays on its Python filter.
+
+To move to a newer wheel: change both lines (version and the two wheel hashes from PyPI), run the test suites with
+the new wheel installed, and compare stored documents parsed by the old and new wheel on your own files before you
+deploy (a wheel must not move the units of a stored document under the same profile version, ADR 0111).
 
 Check an install: `python -c "import bilingua; print(bilingua.__version__)"`. In the app, the Settings page (File parsing card) shows
 whether the module is installed.
@@ -37,7 +43,7 @@ B. A pinned tarball:
 
    ```
    docker build --build-arg WITH_BILINGUA=1 \
-       --build-arg BILINGUA_SRC_URL=https://github.com/patois-labs/bilingua/archive/refs/tags/v0.9.1.tar.gz \
+       --build-arg BILINGUA_SRC_URL=https://github.com/patois-labs/bilingua/archive/refs/tags/v0.10.0.tar.gz \
        --build-arg BILINGUA_SRC_SHA256=<64 hex of that tarball> ...
    ```
 

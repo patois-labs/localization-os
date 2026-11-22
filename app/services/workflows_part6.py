@@ -33,6 +33,10 @@ from app.services.workflows_common import (
 )
 from app.services.workflows_common_leaf import (
     _REMOVED_TM_PARAMS,
+    _coerce_doc_agent_chunk,
+    _coerce_doc_agent_mode,
+    _require_doc_agent_engine,
+    _require_doc_agent_settable,
     _require_whole_number,
     reject_removed_tm_params,
 )
@@ -482,6 +486,13 @@ def update_step(
             supplied["tm_pool_selection"]
         )
 
+    # Add-on step fields: normalise (a bad value is refused) before
+    # any read below; the add-on switch + engine checks run after the dead-field guard.
+    if "doc_agent_mode" in supplied:
+        supplied["doc_agent_mode"] = _coerce_doc_agent_mode(supplied["doc_agent_mode"])
+    if "doc_agent_chunk" in supplied:
+        supplied["doc_agent_chunk"] = _coerce_doc_agent_chunk(supplied["doc_agent_chunk"])
+
     def _cur(name):
         return supplied[name] if name in supplied else getattr(step, name)
 
@@ -662,6 +673,8 @@ def update_step(
                 _dead_candidates[_f] = _coerce_tm_protect(_cur(_f))
             elif _f == "memory_mode":
                 _dead_candidates[_f] = _coerce_memory_mode(_cur("memory_mode"))
+            elif _f in ("doc_agent_mode", "doc_agent_chunk"):
+                _dead_candidates[_f] = _cur(_f)
             elif _f == "parallel_group":
                 # Already slugified above; the refusal compares against the STORED
                 # value, so a step that legitimately kept a legacy slug is untouched.
@@ -729,6 +742,23 @@ def update_step(
             _autofix_provider_edit(_cur("qe_autofix_provider"))
             if "qe_autofix_provider" in supplied
             else step.qe_autofix_provider,
+            _resolve_provider_edit(step.provider, _cur("provider"))
+            if "provider" in supplied
+            else step.provider,
+        )
+
+    # Add-on step fields: on an llm_agent step, SETTING a (different)
+    # mode needs the install switch on, and the mode needs an engine that can serve it.
+    if cand_step_type == StepType.LLM_AGENT and {
+        "doc_agent_mode",
+        "provider",
+        "step_type",
+    } & set(supplied):
+        _cand_da_mode = _cur("doc_agent_mode") or ""
+        if "doc_agent_mode" in supplied:
+            _require_doc_agent_settable(_cand_da_mode, step.doc_agent_mode)
+        _require_doc_agent_engine(
+            _cand_da_mode,
             _resolve_provider_edit(step.provider, _cur("provider"))
             if "provider" in supplied
             else step.provider,
@@ -812,6 +842,10 @@ def update_step(
         step.over_translation_guard = _coerce_tm_protect(_cur("over_translation_guard"))
     if "memory_mode" in supplied:
         step.memory_mode = _coerce_memory_mode(_cur("memory_mode"))
+    if "doc_agent_mode" in supplied:
+        step.doc_agent_mode = _cur("doc_agent_mode") or ""
+    if "doc_agent_chunk" in supplied:
+        step.doc_agent_chunk = _cur("doc_agent_chunk")
     # Batch 15 T1 (SPEC-tm-match-step-config §8.A): each supplied tm_match config field is
     # coerced to its nullable form (an explicit None/blank clears the override back to
     # inherit); a set on a non-tm_match step was refused above, a type switch off tm_match

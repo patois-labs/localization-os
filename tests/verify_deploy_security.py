@@ -361,11 +361,13 @@ def snapshot_stub():
     if jmespath is not None:
         result = jmespath.search(query, {"Snapshots": rows})
     else:
-        # Only the two CLI query shapes used here. A changed query must be covered
+        # Only the three CLI query shapes used here. A changed query must be covered
         # explicitly; installed jmespath and the dry-run pins validate real syntax.
         rows = sorted(rows, key=lambda row: row["StartTime"])
         if query == "sort_by(Snapshots,&StartTime)[].[SnapshotId,StartTime]":
             result = [[row["SnapshotId"], row["StartTime"]] for row in rows]
+        elif query == "sort_by(Snapshots,&StartTime)[].[StartTime,Description]":
+            result = [[row["StartTime"], row.get("Description") or ""] for row in rows]
         else:
             assert query == "sort_by(Snapshots,&StartTime)[-1].StartTime", query
             result = rows[-1]["StartTime"] if rows else None

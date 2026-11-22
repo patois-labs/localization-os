@@ -210,6 +210,8 @@ def _fully_populated_kwargs(template_id: int, glossary_id: int, vendor_id: int) 
         "branch": {"on_pass": "next", "on_fail": "end"},
         "max_visits": 3,
         "memory_mode": "off",
+        "doc_agent_mode": "conversation",
+        "doc_agent_chunk": 7,
         # SPEC-parallel-routing §5.6: the column this suite's header predicted. A
         # distinctive slug so a copy site that forgets it fails loudly here rather
         # than silently flattening a cloned workflow's parallel lanes.

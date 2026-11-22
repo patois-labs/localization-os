@@ -34,7 +34,7 @@ start command. No image may serve before this gate passes.
 `docker-compose.yml` passes `RELEASE`/`RELEASE_COMMIT` through to the image as
 build args (`args: RELEASE: ${RELEASE:-}` / `RELEASE_COMMIT: ${RELEASE_COMMIT:-}`).
 Skip the two `export` lines and the build still succeeds, but with both unset the
-image falls back to the `version` in `pyproject.toml` (for example `1.2.0`), so
+image falls back to the `version` in `pyproject.toml` (for example `1.3.0`), so
 `/health` and `python -m app.cli version` report the wrong release.
 
 On first boot the login wall is ON and **no accounts exist yet** - your first
@@ -141,7 +141,7 @@ The Compose image scan gate applies the same way.
 ### Base image pins
 
 The three base images (`python:3.13-slim` for every Python stage,
-`tailscale/tailscale:v1.104.2`, and `rust:1.94.1-slim-trixie`, whose toolchain the
+`tailscale/tailscale:v1.104.7`, and `rust:1.94.1-slim-trixie`, whose toolchain the
 native stage copies to build the optional `locos_native` module, ADR 0091) come from
 the `PYTHON_BASE`, `TAILSCALE_BASE` and `RUST_BASE` arguments at the top of the
 `Dockerfile`. A pinned value reads
@@ -220,9 +220,9 @@ the newest pip still vendors msgpack, urllib3 and setuptools versions the image 
 
 ```text
 python:3.13-slim
-sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962
-tailscale/tailscale:v1.104.2
-sha256:b11583ad2e93e4671128538c88cf11f460444a5d7e449311dd1933a400ab849d
+sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
+tailscale/tailscale:v1.104.7
+sha256:72c1e19e0aedca96b8533bbb0b4368564410ff20b17e53b804eb6c1f04a31be4
 caddy:2
 sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52
 postgres:16
@@ -284,6 +284,11 @@ The same release re-pins the bases (`scripts/pin_base_images.py`): Python slim t
 Vendor Studio Dockerfile) and tailscale v1.102.5 to v1.104.2 (Go 1.27.3: the stdlib and golang.org/x fixes behind
 CVE-2026-56854 and the other HIGH findings accepted for earlier images). Build without a stale layer cache: a cached
 apt layer kept libbrotli1 1.1.0-2+b7 although trixie-security has 1.1.0-2+deb13u1.
+The 1.3.0 release (2026-11-22) re-pins Python slim to the 2026-11-22 digest (also Vendor Studio), tailscale v1.104.2
+to v1.104.7 (the newest stable; golang.org/x/net fixes) and pyasn1 0.6.4 to 0.6.5, and names zlib1g in the runtime
+apt line so its trixie-security update lands, because the image scan failed on fixable apt, zlib1g, libpq5 /
+postgresql-client 17.11, pyasn1 and x/net findings. An image scan of that Dockerfile still flags CVE-2026-78661 in the
+golang.org/x/net copy inside the tailscale binaries; it applies only when Tailscale is turned on with an auth key.
 
 The Docker builder installs `requirements.lock` plus `requirements-postgres.lock`
 with `--no-deps`. It does not resolve new transitive versions during a rebuild.

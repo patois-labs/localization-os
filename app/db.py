@@ -852,6 +852,11 @@ _ADDED_COLUMNS = {
         # correction-loop fixer) eligible. Mirrors the model + the alembic
         # revision f2a9c4d81b73 (nullability-parity CI guard).
         ("memory_mode", "VARCHAR"),
+        # Step fields of an add-on that is not part of this edition: "" = off on every legacy
+        # row; chunk NULL = 10. Mirrors the model + alembic revision a6d2e9b4c1f7
+        # (nullability-parity CI guard).
+        ("doc_agent_mode", "VARCHAR NOT NULL DEFAULT ''"),
+        ("doc_agent_chunk", "INTEGER"),
         # Parallel step routing (SPEC-parallel-routing §5.6, Phase 1).
         # NULLABLE, no default: NULL on every legacy row = "not in a
         # parallel group", so a pre-parallel install is byte-identical

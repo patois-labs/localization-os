@@ -3,7 +3,7 @@
 The Dockerfile takes every base image from three ARGs declared above the first FROM:
 
     ARG PYTHON_BASE=python:3.13-slim               (builder, native AND runtime stages)
-    ARG TAILSCALE_BASE=tailscale/tailscale:v1.104.2  (the tailscale binaries stage)
+    ARG TAILSCALE_BASE=tailscale/tailscale:v1.104.7  (the tailscale binaries stage)
     ARG RUST_BASE=rust:1.94.1-slim-trixie          (the Rust toolchain the native stage copies)
 
 A pinned value is ``<name>:<tag>@sha256:<64 hex>``. Docker then pulls exactly that image

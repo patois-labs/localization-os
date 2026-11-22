@@ -70,6 +70,128 @@ def _coerce_glossary_cap(v, default: int) -> int:
     return n if n >= 0 else default
 
 
+# --- add-on step fields (doc_agent_mode / doc_agent_chunk) ---------------------------------
+# The columns are core schema; the code that reads them is an add-on that is not part of this
+# edition. These helpers keep a step save honest: a bad value is refused, and setting a mode
+# is refused while the add-on is not installed.
+DOC_AGENT_MODES = ("", "decision_log", "conversation")
+DOC_AGENT_MIN_CHUNK, DOC_AGENT_MAX_CHUNK, DOC_AGENT_DEFAULT_CHUNK = 2, 40, 10
+DOC_AGENT_OFF_MESSAGE = "This step setting needs an add-on that is switched off on this install."
+_DOC_AGENT_MODE_ALIASES = {
+    "off": "",
+    "none": "",
+    "log": "decision_log",
+    "decision-log": "decision_log",
+    "chat": "conversation",
+}
+# Built-in providers that speak a chat wire format (a running conversation needs one).
+_DOC_AGENT_CHAT_BUILTINS = frozenset({"claude", "gemini", "openai", "local", "mock"})
+_DOC_AGENT_CHAT_KINDS = frozenset({"local", "openai_compatible"})
+
+
+def _coerce_doc_agent_mode(v) -> str:
+    """Normalise a caller-supplied doc_agent_mode to "" | "decision_log" | "conversation".
+    None/blank/off -> "". Anything unrecognised is REFUSED (never guessed)."""
+    if v is None or isinstance(v, bool):
+        return ""
+    s = str(v).strip().lower().replace(" ", "_")
+    s = _DOC_AGENT_MODE_ALIASES.get(s, s)
+    if s not in DOC_AGENT_MODES:
+        raise WorkflowError(
+            f"unknown doc_agent_mode {v!r} (choose from: off, decision_log, conversation)."
+        )
+    return s
+
+
+def _coerce_doc_agent_chunk(v):
+    """Segments per call: None/blank -> None (the built-in 10); a whole number 2..40
+    otherwise; anything else is REFUSED."""
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    if type(v) is int or (isinstance(v, str) and _re.fullmatch(r"[+-]?[0-9]+", v.strip())):
+        n = int(v)
+        if DOC_AGENT_MIN_CHUNK <= n <= DOC_AGENT_MAX_CHUNK:
+            return n
+    raise WorkflowError(
+        f"doc_agent_chunk must be a whole number from {DOC_AGENT_MIN_CHUNK} to "
+        f"{DOC_AGENT_MAX_CHUNK} (or blank for {DOC_AGENT_DEFAULT_CHUNK})."
+    )
+
+
+def doc_agent_enabled() -> bool:
+    """The install switch (strict "1" allowlist; unreadable = off)."""
+    try:
+        from app.services import settings
+
+        return str(settings.get("doc_agent_enabled", "0")) == "1"
+    except Exception:
+        return False
+
+
+DOC_AGENT_MISSING_MESSAGE = (
+    "This step setting needs an add-on that is not part of this edition; a step cannot use it."
+)
+
+
+def doc_agent_installed() -> bool:
+    """True when the add-on module can be imported (it is not part of this edition).
+    find_spec, not an import: a presence check that runs no add-on code."""
+    try:
+        import importlib.util
+
+        return importlib.util.find_spec("app.services.doc_agent") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def doc_agent_available() -> bool:
+    """The install switch is on AND the add-on module is importable. The ONE test the step
+    editor control and the save-time acceptance use (the switch alone would read as on for a
+    build that ships the module row but not the module)."""
+    return doc_agent_enabled() and doc_agent_installed()
+
+
+def _require_doc_agent_settable(new_mode: str, current_mode: str = "") -> None:
+    """Refuse SETTING a non-empty mode while the add-on switch is off or the module is not
+    installed. Re-saving the mode a step already carries is allowed (a full-body edit round
+    trip must not break)."""
+    if not new_mode or new_mode == (current_mode or ""):
+        return
+    if not doc_agent_installed():
+        raise WorkflowError(DOC_AGENT_MISSING_MESSAGE)
+    if not doc_agent_enabled():
+        raise WorkflowError(DOC_AGENT_OFF_MESSAGE)
+
+
+def _require_doc_agent_engine(mode: str, provider) -> None:
+    """Refuse a mode on a step whose explicit engine cannot serve it: NMT engines serve
+    neither mode; the running conversation also needs a chat engine (not cohere). A blank
+    provider inherits the project engine and is checked at run time (per-segment fallback)."""
+    ref = (provider or "").strip()
+    if not mode or not ref:
+        return
+    from app.services import engines
+
+    kind = engines.ref_kind(ref) if ref.startswith("engine:") else None
+    if (ref in engines.NMT_KINDS) or (kind in engines.NMT_KINDS):
+        raise WorkflowError(
+            f"doc_agent_mode needs a prompt-following LLM engine, not machine translation ({ref})."
+        )
+    if mode == "conversation":
+        chat_ok = (ref in _DOC_AGENT_CHAT_BUILTINS) or (kind in _DOC_AGENT_CHAT_KINDS)
+        if not chat_ok and not ref.startswith("engine:"):
+            # A provider registered under another name (a test double, a plug-in) is a chat
+            # engine when it says so (Provider.SUPPORTS_HISTORY).
+            try:
+                from app.services import providers
+
+                chat_ok = bool(getattr(providers.get_provider(ref), "SUPPORTS_HISTORY", False))
+            except Exception:
+                chat_ok = False
+        if not chat_ok:
+            raise WorkflowError(f"doc_agent_mode conversation needs a chat engine ({ref} is not).")
+
+
 def _clamp_lqa_threshold(n):
     """Bound an lqa step's configurable pass threshold to 0-100, or None to keep the
     built-in default (shared with the engine via lqa.py). None/blank/junk -> None
@@ -387,6 +509,8 @@ _LQA_DEAD_FIELDS = (
     "tm_protect",
     "over_translation_guard",
     "memory_mode",
+    "doc_agent_mode",
+    "doc_agent_chunk",
 )
 
 
@@ -417,6 +541,8 @@ _HUMAN_REVIEW_DEAD_FIELDS = (
     "tm_protect",
     "over_translation_guard",
     "memory_mode",
+    "doc_agent_mode",
+    "doc_agent_chunk",
     "lqa_threshold",
     "parallel_group",
 )

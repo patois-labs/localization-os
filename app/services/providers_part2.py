@@ -32,6 +32,7 @@ from app.services.providers_common import (
     _sized_max_tokens,
     _tokens,
     drop_credential_ids,
+    history_messages,
     local_engine_client_kwargs,
 )
 
@@ -180,7 +181,7 @@ def openai_image_content(prompt, images):
     return content
 
 
-def _chat_messages(prompt, system, images=None):
+def _chat_messages(prompt, system, images=None, history=None):
     """The OpenAI-style chat `messages` array shared by every chat provider that
     speaks that wire format (OpenAI / local / openai_compatible / Cohere): an optional
     leading system message, then the user prompt.
@@ -195,6 +196,8 @@ def _chat_messages(prompt, system, images=None):
     msgs = []
     if system:
         msgs.append({"role": "system", "content": system})
+    if history:  # multi-turn: earlier turns, between the system and the new turn
+        msgs.extend(history_messages(history))
     user_content = openai_image_content(prompt, images) if images else prompt
     msgs.append({"role": "user", "content": user_content})
     return msgs

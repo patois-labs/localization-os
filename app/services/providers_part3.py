@@ -241,6 +241,7 @@ class OpenAICompatibleProvider(_ProfileProvider):
     namespace, e.g. `deepseek/deepseek-chat` on OpenRouter vs `deepseek-chat` direct)."""
 
     name = "openai_compatible"
+    SUPPORTS_HISTORY = True  # takes an optional `history` (multi-turn chat)
     CAPS = {  # noqa: RUF012
         "supports_prompts": True,
         "supports_formality": False,
@@ -262,7 +263,10 @@ class OpenAICompatibleProvider(_ProfileProvider):
         model = _effective_model(self, kw.get("model"))
         # Batch 14 T2: image content blocks ride the chat messages array (SPEC §6.1) when
         # run_completion threads them to this vision-capable target; None = byte-identical.
-        body = {"model": model, "messages": _chat_messages(prompt, system, images)}
+        body = {
+            "model": model,
+            "messages": _chat_messages(prompt, system, images, kw.get("history")),
+        }
         # Honor an explicit max_tokens (setup authoring's large fixed budget, BUG 5).
         # Absent, send NO max_tokens (the host's own default) exactly as before, so the
         # per-segment translate path is unchanged. Setting it here is what lets an

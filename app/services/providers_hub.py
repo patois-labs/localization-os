@@ -32,7 +32,9 @@ from app.services.providers_common import (
     _profile_is_live,
     _raise_truncated,
     _reasoning_tokens,
+    flatten_history,
     gemini_image_contents,
+    history_messages,
     is_length_finish,
 )
 from app.services.providers_part2 import (
@@ -198,6 +200,7 @@ def _mock_translate(payload: dict) -> str:
 
 class MockProvider(Provider):
     name = "mock"
+    SUPPORTS_HISTORY = True  # takes an optional `history` (multi-turn chat)
 
     # When set, complete() records deterministic fake cache-usage fields into
     # last_usage so the stats/Job.result cache plumbing is testable offline.
@@ -294,6 +297,7 @@ class MockProvider(Provider):
 
 class ClaudeProvider(Provider):
     name = "claude"
+    SUPPORTS_HISTORY = True  # takes an optional `history` (multi-turn chat)
     CAPS = {  # noqa: RUF012
         "supports_prompts": True,
         "supports_formality": False,
@@ -313,10 +317,23 @@ class ClaudeProvider(Provider):
         # to before (LAW-IMG-7). run_completion only threads images to a vision-capable
         # target, so this branch never fires for a non-vision engine.
         user_content = claude_image_content(prompt, images) if images else prompt
+        messages = [{"role": "user", "content": user_content}]
+        history = kw.get("history")
+        if history is not None:
+            # Multi-turn chat. Earlier turns go first, and a cache
+            # breakpoint on the LAST user block (with the one on the system block) lets the whole
+            # append-only prefix be cache-READ on the next turn. Absent history: untouched.
+            if config.PROMPT_CACHING:
+                if isinstance(user_content, str):
+                    user_content = [{"type": "text", "text": user_content}]
+                else:
+                    user_content = [dict(b) for b in user_content]
+                user_content[-1]["cache_control"] = {"type": "ephemeral"}
+            messages = [*history_messages(history), {"role": "user", "content": user_content}]
         args = {
             "model": model,
             "max_tokens": _resolve_max_tokens(prompt, system, model, kw),
-            "messages": [{"role": "user", "content": user_content}],
+            "messages": messages,
         }
         blocks = _claude_system_blocks(system)
         if blocks:
@@ -359,6 +376,7 @@ class ClaudeProvider(Provider):
 
 class GeminiProvider(Provider):
     name = "gemini"
+    SUPPORTS_HISTORY = True  # takes an optional `history` (multi-turn chat)
     CAPS = {  # noqa: RUF012
         "supports_prompts": True,
         "supports_formality": False,
@@ -391,6 +409,19 @@ class GeminiProvider(Provider):
         # Batch 14 T2: when images ride this call, contents becomes [Part(image)... , prompt];
         # absent, it is the flat prompt string (byte-identical, LAW-IMG-7).
         contents = gemini_image_contents(prompt, images) if images else prompt
+        history = kw.get("history")
+        if history is not None:
+            # Multi-turn chat: earlier turns as role-tagged Content, then the new user turn.
+            _turns = [
+                types.Content(
+                    role="model" if h["role"] == "assistant" else "user",
+                    parts=[types.Part(text=h["content"])],
+                )
+                for h in history_messages(history)
+            ]
+            _last = contents if isinstance(contents, list) else [contents]
+            _last = [types.Part(text=x) if isinstance(x, str) else x for x in _last]
+            contents = [*_turns, types.Content(role="user", parts=_last)]
         parts, final = [], None
         it = client.models.generate_content_stream(model=model, contents=contents, config=cfg)
         try:
@@ -541,6 +572,7 @@ def _drain_openai_text_stream(stream, watch=None):
 
 class OpenAIProvider(Provider):
     name = "openai"
+    SUPPORTS_HISTORY = True  # takes an optional `history` (multi-turn chat)
     CAPS = {  # noqa: RUF012
         "supports_prompts": True,
         "supports_formality": False,
@@ -576,7 +608,7 @@ class OpenAIProvider(Provider):
         # usage chunk so cached-token counts + finish_reason are captured.
         stream = client.chat.completions.create(
             model=model,
-            messages=_chat_messages(prompt, system, images),
+            messages=_chat_messages(prompt, system, images, kw.get("history")),
             max_tokens=mt,
             stream=True,
             stream_options={"include_usage": True},
@@ -765,6 +797,7 @@ def local_sampling_kwargs(task=None) -> dict:
 
 class LocalProvider(Provider):
     name = "local"
+    SUPPORTS_HISTORY = True  # takes an optional `history` (multi-turn chat)
     # run-190 M-1 (round 3): the chat path forwards `reasoning_effort` (extra_body), so the
     # reactive thinking-burn cure reaches the server here.
     SUPPORTS_REASONING_EFFORT = True
@@ -850,7 +883,7 @@ class LocalProvider(Provider):
             # for both the legacy single-slot config and EngineProfile-bound instances.
             stream = client.completions.create(
                 model=model,
-                prompt=adapter.render(prompt, system),
+                prompt=adapter.render(flatten_history(prompt, kw.get("history")), system),
                 max_tokens=mt,
                 stop=list(adapter.stop),
                 stream=True,
@@ -906,7 +939,7 @@ class LocalProvider(Provider):
         extra_body = {"reasoning_effort": effort} if effort else None
         create_kw = {
             "model": model,
-            "messages": _chat_messages(prompt, system, images),
+            "messages": _chat_messages(prompt, system, images, kw.get("history")),
             "max_tokens": mt,
             "stream": True,
             "stream_options": {"include_usage": True},

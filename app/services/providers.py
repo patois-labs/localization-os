@@ -470,6 +470,11 @@ def _drops_ai_hand_off(fn):
     return _wrapped
 
 
+def _history_chars(history) -> int:
+    """Characters in the optional chat history (0 when absent), for the usage estimate."""
+    return sum(len(str(h.get("content") or "")) for h in history or [])
+
+
 @_drops_ai_hand_off
 def run_completion(
     spec: ProviderSpec,
@@ -480,6 +485,7 @@ def run_completion(
     tap_meta: dict | None = None,
     max_tokens: int | None = None,
     images: list[bytes] | None = None,
+    history: list[dict] | None = None,
 ) -> dict:
     """Call the primary provider with retries + exponential backoff; on exhaustion
     (or a terminal error like a bad API key) fail over to the configured backup
@@ -494,6 +500,14 @@ def run_completion(
     carried the bytes — so a vision-primary that ERRORED and failed over to a text-only
     target reports False, and the caller records the skip (LAW-IMG-4). None/empty images
     keep every builder's flat-string message byte-identical (LAW-IMG-7).
+
+    `history`: OPTIONAL prior chat turns for a multi-turn caller, a list of
+    {"role": "user"|"assistant", "content": str} placed between the system message and this
+    `prompt` (the new user turn). None (the default, and every caller in the core) sends the
+    byte-identical request to before the parameter existed.
+    An empty list means "a conversation, no earlier turns yet" (Anthropic then marks the cache
+    breakpoint on the first user turn). A target whose provider cannot take chat history (NMT,
+    cohere) receives the turns flattened into its prompt instead.
 
     `max_tokens` (OPTIONAL starting output budget): callers whose OUTPUT dwarfs their
     short INPUT — the setup/prompt authoring paths, which emit a whole project/workflow
@@ -780,8 +794,16 @@ def run_completion(
                 leg_images = images if (target_vision and attempt == 0) else None
                 if leg_images:
                     extra["images"] = leg_images
+                _call_prompt = prompt
+                if history is not None:
+                    if getattr(prov, "SUPPORTS_HISTORY", False):
+                        extra["history"] = history
+                    else:
+                        from app.services.providers_common import flatten_history
+
+                        _call_prompt = flatten_history(prompt, history)
                 text = prov.complete(
-                    prompt, system=system, task=task, payload=payload, model=model, **extra
+                    _call_prompt, system=system, task=task, payload=payload, model=model, **extra
                 )
                 # #359: an answer carrying the engine's own (or a global) credential is
                 # untrusted: fail the attempt (terminal, failover applies) so the key never
@@ -792,7 +814,10 @@ def run_completion(
                 from app.services.secrets_scrub import KeyEchoError, guard_answer
 
                 usage = getattr(prov, "last_usage", None) or {
-                    "input_tokens": max(1, (len(prompt or "") + len(system or "")) // 4)
+                    "input_tokens": max(
+                        1,
+                        (len(prompt or "") + len(system or "") + _history_chars(history)) // 4,
+                    )
                     + (len(leg_images) * KEY_IMAGE_TOKEN_ESTIMATE if leg_images else 0),
                     "output_tokens": max(0, len(text) // 4),
                     "cache_read_tokens": 0,

@@ -57,7 +57,7 @@ _RUNTIME_APT = (
     'RUN apt-get update && if [ "$APT_UPGRADE" = 1 ]; then '
     "DEBIAN_FRONTEND=noninteractive apt-get upgrade -y; fi "
     "&& apt-get install -y --no-install-recommends libpq5 "
-    "postgresql-client curl fonts-noto-core fonts-noto-cjk && rm -rf /var/lib/apt/lists/*"
+    "postgresql-client curl fonts-noto-core fonts-noto-cjk zlib1g && rm -rf /var/lib/apt/lists/*"
 )
 _SAML_GATE = 'if [ "$WITH_SAML" = 1 ]; then'
 _LDAP_GATE = 'if [ "$WITH_LDAP" = 1 ]; then'

@@ -399,6 +399,8 @@ _DEAD_FIELD_DEFAULT = {
     "tm_protect": None,
     "over_translation_guard": None,
     "memory_mode": None,
+    "doc_agent_mode": "",
+    "doc_agent_chunk": None,
     "lqa_threshold": None,
     "parallel_group": None,
     "vendor_id": None,

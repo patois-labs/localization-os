@@ -285,6 +285,8 @@ _DEAD_FIELD_LABELS = _FieldLabels(
         "tm_protect": "TM protection",
         "over_translation_guard": "over-translation guard",
         "memory_mode": "LLMemory recall opt-out",
+        "doc_agent_mode": "doc_agent_mode",
+        "doc_agent_chunk": "doc_agent_chunk",
         "parallel_group": "parallel group",
         "vendor_id": "vendor",
         "external_wait_hours": "external wait window",
@@ -409,6 +411,10 @@ def _dead_field_is_meaningful(field: str, value) -> bool:
         # NULLABLE list: None/blank -> None (all readable, inherit); a list (INCLUDING the
         # deliberate empty [] "select nothing") is a choice worth refusing off tm_match.
         return _coerce_tm_pool_selection(value) is not None
+    if field == "doc_agent_mode":
+        return bool(str(value or "").strip())
+    if field == "doc_agent_chunk":
+        return value not in (None, "")
     if field == "glossary_concept_cap":
         # Terminology T3: NOT-NULL default 10. A value that resolves to something other than
         # the default is a deliberate choice worth refusing on a dead-for-it step type; the

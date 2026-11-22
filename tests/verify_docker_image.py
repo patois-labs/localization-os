@@ -556,7 +556,7 @@ def _worker_supervisor_holds():
 # --------------------------------------------------------------------------- #236
 _FAKE = {  # test-only digests for the resolver stub; never written to the Dockerfile
     "python:3.13-slim": "sha256:" + "a" * 64,
-    "tailscale/tailscale:v1.104.2": "sha256:" + "b" * 64,
+    "tailscale/tailscale:v1.104.7": "sha256:" + "b" * 64,
     "rust:1.94.1-slim-trixie": "sha256:" + "f" * 64,
 }
 
@@ -576,7 +576,7 @@ def _base_pins_hold():
             "FROM ${PYTHON_BASE} AS runtime", "FROM python:3.13-slim AS runtime"
         ),
         "literal tailscale FROM (base)": DOCKERFILE.replace(
-            "FROM ${TAILSCALE_BASE} AS tailscale", "FROM tailscale/tailscale:v1.104.2 AS tailscale"
+            "FROM ${TAILSCALE_BASE} AS tailscale", "FROM tailscale/tailscale:v1.104.7 AS tailscale"
         ),
         "stages drift onto two ARGs": DOCKERFILE.replace(
             "FROM ${PYTHON_BASE} AS builder", "FROM ${TAILSCALE_BASE} AS builder"

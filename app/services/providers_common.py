@@ -394,6 +394,13 @@ class Provider(ABC):
     # forwards the cure is included without editing run_completion. Base False.
     SUPPORTS_REASONING_EFFORT = False
 
+    # Multi-turn chat: does this provider's complete() take an OPTIONAL
+    # `history` kwarg (prior {"role","content"} chat turns placed between the system message
+    # and the new user turn)? Absent history is byte-identical on every provider. A target
+    # without it (NMT, cohere, the ChatML raw-completions path) gets the history flattened into
+    # its prompt by run_completion (flatten_history), so a fallback target still works.
+    SUPPORTS_HISTORY = False
+
     def __init_subclass__(cls, **kwargs):
         # AI opt-out CHOKE POINT (HECVAT DPAI-08): every concrete complete() -- built-in,
         # profile-backed, mock, or one a future change adds -- runs ai_optout.guard()
@@ -554,6 +561,27 @@ def _claude_system_blocks(system: str | None):
     if config.PROMPT_CACHING:
         block["cache_control"] = {"type": "ephemeral"}
     return [block]
+
+
+def history_messages(history) -> list[dict]:
+    """The prior chat turns as plain {"role","content"} dicts (user / assistant only)."""
+    out = []
+    for h in history or []:
+        role = "assistant" if str(h.get("role")) == "assistant" else "user"
+        out.append({"role": role, "content": str(h.get("content") or "")})
+    return out
+
+
+def flatten_history(prompt: str, history) -> str:
+    """A transcript of the earlier turns followed by the new prompt, for a target that cannot
+    take chat history (run_completion only uses this on such a target)."""
+    if not history:
+        return prompt
+    lines = []
+    for h in history_messages(history):
+        who = "Assistant" if h["role"] == "assistant" else "User"
+        lines.append(f"[{who}]\n{h['content']}")
+    return "\n\n".join(lines) + "\n\n[User]\n" + prompt
 
 
 def _claude_usage(u):
