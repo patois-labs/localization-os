@@ -57,6 +57,9 @@ setup wizard.
 **Content in and out**
 - More than 80 file formats (Office, PDF, HTML, XML/DITA, Markdown, InDesign, subtitles, software strings, XLIFF and
   CAT packages, images) returned in the same format and layout. An untouched file comes back byte for byte.
+- Files are parsed by [Bilingua](https://github.com/patois-labs/bilingua), the open source Rust parsing engine,
+  installed with the app on x86_64 Linux and Windows x64. On other platforms (for example macOS) the built-in Python
+  filters read every format instead.
 - Three project types: documents, string keys (with a delta API for CI), and projects connected to a source system.
 - 28 connectors, including Airtable, Jira, Strapi, Contentful, HubSpot, WordPress, Shopify, Zendesk, Confluence,
   GitHub, GitLab, SharePoint and Google Docs. Translations go back as each system's own language version; the source
@@ -83,6 +86,8 @@ and procurement paperwork. What stays free forever is written down in [STEWARDSH
 
 ## Documentation
 
+- [Releases](https://github.com/patois-labs/localization-os/releases): what changed in each version, with upgrade
+  steps. The notes also live in [docs/releases/](docs/releases/).
 - [ARCHITECTURE.md](ARCHITECTURE.md): the whole system in one read. Per-module docs in
   [docs/architecture/](docs/architecture/).
 - [docs/DEPLOY.md](docs/DEPLOY.md), [docs/SECRETS.md](docs/SECRETS.md), [docs/BACKUP.md](docs/BACKUP.md): running it
