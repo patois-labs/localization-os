@@ -747,6 +747,7 @@ segments are collapsed by default.
   SemIf on a GPU box, on the same PC or over Tailscale, Kev notes, auto-fix, troubleshooting.
 - [Deployment](docs/DEPLOY.md); the generic hosted-instance kit is in
   [deploy/aws-hosted](deploy/aws-hosted/README.md).
+- [Upgrading to 1.3.1](docs/releases/1.3.1.md): opentelemetry-api 1.45.2 (security update); no migration.
 - [Upgrading to 1.3](docs/releases/1.3.0.md): Bilingua 0.10.0, base image and dependency security updates, one
   small additive migration.
 - [Upgrading to 1.2](docs/releases/1.2.0.md): Bilingua becomes the file parsing engine, on by default, plus filter fixes for

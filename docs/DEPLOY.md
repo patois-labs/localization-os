@@ -289,6 +289,8 @@ to v1.104.7 (the newest stable; golang.org/x/net fixes) and pyasn1 0.6.4 to 0.6.
 apt line so its trixie-security update lands, because the image scan failed on fixable apt, zlib1g, libpq5 /
 postgresql-client 17.11, pyasn1 and x/net findings. An image scan of that Dockerfile still flags CVE-2026-78661 in the
 golang.org/x/net copy inside the tailscale binaries; it applies only when Tailscale is turned on with an auth key.
+The 1.3.1 release moves opentelemetry-api from 1.45.1 to 1.45.2 (CVE-2026-126360) in the root and Vendor Studio
+locks; no other pin moved.
 
 The Docker builder installs `requirements.lock` plus `requirements-postgres.lock`
 with `--no-deps`. It does not resolve new transitive versions during a rebuild.
